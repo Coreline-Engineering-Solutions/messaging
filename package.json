@@ -1,0 +1,11 @@
+{
+  "name": "messaging-system-db-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Python FastAPI API for calling the messaging database functions.",
+  "main": "python_backend/app.py",
+  "scripts": {
+    "start": "python -m python_backend.main",
+    "dev": "python -m python_backend.main"
+  }
+}
