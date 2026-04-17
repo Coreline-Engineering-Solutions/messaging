@@ -29,7 +29,10 @@ A complete, production-ready Angular 17+ messaging system with real-time WebSock
 ### Installation
 
 ```bash
-npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#main
+# Install v1.0.1 (recommended - includes all fixes)
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging_system_frontend.git#v1.0.1
+
+# Install peer dependencies
 npm install @angular/material@^17.3.10 @angular/cdk@^17.3.10
 ```
 
@@ -97,6 +100,8 @@ onLoginSuccess(sessionGid: string, userId: string, email: string) {
 |----------|-------------|
 | **[QUICK_START.md](QUICK_START.md)** | 5-minute integration guide |
 | **[DEVELOPER_INTEGRATION_GUIDE.md](DEVELOPER_INTEGRATION_GUIDE.md)** | Complete step-by-step guide |
+| **[INTEGRATION_FIXES.md](INTEGRATION_FIXES.md)** | ⭐ Integration issues resolved |
+| **[CHANGELOG.md](CHANGELOG.md)** | Version history and changes |
 | **[GIT_INSTALLATION_GUIDE.md](GIT_INSTALLATION_GUIDE.md)** | Installing from Git repository |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | System architecture & diagrams |
 | **[FRONTEND_INTEGRATION_GUIDE.md](FRONTEND_INTEGRATION_GUIDE.md)** | Complete API documentation |
