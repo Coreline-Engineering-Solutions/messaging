@@ -1,0 +1,30 @@
+import { OnInit, OnDestroy } from '@angular/core';
+import { MessagingStoreService } from '../../services/messaging-store.service';
+import { Contact } from '../../models/messaging.models';
+import * as i0 from "@angular/core";
+export declare class GroupManagerComponent implements OnInit, OnDestroy {
+    private store;
+    contacts: Contact[];
+    selectedContacts: Contact[];
+    groupName: string;
+    searchQuery: string;
+    isEditMode: boolean;
+    editingConversationId: string | null;
+    creatorContactId: string | null;
+    private sub;
+    constructor(store: MessagingStoreService);
+    ngOnInit(): void;
+    ngOnDestroy(): void;
+    get filteredContacts(): Contact[];
+    getDisplayName(contact: Contact): string;
+    get canCreate(): boolean;
+    isSelected(contact: Contact): boolean;
+    isCreator(contact: Contact): boolean;
+    toggleContact(contact: Contact): void;
+    removeContact(contact: Contact): void;
+    onSubmit(): void;
+    onDelete(): void;
+    goBack(): void;
+    static ɵfac: i0.ɵɵFactoryDeclaration<GroupManagerComponent, never>;
+    static ɵcmp: i0.ɵɵComponentDeclaration<GroupManagerComponent, "app-group-manager", never, {}, {}, never, never, true, never>;
+}

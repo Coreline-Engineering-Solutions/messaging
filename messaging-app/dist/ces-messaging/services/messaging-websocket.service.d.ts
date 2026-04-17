@@ -1,0 +1,36 @@
+import { OnDestroy } from '@angular/core';
+import { MessagingConfig } from '../messaging.config';
+import { WebSocketMessage } from '../models/messaging.models';
+import * as i0 from "@angular/core";
+export declare class MessagingWebSocketService implements OnDestroy {
+    private config;
+    private ws;
+    private reconnectAttempts;
+    private maxReconnectAttempts;
+    private reconnectTimer;
+    private pingInterval;
+    private subscribedConversations;
+    private contactId;
+    private sessionGid;
+    private messages$;
+    private connectionStatus$;
+    readonly onMessage$: import("rxjs").Observable<WebSocketMessage>;
+    readonly status$: import("rxjs").Observable<"disconnected" | "connecting" | "connected" | "authenticated">;
+    constructor(config: MessagingConfig);
+    get isConnected(): boolean;
+    connect(contactId: string, sessionGid: string): void;
+    disconnect(): void;
+    subscribe(conversationId: string): void;
+    unsubscribe(conversationId: string): void;
+    subscribeAll(conversationIds: string[]): void;
+    ngOnDestroy(): void;
+    private doConnect;
+    private authenticate;
+    private resubscribe;
+    private attemptReconnect;
+    private startPing;
+    private stopPing;
+    private send;
+    static ɵfac: i0.ɵɵFactoryDeclaration<MessagingWebSocketService, never>;
+    static ɵprov: i0.ɵɵInjectableDeclaration<MessagingWebSocketService>;
+}

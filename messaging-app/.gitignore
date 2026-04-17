@@ -2,6 +2,7 @@
 
 # Compiled output
 /dist
+!/dist/ces-messaging
 /tmp
 /out-tsc
 /bazel-out

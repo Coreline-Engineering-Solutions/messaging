@@ -1,0 +1,51 @@
+{
+  "name": "@ces/messaging",
+  "version": "1.0.0",
+  "description": "Angular 17+ messaging library with real-time WebSocket support, Material Design UI, and state management",
+  "author": "Coreline Engineering Solutions",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Coreline-Engineering-Solutions/messaging_system_frontend.git"
+  },
+  "keywords": [
+    "angular",
+    "messaging",
+    "chat",
+    "websocket",
+    "real-time",
+    "material-design"
+  ],
+  "private": false,
+  "dependencies": {
+    "tslib": "^2.3.0"
+  },
+  "peerDependencies": {
+    "@angular/animations": "^17.3.0",
+    "@angular/cdk": "^17.3.10",
+    "@angular/common": "^17.3.0",
+    "@angular/compiler": "^17.3.0",
+    "@angular/core": "^17.3.0",
+    "@angular/forms": "^17.3.0",
+    "@angular/material": "^17.3.10",
+    "@angular/platform-browser": "^17.3.0",
+    "@angular/platform-browser-dynamic": "^17.3.0",
+    "@angular/router": "^17.3.0",
+    "rxjs": "~7.8.0",
+    "zone.js": "~0.14.3"
+  },
+  "module": "fesm2022/ces-messaging.mjs",
+  "typings": "index.d.ts",
+  "exports": {
+    "./package.json": {
+      "default": "./package.json"
+    },
+    ".": {
+      "types": "./index.d.ts",
+      "esm2022": "./esm2022/ces-messaging.mjs",
+      "esm": "./esm2022/ces-messaging.mjs",
+      "default": "./fesm2022/ces-messaging.mjs"
+    }
+  },
+  "sideEffects": false
+}

@@ -1,0 +1,32 @@
+import { HttpClient } from '@angular/common/http';
+import { Observable } from 'rxjs';
+import { MessagingConfig } from '../messaging.config';
+import { AuthService } from './auth.service';
+import { InboxItem, Message, Contact, Conversation, CompanyConnection } from '../models/messaging.models';
+import * as i0 from "@angular/core";
+export declare class MessagingApiService {
+    private http;
+    private auth;
+    private config;
+    private base;
+    constructor(http: HttpClient, auth: AuthService, config: MessagingConfig);
+    getInbox(contactId: string): Observable<InboxItem[]>;
+    getMessages(conversationId: string, contactId: string, beforeMessageId?: string, limit?: number): Observable<Message[]>;
+    sendMessage(conversationId: string, senderContactId: string, content: string, messageType?: 'TEXT' | 'IMAGE', mediaUrl?: string): Observable<any>;
+    sendDirectMessage(senderContactId: string, recipientContactId: string, content: string, messageType?: 'TEXT' | 'IMAGE'): Observable<any>;
+    markConversationRead(conversationId: string, contactId: string): Observable<any>;
+    createConversation(creatorContactId: string, participantContactIds: string[], name?: string): Observable<Conversation>;
+    getDirectConversation(contactA: string, contactB: string): Observable<any>;
+    getVisibleContacts(contactId: string): Observable<Contact[]>;
+    checkContactProfile(userGid: string, updates?: any): Observable<any>;
+    manageGroup(contactId: string, action: 'create' | 'add' | 'remove' | 'rename', conversationId?: string, groupName?: string, participantContactIds?: string[]): Observable<any>;
+    deleteConversation(conversationId: string, contactId: string): Observable<any>;
+    clearConversation(conversationId: string, contactId: string): Observable<any>;
+    deleteGroup(conversationId: string, contactId: string): Observable<any>;
+    uploadAttachment(file: File): Observable<any>;
+    sendConnectionInvite(adminContactId: string, targetCompany: string): Observable<any>;
+    respondToConnection(adminContactId: string, connectionId: string, accept: boolean): Observable<any>;
+    getCompanyConnections(contactId: string): Observable<CompanyConnection[]>;
+    static ɵfac: i0.ɵɵFactoryDeclaration<MessagingApiService, never>;
+    static ɵprov: i0.ɵɵInjectableDeclaration<MessagingApiService>;
+}
