@@ -1,6 +1,21 @@
 {
   "name": "@ces/messaging",
   "version": "1.0.0",
+  "description": "Angular 17+ messaging library with real-time WebSocket support, Material Design UI, and state management",
+  "author": "Coreline Engineering Solutions",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DanielSMitchellS/messaging-library.git"
+  },
+  "keywords": [
+    "angular",
+    "messaging",
+    "chat",
+    "websocket",
+    "real-time",
+    "material-design"
+  ],
   "scripts": {
     "ng": "ng",
     "start": "ng serve",
@@ -9,7 +24,7 @@
     "watch": "ng build --watch --configuration development",
     "test": "ng test"
   },
-  "private": true,
+  "private": false,
   "dependencies": {
     "tslib": "^2.3.0"
   },
