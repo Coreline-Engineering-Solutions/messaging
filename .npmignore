@@ -1,0 +1,19 @@
+# Ignore everything except the built library
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+.angular/
+.idea/
+.vscode/
+*.swp
+*.swo
+Thumbs.db
+.DS_Store
+*.log
+npm-debug.log*
+
+# Do NOT ignore messaging-app/dist/ces-messaging - that's the library!

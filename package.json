@@ -1,9 +1,12 @@
 {
   "name": "@ces/messaging",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "description": "Angular 17+ messaging library with real-time WebSocket support, Material Design UI, and state management",
   "author": "Coreline Engineering Solutions",
   "license": "MIT",
+  "files": [
+    "messaging-app/dist/ces-messaging/**/*"
+  ],
   "main": "./messaging-app/dist/ces-messaging/fesm2022/ces-messaging.mjs",
   "module": "./messaging-app/dist/ces-messaging/fesm2022/ces-messaging.mjs",
   "typings": "./messaging-app/dist/ces-messaging/index.d.ts",
