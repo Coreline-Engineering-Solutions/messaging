@@ -1,4 +1,4 @@
-# @ces/messaging — Angular Messaging Library
+# @coreline-engineering-solutions/messaging — Angular Messaging Library
 
 A reusable Angular 17 library that adds a full-featured messaging sidebar to any Angular application. Includes real-time WebSocket messaging, file attachments, group management, and a modern blue-themed UI.
 
@@ -28,12 +28,12 @@ cd dist/ces-messaging
 npm link
 
 # In your host app:
-npm link @ces/messaging
+npm link @coreline-engineering-solutions/messaging
 ```
 
 ### Option B — Copy dist folder
 
-Copy `dist/ces-messaging/` into your host app's `node_modules/@ces/messaging/`.
+Copy `dist/ces-messaging/` into your host app's `node_modules/@coreline-engineering-solutions/messaging/`.
 
 ### Option C — npm pack (portable tarball)
 
@@ -53,12 +53,12 @@ npm install /path/to/@ces-messaging-1.0.0.tgz
 In your host app's `app.config.ts` (or module providers):
 
 ```typescript
-import { MESSAGING_CONFIG, MessagingConfig } from '@ces/messaging';
+import { MESSAGING_CONFIG, MessagingConfig } from '@coreline-engineering-solutions/messaging';
 
 const messagingConfig: MessagingConfig = {
-  apiBaseUrl: 'https://auth-api-frankfurt.onrender.com',
-  wsBaseUrl: 'wss://auth-api-frankfurt.onrender.com',
-  storageApiUrl: 'https://ces-ticketing-system-db.onrender.com/api',
+  apiBaseUrl: 'https://your-api.example.com',
+  wsBaseUrl: 'wss://your-api.example.com',
+  storageApiUrl: 'https://your-storage-api.example.com/api',
 };
 
 export const appConfig: ApplicationConfig = {
@@ -81,7 +81,7 @@ In your root component's template (e.g. `app.component.html`):
 Import it in the component:
 
 ```typescript
-import { MessagingOverlayComponent } from '@ces/messaging';
+import { MessagingOverlayComponent } from '@coreline-engineering-solutions/messaging';
 
 @Component({
   imports: [MessagingOverlayComponent],
@@ -95,7 +95,7 @@ export class AppComponent {}
 After your user logs in, set the messaging session:
 
 ```typescript
-import { AuthService, Contact } from '@ces/messaging';
+import { AuthService, Contact } from '@coreline-engineering-solutions/messaging';
 
 export class AppComponent {
   constructor(private messagingAuth: AuthService) {}
