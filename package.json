@@ -23,7 +23,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Coreline-Engineering-Solutions/messaging_system_frontend.git"
+    "url": "https://github.com/Coreline-Engineering-Solutions/messaging.git"
   },
   "peerDependencies": {
     "@angular/animations": "^17.3.0",

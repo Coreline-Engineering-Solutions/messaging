@@ -46,7 +46,7 @@ Now includes:
 Consumers had to add library source to `tsconfig.app.json`:
 ```json
 "include": [
-  "node_modules/messaging-system-db-api/messaging-app/src/lib/**/*.ts"
+  "node_modules/@coreline-engineering-solutions/messaging/messaging-app/src/lib/**/*.ts"
 ]
 ```
 
@@ -73,7 +73,7 @@ import { AuthService } from '@ces/messaging';
 ### Issue #3: Package Identity Mismatch ⚠️ DOCUMENTED
 
 **Problem:**
-- npm package: `messaging-system-db-api`
+- npm package: `@coreline-engineering-solutions/messaging`
 - Library exports: `@ces/messaging`
 - Root package.json describes Python backend
 
@@ -129,7 +129,7 @@ The built library's `package.json` (in `dist/ces-messaging/`) includes:
 **Problem:**
 Library source at `messaging-app/src/lib/` required complex path aliases:
 ```typescript
-"@ces/messaging": ["./node_modules/messaging-system-db-api/messaging-app/src/lib/public-api.ts"]
+"@ces/messaging": ["./node_modules/@coreline-engineering-solutions/messaging/messaging-app/src/lib/public-api.ts"]
 ```
 
 **Fix Applied:**
@@ -220,7 +220,7 @@ messaging-app/dist/ces-messaging/
 {
   "include": [
     "src/**/*.d.ts",
-    "node_modules/messaging-system-db-api/messaging-app/src/lib/**/*.ts"
+    "node_modules/@coreline-engineering-solutions/messaging/messaging-app/src/lib/**/*.ts"
   ]
 }
 
@@ -228,7 +228,7 @@ messaging-app/dist/ces-messaging/
 {
   "paths": {
     "@ces/messaging": [
-      "./node_modules/messaging-system-db-api/messaging-app/src/lib/public-api.ts"
+      "./node_modules/@coreline-engineering-solutions/messaging/messaging-app/src/lib/public-api.ts"
     ]
   }
 }

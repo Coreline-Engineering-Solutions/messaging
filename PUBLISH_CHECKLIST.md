@@ -53,11 +53,11 @@ Already done! ✅ Your `messaging-app/package.json` now has:
 - ✅ `"author"` field
 - ✅ `"license"` field
 
-**Action needed:** Replace `YOUR_USERNAME` with your actual GitHub username:
+Already configured with the correct repository URL:
 ```json
 "repository": {
   "type": "git",
-  "url": "https://github.com/YOUR_ACTUAL_USERNAME/messaging-library.git"
+  "url": "https://github.com/Coreline-Engineering-Solutions/messaging.git"
 }
 ```
 
@@ -96,12 +96,12 @@ git push origin v1.0.0
 Once published, install in any Angular project:
 
 ```bash
-npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#main
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main
 ```
 
 Or with version tag:
 ```bash
-npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#v1.0.0
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.0
 ```
 
 ---
@@ -157,7 +157,7 @@ git push origin main --tags
 
 ### Install in Project
 ```bash
-npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#v1.0.0
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.0
 ```
 
 ---
@@ -180,7 +180,7 @@ After pushing, verify your library is accessible:
 mkdir test-install
 cd test-install
 npm init -y
-npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#main
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main
 ```
 
 If successful, you should see `@ces/messaging` in `node_modules/`.

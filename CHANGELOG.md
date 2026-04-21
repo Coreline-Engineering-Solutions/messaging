@@ -48,7 +48,7 @@ This release addresses all feedback from initial integration testing.
 **Before:**
 ```json
 "include": [
-  "node_modules/messaging-system-db-api/messaging-app/src/lib/**/*.ts"
+  "node_modules/@coreline-engineering-solutions/messaging/messaging-app/src/lib/**/*.ts"
 ]
 ```
 
@@ -60,7 +60,7 @@ This release addresses all feedback from initial integration testing.
 ---
 
 #### 3. ✅ Package Identity Mismatch
-**Issue:** npm package named `messaging-system-db-api` but library exports as `@ces/messaging`.
+**Issue:** npm package named `@coreline-engineering-solutions/messaging` but library exports as `@ces/messaging`.
 
 **Status:** Partially addressed
 - Repository URL updated in `package.json`
@@ -69,7 +69,7 @@ This release addresses all feedback from initial integration testing.
 
 **Current Installation:**
 ```bash
-npm install git+https://github.com/Coreline-Engineering-Solutions/messaging_system_frontend.git#v1.0.1
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.1
 ```
 
 **Future Improvement:** Consider publishing `@ces/messaging` as a separate npm package.
@@ -111,7 +111,7 @@ npm install git+https://github.com/Coreline-Engineering-Solutions/messaging_syst
 
 **Before:**
 ```typescript
-"@ces/messaging": ["./node_modules/messaging-system-db-api/messaging-app/src/lib/public-api.ts"]
+"@ces/messaging": ["./node_modules/@coreline-engineering-solutions/messaging/messaging-app/src/lib/public-api.ts"]
 ```
 
 **After:**
@@ -136,7 +136,7 @@ import { AuthService } from '@ces/messaging';
 
 ```bash
 # Install latest version
-npm install git+https://github.com/Coreline-Engineering-Solutions/messaging_system_frontend.git#v1.0.1
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.1
 
 # Install peer dependencies
 npm install @angular/material@^17.3.10 @angular/cdk@^17.3.10
@@ -200,14 +200,14 @@ import {
 
 2. **Install v1.0.1:**
    ```bash
-   npm install git+https://github.com/Coreline-Engineering-Solutions/messaging_system_frontend.git#v1.0.1
+   npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.1
    ```
 
 3. **Remove tsconfig workarounds:**
    ```json
    // Remove this from tsconfig.app.json:
    "include": [
-     "node_modules/messaging-system-db-api/messaging-app/src/lib/**/*.ts"
+     "node_modules/@coreline-engineering-solutions/messaging/messaging-app/src/lib/**/*.ts"
    ]
    ```
 

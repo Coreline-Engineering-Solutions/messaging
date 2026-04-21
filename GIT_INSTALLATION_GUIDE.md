@@ -11,7 +11,7 @@ This guide shows how to install the messaging library directly from your Git rep
 Once your repository is pushed to GitHub, install it directly:
 
 ```bash
-npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#main
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main
 ```
 
 Or add to your `package.json`:
@@ -19,7 +19,7 @@ Or add to your `package.json`:
 ```json
 {
   "dependencies": {
-    "@ces/messaging": "git+https://github.com/YOUR_USERNAME/messaging-library.git#main"
+    "@ces/messaging": "git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main"
   }
 }
 ```
@@ -35,17 +35,17 @@ npm install
 
 Install from a specific branch:
 ```bash
-npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#develop
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#develop
 ```
 
 Install from a specific tag/version:
 ```bash
-npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#v1.0.0
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.0
 ```
 
 Install from a specific commit:
 ```bash
-npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#abc1234
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#abc1234
 ```
 
 ---
@@ -55,12 +55,12 @@ npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#abc1234
 If your repository is private, use SSH:
 
 ```bash
-npm install git+ssh://git@github.com/YOUR_USERNAME/messaging-library.git#main
+npm install git+ssh://git@github.com/Coreline-Engineering-Solutions/messaging.git#main
 ```
 
 Or with authentication token:
 ```bash
-npm install git+https://YOUR_TOKEN@github.com/YOUR_USERNAME/messaging-library.git#main
+npm install git+https://YOUR_TOKEN@github.com/Coreline-Engineering-Solutions/messaging.git#main
 ```
 
 ---
@@ -132,7 +132,7 @@ Update `messaging-app/package.json`:
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/YOUR_USERNAME/messaging-library.git",
+    "url": "https://github.com/Coreline-Engineering-Solutions/messaging.git",
     "directory": "messaging-app"
   },
   "main": "dist/ces-messaging/fesm2022/ces-messaging.mjs",
@@ -166,7 +166,7 @@ Update `messaging-app/package.json`:
 
 ```bash
 cd /path/to/your-angular-app
-npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#main
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main
 ```
 
 ### Step 2: Install Peer Dependencies
@@ -240,7 +240,7 @@ this.messagingAuth.setSession(sessionGid, contact);
    Or force reinstall:
    ```bash
    npm uninstall @ces/messaging
-   npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#main
+   npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main
    ```
 
 ---
@@ -264,7 +264,7 @@ git push origin v1.1.0
 ### Install Specific Version
 
 ```bash
-npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#v1.0.0
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.0
 ```
 
 ### In `package.json`:
@@ -272,7 +272,7 @@ npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#v1.0.0
 ```json
 {
   "dependencies": {
-    "@ces/messaging": "git+https://github.com/YOUR_USERNAME/messaging-library.git#v1.0.0"
+    "@ces/messaging": "git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.0"
   }
 }
 ```
@@ -372,7 +372,7 @@ npm install
 ```bash
 npm uninstall @ces/messaging
 rm -rf node_modules/@ces
-npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#main
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main
 ```
 
 ---
@@ -381,12 +381,12 @@ npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#main
 
 ### Install from GitHub
 ```bash
-npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#main
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main
 ```
 
 ### Install specific version
 ```bash
-npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#v1.0.0
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.0
 ```
 
 ### Update library
@@ -397,7 +397,7 @@ npm update @ces/messaging
 ### Force reinstall
 ```bash
 npm uninstall @ces/messaging
-npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#main
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main
 ```
 
 ---

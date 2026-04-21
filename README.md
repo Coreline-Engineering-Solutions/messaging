@@ -30,7 +30,7 @@ A complete, production-ready Angular 17+ messaging system with real-time WebSock
 
 ```bash
 # Install v1.0.1 (recommended - includes all fixes)
-npm install git+https://github.com/Coreline-Engineering-Solutions/messaging_system_frontend.git#v1.0.1
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.1
 
 # Install peer dependencies
 npm install @angular/material@^17.3.10 @angular/cdk@^17.3.10
@@ -223,7 +223,7 @@ All components use inline styles that can be easily customized. See the `example
 ### "Cannot find module '@ces/messaging'"
 ```bash
 npm cache clean --force
-npm install git+https://github.com/YOUR_USERNAME/messaging-library.git#main
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main
 ```
 
 ### Floating button not showing
