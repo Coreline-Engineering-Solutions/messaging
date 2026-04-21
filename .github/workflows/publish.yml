@@ -1,0 +1,38 @@
+name: Publish to GitHub Packages
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@coreline-engineering-solutions'
+
+      - name: Verify built library exists
+        run: |
+          if [ ! -f "messaging-app/dist/ces-messaging/fesm2022/ces-messaging.mjs" ]; then
+            echo "ERROR: Built library not found at messaging-app/dist/ces-messaging/"
+            echo "Please run 'npm run build:lib' in messaging-app/ and commit the output before releasing."
+            exit 1
+          fi
+          echo "Built library found. Contents:"
+          ls -la messaging-app/dist/ces-messaging/
+
+      - name: Publish package
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
