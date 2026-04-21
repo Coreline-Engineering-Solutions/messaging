@@ -56,9 +56,9 @@ In your host app's `app.config.ts` (or module providers):
 import { MESSAGING_CONFIG, MessagingConfig } from '@coreline-engineering-solutions/messaging';
 
 const messagingConfig: MessagingConfig = {
-  apiBaseUrl: 'https://auth-api-frankfurt.onrender.com',
-  wsBaseUrl: 'wss://auth-api-frankfurt.onrender.com',
-  storageApiUrl: 'https://ces-ticketing-system-db.onrender.com/api',
+  apiBaseUrl: 'https://your-api.example.com',
+  wsBaseUrl: 'wss://your-api.example.com',
+  storageApiUrl: 'https://your-storage-api.example.com/api',
 };
 
 export const appConfig: ApplicationConfig = {
