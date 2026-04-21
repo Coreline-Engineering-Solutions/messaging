@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to the @ces/messaging library will be documented in this file.
+All notable changes to the @coreline-engineering-solutions/messaging library will be documented in this file.
 
 ---
 
@@ -32,7 +32,7 @@ This release addresses all feedback from initial integration testing.
   - `package.json` - With proper `main`, `module`, `typings` fields
   - Complete `.d.ts` type definitions for all exports
 
-**Result:** Consumers can now import `@ces/messaging` as a standard Angular library without compiling source.
+**Result:** Consumers can now import `@coreline-engineering-solutions/messaging` as a standard Angular library without compiling source.
 
 ---
 
@@ -60,19 +60,19 @@ This release addresses all feedback from initial integration testing.
 ---
 
 #### 3. ✅ Package Identity Mismatch
-**Issue:** npm package named `@coreline-engineering-solutions/messaging` but library exports as `@ces/messaging`.
+**Issue:** npm package named `@coreline-engineering-solutions/messaging` but library exports as `@coreline-engineering-solutions/messaging`.
 
 **Status:** Partially addressed
 - Repository URL updated in `package.json`
 - Correct installation command documented
-- Library properly exports as `@ces/messaging`
+- Library properly exports as `@coreline-engineering-solutions/messaging`
 
 **Current Installation:**
 ```bash
 npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.1
 ```
 
-**Future Improvement:** Consider publishing `@ces/messaging` as a separate npm package.
+**Future Improvement:** Consider publishing `@coreline-engineering-solutions/messaging` as a separate npm package.
 
 ---
 
@@ -105,18 +105,18 @@ npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#
 **Issue:** Library source at `messaging-app/src/lib/` - three directories deep.
 
 **Status:** Resolved by proper build output
-- Consumers now import from `@ces/messaging` (standard module resolution)
+- Consumers now import from `@coreline-engineering-solutions/messaging` (standard module resolution)
 - No need for deep path aliases
 - Build output is properly structured
 
 **Before:**
 ```typescript
-"@ces/messaging": ["./node_modules/@coreline-engineering-solutions/messaging/messaging-app/src/lib/public-api.ts"]
+"@coreline-engineering-solutions/messaging": ["./node_modules/@coreline-engineering-solutions/messaging/messaging-app/src/lib/public-api.ts"]
 ```
 
 **After:**
 ```typescript
-import { AuthService } from '@ces/messaging';
+import { AuthService } from '@coreline-engineering-solutions/messaging';
 // Just works! ✅
 ```
 
@@ -151,7 +151,7 @@ import {
   AuthService, 
   Contact,
   MESSAGING_CONFIG 
-} from '@ces/messaging';
+} from '@coreline-engineering-solutions/messaging';
 ```
 
 ---
@@ -194,7 +194,7 @@ import {
 
 1. **Remove old version:**
    ```bash
-   npm uninstall @ces/messaging
+   npm uninstall @coreline-engineering-solutions/messaging
    rm -rf node_modules/@ces
    ```
 
@@ -214,7 +214,7 @@ import {
 4. **Simplify imports:**
    ```typescript
    // No path aliases needed - standard imports work!
-   import { AuthService } from '@ces/messaging';
+   import { AuthService } from '@coreline-engineering-solutions/messaging';
    ```
 
 5. **Rebuild your app:**
@@ -229,7 +229,7 @@ import {
 ### Planned Improvements
 
 1. **Publish to npm registry** - Make installation even simpler
-2. **Separate package** - Publish `@ces/messaging` independently
+2. **Separate package** - Publish `@coreline-engineering-solutions/messaging` independently
 3. **Automated builds** - CI/CD pipeline for releases
 4. **Unit tests** - Comprehensive test coverage
 5. **E2E tests** - Integration testing

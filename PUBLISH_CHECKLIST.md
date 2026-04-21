@@ -183,7 +183,7 @@ npm init -y
 npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main
 ```
 
-If successful, you should see `@ces/messaging` in `node_modules/`.
+If successful, you should see `@coreline-engineering-solutions/messaging` in `node_modules/`.
 
 ---
 

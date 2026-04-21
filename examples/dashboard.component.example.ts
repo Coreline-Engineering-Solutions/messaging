@@ -5,7 +5,7 @@ import {
   MessagingApiService,
   AuthService,
   InboxItem 
-} from '@ces/messaging';
+} from '@coreline-engineering-solutions/messaging';
 
 /**
  * DASHBOARD COMPONENT EXAMPLE

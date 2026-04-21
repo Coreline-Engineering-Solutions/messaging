@@ -1,7 +1,7 @@
 import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router, RouterLink } from '@angular/router';
-import { AuthService, MessagingStoreService } from '@ces/messaging';
+import { AuthService, MessagingStoreService } from '@coreline-engineering-solutions/messaging';
 
 /**
  * NAVBAR COMPONENT EXAMPLE

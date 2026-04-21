@@ -1,6 +1,6 @@
 # Example Integration Files
 
-This folder contains complete, working examples showing how to integrate the `@ces/messaging` library into your Angular application.
+This folder contains complete, working examples showing how to integrate the `@coreline-engineering-solutions/messaging` library into your Angular application.
 
 ## 📁 Files Included
 
@@ -119,7 +119,7 @@ Add to your `index.html`:
 ## 🎯 Integration Checklist
 
 - [ ] Build the messaging library (`npm run build:lib`)
-- [ ] Install library in your app (`npm link @ces/messaging`)
+- [ ] Install library in your app (`npm link @coreline-engineering-solutions/messaging`)
 - [ ] Install peer dependencies (Material, CDK)
 - [ ] Copy example files to your project
 - [ ] Update API URLs in `app.config.ts`
@@ -195,7 +195,7 @@ Feel free to:
 
 ## 🐛 Troubleshooting
 
-### "Cannot find module '@ces/messaging'"
+### "Cannot find module '@coreline-engineering-solutions/messaging'"
 → Build and link the library first (see DEVELOPER_INTEGRATION_GUIDE.md)
 
 ### Floating button not showing

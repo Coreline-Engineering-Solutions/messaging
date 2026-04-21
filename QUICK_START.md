@@ -1,4 +1,4 @@
-# Quick Start Guide - @ces/messaging
+# Quick Start Guide - @coreline-engineering-solutions/messaging
 
 Get the messaging library integrated into your Angular app in **5 simple steps**.
 
@@ -22,7 +22,7 @@ cd dist/ces-messaging
 npm link
 
 cd /path/to/your-angular-app
-npm link @ces/messaging
+npm link @coreline-engineering-solutions/messaging
 npm install @angular/material@^17.3.10 @angular/cdk@^17.3.10
 
 # Option B: npm pack (for distribution)
@@ -37,7 +37,7 @@ npm install @angular/material@^17.3.10 @angular/cdk@^17.3.10
 
 **`src/app/app.config.ts`**
 ```typescript
-import { MESSAGING_CONFIG, MessagingConfig } from '@ces/messaging';
+import { MESSAGING_CONFIG, MessagingConfig } from '@coreline-engineering-solutions/messaging';
 
 const messagingConfig: MessagingConfig = {
   apiBaseUrl: 'https://your-api.com',
@@ -70,7 +70,7 @@ export const appConfig: ApplicationConfig = {
 
 **`src/app/app.component.ts`**
 ```typescript
-import { MessagingOverlayComponent } from '@ces/messaging';
+import { MessagingOverlayComponent } from '@coreline-engineering-solutions/messaging';
 
 @Component({
   imports: [RouterOutlet, MessagingOverlayComponent],
@@ -86,7 +86,7 @@ export class AppComponent {}
 
 **In your login component:**
 ```typescript
-import { AuthService, Contact } from '@ces/messaging';
+import { AuthService, Contact } from '@coreline-engineering-solutions/messaging';
 
 constructor(private messagingAuth: AuthService) {}
 
@@ -153,7 +153,7 @@ See `FRONTEND_INTEGRATION_GUIDE.md` for complete API specification.
 
 ## 🐛 Troubleshooting
 
-### "Cannot find module '@ces/messaging'"
+### "Cannot find module '@coreline-engineering-solutions/messaging'"
 ```bash
 # Rebuild and relink
 cd messaging-library/messaging-app
@@ -161,7 +161,7 @@ npm run build:lib
 cd dist/ces-messaging
 npm link
 cd /path/to/your-app
-npm link @ces/messaging
+npm link @coreline-engineering-solutions/messaging
 ```
 
 ### Floating button not showing

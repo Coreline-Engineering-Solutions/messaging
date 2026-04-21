@@ -1,4 +1,4 @@
-# @ces/messaging - Angular Messaging Library
+# @coreline-engineering-solutions/messaging - Angular Messaging Library
 
 A complete, production-ready Angular 17+ messaging system with real-time WebSocket support, Material Design UI, and RxJS state management.
 
@@ -40,7 +40,7 @@ npm install @angular/material@^17.3.10 @angular/cdk@^17.3.10
 
 **`app.config.ts`**
 ```typescript
-import { MESSAGING_CONFIG, MessagingConfig } from '@ces/messaging';
+import { MESSAGING_CONFIG, MessagingConfig } from '@coreline-engineering-solutions/messaging';
 
 const messagingConfig: MessagingConfig = {
   apiBaseUrl: 'https://your-api.com',
@@ -59,7 +59,7 @@ export const appConfig: ApplicationConfig = {
 
 **`app.component.ts`**
 ```typescript
-import { MessagingOverlayComponent } from '@ces/messaging';
+import { MessagingOverlayComponent } from '@coreline-engineering-solutions/messaging';
 
 @Component({
   imports: [RouterOutlet, MessagingOverlayComponent],
@@ -73,7 +73,7 @@ export class AppComponent {}
 
 **After Login**
 ```typescript
-import { AuthService, Contact } from '@ces/messaging';
+import { AuthService, Contact } from '@coreline-engineering-solutions/messaging';
 
 constructor(private messagingAuth: AuthService) {}
 
@@ -220,7 +220,7 @@ All components use inline styles that can be easily customized. See the `example
 
 ## 🐛 Troubleshooting
 
-### "Cannot find module '@ces/messaging'"
+### "Cannot find module '@coreline-engineering-solutions/messaging'"
 ```bash
 npm cache clean --force
 npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main

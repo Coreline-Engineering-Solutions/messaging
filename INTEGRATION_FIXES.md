@@ -61,7 +61,7 @@ Complete build output now ships compiled `.js` + `.d.ts` files
 **Result:**
 ```typescript
 // Just import - no tsconfig changes needed!
-import { AuthService } from '@ces/messaging';
+import { AuthService } from '@coreline-engineering-solutions/messaging';
 ```
 
 ✅ No special includes required  
@@ -74,13 +74,13 @@ import { AuthService } from '@ces/messaging';
 
 **Problem:**
 - npm package: `@coreline-engineering-solutions/messaging`
-- Library exports: `@ces/messaging`
+- Library exports: `@coreline-engineering-solutions/messaging`
 - Root package.json describes Python backend
 
 **Current Solution:**
 - Documented correct installation command
 - Updated repository URL in package.json
-- Library properly exports as `@ces/messaging`
+- Library properly exports as `@coreline-engineering-solutions/messaging`
 
 **Installation:**
 ```bash
@@ -88,9 +88,9 @@ npm install git+https://github.com/Coreline-Engineering-Solutions/messaging_syst
 ```
 
 **Future Improvement:**
-Consider publishing `@ces/messaging` as separate npm package:
+Consider publishing `@coreline-engineering-solutions/messaging` as separate npm package:
 ```bash
-npm install @ces/messaging  # Future goal
+npm install @coreline-engineering-solutions/messaging  # Future goal
 ```
 
 ---
@@ -129,7 +129,7 @@ The built library's `package.json` (in `dist/ces-messaging/`) includes:
 **Problem:**
 Library source at `messaging-app/src/lib/` required complex path aliases:
 ```typescript
-"@ces/messaging": ["./node_modules/@coreline-engineering-solutions/messaging/messaging-app/src/lib/public-api.ts"]
+"@coreline-engineering-solutions/messaging": ["./node_modules/@coreline-engineering-solutions/messaging/messaging-app/src/lib/public-api.ts"]
 ```
 
 **Fix Applied:**
@@ -143,7 +143,7 @@ import {
   AuthService,
   Contact,
   MESSAGING_CONFIG
-} from '@ces/messaging';
+} from '@coreline-engineering-solutions/messaging';
 ```
 
 ✅ Clean imports  
@@ -193,7 +193,7 @@ messaging-app/dist/ces-messaging/
 
 ```json
 {
-  "name": "@ces/messaging",
+  "name": "@coreline-engineering-solutions/messaging",
   "version": "1.0.1",
   "module": "./fesm2022/ces-messaging.mjs",
   "typings": "./index.d.ts",
@@ -227,7 +227,7 @@ messaging-app/dist/ces-messaging/
 // tsconfig.json
 {
   "paths": {
-    "@ces/messaging": [
+    "@coreline-engineering-solutions/messaging": [
       "./node_modules/@coreline-engineering-solutions/messaging/messaging-app/src/lib/public-api.ts"
     ]
   }
@@ -240,7 +240,7 @@ messaging-app/dist/ces-messaging/
 // No special configuration needed!
 
 // Just import:
-import { AuthService, Contact } from '@ces/messaging';
+import { AuthService, Contact } from '@coreline-engineering-solutions/messaging';
 ```
 
 ---
@@ -257,7 +257,7 @@ npm install @angular/material@^17.3.10 @angular/cdk@^17.3.10
 ### Configure (app.config.ts)
 
 ```typescript
-import { MESSAGING_CONFIG, MessagingConfig } from '@ces/messaging';
+import { MESSAGING_CONFIG, MessagingConfig } from '@coreline-engineering-solutions/messaging';
 
 const messagingConfig: MessagingConfig = {
   apiBaseUrl: 'https://your-api.com',
@@ -277,7 +277,7 @@ export const appConfig: ApplicationConfig = {
 ### Add Overlay (app.component.ts)
 
 ```typescript
-import { MessagingOverlayComponent } from '@ces/messaging';
+import { MessagingOverlayComponent } from '@coreline-engineering-solutions/messaging';
 
 @Component({
   imports: [RouterOutlet, MessagingOverlayComponent],
@@ -292,7 +292,7 @@ export class AppComponent {}
 ### Initialize After Login
 
 ```typescript
-import { AuthService, Contact } from '@ces/messaging';
+import { AuthService, Contact } from '@coreline-engineering-solutions/messaging';
 
 constructor(private messagingAuth: AuthService) {}
 
@@ -321,7 +321,7 @@ After installing v1.0.1, verify:
 - [ ] No need for tsconfig path aliases
 - [ ] No need to include library source in tsconfig
 - [ ] Peer dependency warnings appear if packages missing
-- [ ] Library imports work: `import { AuthService } from '@ces/messaging'`
+- [ ] Library imports work: `import { AuthService } from '@coreline-engineering-solutions/messaging'`
 - [ ] Build succeeds without errors
 - [ ] App runs without console errors
 

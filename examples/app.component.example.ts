@@ -1,7 +1,7 @@
 import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterOutlet } from '@angular/router';
-import { MessagingOverlayComponent } from '@ces/messaging';
+import { MessagingOverlayComponent } from '@coreline-engineering-solutions/messaging';
 
 /**
  * ROOT APP COMPONENT

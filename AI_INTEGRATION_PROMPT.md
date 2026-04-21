@@ -1,12 +1,12 @@
 # AI Agent Integration Prompt
 
-**Copy this entire prompt and paste it into your AI assistant (ChatGPT, Claude, etc.) to get help integrating the @ces/messaging library into your Angular application.**
+**Copy this entire prompt and paste it into your AI assistant (ChatGPT, Claude, etc.) to get help integrating the @coreline-engineering-solutions/messaging library into your Angular application.**
 
 ---
 
 ## Context for AI Assistant
 
-I need help integrating the `@ces/messaging` Angular library into my Angular 17+ application. This is a complete messaging system with real-time WebSocket support, Material Design UI, and state management.
+I need help integrating the `@coreline-engineering-solutions/messaging` Angular library into my Angular 17+ application. This is a complete messaging system with real-time WebSocket support, Material Design UI, and state management.
 
 ### Library Overview
 
@@ -50,7 +50,7 @@ The library does NOT handle login/registration - it only manages the messaging s
 
 2. **Configure API endpoints** in `app.config.ts`:
    ```typescript
-   import { MESSAGING_CONFIG, MessagingConfig } from '@ces/messaging';
+   import { MESSAGING_CONFIG, MessagingConfig } from '@coreline-engineering-solutions/messaging';
    
    const messagingConfig: MessagingConfig = {
      apiBaseUrl: 'https://my-backend-api.com',
@@ -65,7 +65,7 @@ The library does NOT handle login/registration - it only manages the messaging s
 
 3. **Add overlay to app component**:
    ```typescript
-   import { MessagingOverlayComponent } from '@ces/messaging';
+   import { MessagingOverlayComponent } from '@coreline-engineering-solutions/messaging';
    
    template: `
      <router-outlet></router-outlet>
@@ -75,7 +75,7 @@ The library does NOT handle login/registration - it only manages the messaging s
 
 4. **Initialize after login**:
    ```typescript
-   import { AuthService, Contact } from '@ces/messaging';
+   import { AuthService, Contact } from '@coreline-engineering-solutions/messaging';
    
    onLoginSuccess(response) {
      const contact: Contact = {
@@ -194,7 +194,7 @@ import { ApplicationConfig } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { provideHttpClient } from '@angular/common/http';
 import { provideAnimations } from '@angular/platform-browser/animations';
-import { MESSAGING_CONFIG, MessagingConfig } from '@ces/messaging';
+import { MESSAGING_CONFIG, MessagingConfig } from '@coreline-engineering-solutions/messaging';
 
 const messagingConfig: MessagingConfig = {
   apiBaseUrl: 'https://my-api.com',
@@ -216,7 +216,7 @@ export const appConfig: ApplicationConfig = {
 
 ```typescript
 import { Component } from '@angular/core';
-import { MessagingOverlayComponent } from '@ces/messaging';
+import { MessagingOverlayComponent } from '@coreline-engineering-solutions/messaging';
 
 @Component({
   selector: 'app-root',
@@ -233,7 +233,7 @@ export class AppComponent {}
 ### Session Initialization (login.component.ts)
 
 ```typescript
-import { AuthService, Contact } from '@ces/messaging';
+import { AuthService, Contact } from '@coreline-engineering-solutions/messaging';
 
 export class LoginComponent {
   constructor(private messagingAuth: AuthService) {}

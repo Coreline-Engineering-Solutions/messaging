@@ -1,4 +1,4 @@
-# Developer Integration Guide - @ces/messaging
+# Developer Integration Guide - @coreline-engineering-solutions/messaging
 
 This guide shows exactly what you need to do to integrate the messaging library into your Angular application.
 
@@ -36,7 +36,7 @@ npm link
 
 # In your Angular app
 cd /path/to/your-app
-npm link @ces/messaging
+npm link @coreline-engineering-solutions/messaging
 ```
 
 ### Option B: Local Package (npm install)
@@ -55,7 +55,7 @@ npm install /path/to/ces-messaging-1.0.0.tgz
 
 ```bash
 # Copy the dist folder directly
-cp -r dist/ces-messaging /path/to/your-app/node_modules/@ces/messaging
+cp -r dist/ces-messaging /path/to/your-app/node_modules/@coreline-engineering-solutions/messaging
 ```
 
 ---
@@ -80,7 +80,7 @@ import { ApplicationConfig } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { provideHttpClient } from '@angular/common/http';
 import { provideAnimations } from '@angular/platform-browser/animations';
-import { MESSAGING_CONFIG, MessagingConfig } from '@ces/messaging';
+import { MESSAGING_CONFIG, MessagingConfig } from '@coreline-engineering-solutions/messaging';
 import { routes } from './app.routes';
 
 // Configure your messaging API endpoints
@@ -185,7 +185,7 @@ html, body {
 import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterOutlet } from '@angular/router';
-import { MessagingOverlayComponent } from '@ces/messaging';
+import { MessagingOverlayComponent } from '@coreline-engineering-solutions/messaging';
 
 @Component({
   selector: 'app-root',
@@ -219,7 +219,7 @@ After your user successfully logs in, initialize the messaging session:
 ```typescript
 import { Component } from '@angular/core';
 import { Router } from '@angular/router';
-import { AuthService, Contact } from '@ces/messaging';
+import { AuthService, Contact } from '@coreline-engineering-solutions/messaging';
 
 @Component({
   selector: 'app-login',
@@ -290,7 +290,7 @@ export class LoginComponent {
 ```typescript
 import { Component } from '@angular/core';
 import { Router } from '@angular/router';
-import { AuthService } from '@ces/messaging';
+import { AuthService } from '@coreline-engineering-solutions/messaging';
 
 @Component({
   selector: 'app-navbar',
@@ -327,7 +327,7 @@ export class NavbarComponent {
 
 ```typescript
 import { Component, OnInit } from '@angular/core';
-import { MessagingStoreService } from '@ces/messaging';
+import { MessagingStoreService } from '@coreline-engineering-solutions/messaging';
 
 @Component({
   selector: 'app-dashboard',
@@ -356,7 +356,7 @@ export class DashboardComponent implements OnInit {
 
 ```typescript
 import { Component } from '@angular/core';
-import { MessagingApiService, AuthService } from '@ces/messaging';
+import { MessagingApiService, AuthService } from '@coreline-engineering-solutions/messaging';
 
 @Component({
   selector: 'app-custom-chat',
@@ -448,7 +448,7 @@ See `FRONTEND_INTEGRATION_GUIDE.md` for complete API documentation.
 ### 1. Check Library Import
 
 ```typescript
-import { MessagingOverlayComponent, AuthService } from '@ces/messaging';
+import { MessagingOverlayComponent, AuthService } from '@coreline-engineering-solutions/messaging';
 // Should not show any TypeScript errors
 ```
 
@@ -478,7 +478,7 @@ After login, open browser console:
 
 ## Troubleshooting
 
-### Issue: "Cannot find module '@ces/messaging'"
+### Issue: "Cannot find module '@coreline-engineering-solutions/messaging'"
 
 **Solution:** Rebuild and reinstall the library
 ```bash
@@ -487,7 +487,7 @@ npm run build:lib
 cd dist/ces-messaging
 npm link
 cd /path/to/your-app
-npm link @ces/messaging
+npm link @coreline-engineering-solutions/messaging
 ```
 
 ### Issue: "No provider for MESSAGING_CONFIG"

@@ -1,4 +1,4 @@
-# Installing @ces/messaging from Git
+# Installing @coreline-engineering-solutions/messaging from Git
 
 This guide shows how to install the messaging library directly from your Git repository into other Angular projects.
 
@@ -19,7 +19,7 @@ Or add to your `package.json`:
 ```json
 {
   "dependencies": {
-    "@ces/messaging": "git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main"
+    "@coreline-engineering-solutions/messaging": "git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main"
   }
 }
 ```
@@ -125,7 +125,7 @@ Update `messaging-app/package.json`:
 
 ```json
 {
-  "name": "@ces/messaging",
+  "name": "@coreline-engineering-solutions/messaging",
   "version": "1.0.0",
   "description": "Angular 17+ messaging library with real-time WebSocket support",
   "author": "Coreline Engineering Solutions",
@@ -181,7 +181,7 @@ Follow the integration steps in `QUICK_START.md`:
 
 1. Add to `app.config.ts`:
 ```typescript
-import { MESSAGING_CONFIG, MessagingConfig } from '@ces/messaging';
+import { MESSAGING_CONFIG, MessagingConfig } from '@coreline-engineering-solutions/messaging';
 
 const messagingConfig: MessagingConfig = {
   apiBaseUrl: 'https://your-api.com',
@@ -196,7 +196,7 @@ providers: [
 
 2. Add to `app.component.ts`:
 ```typescript
-import { MessagingOverlayComponent } from '@ces/messaging';
+import { MessagingOverlayComponent } from '@coreline-engineering-solutions/messaging';
 
 template: `
   <router-outlet></router-outlet>
@@ -206,7 +206,7 @@ template: `
 
 3. Initialize after login:
 ```typescript
-import { AuthService, Contact } from '@ces/messaging';
+import { AuthService, Contact } from '@coreline-engineering-solutions/messaging';
 
 this.messagingAuth.setSession(sessionGid, contact);
 ```
@@ -234,12 +234,12 @@ this.messagingAuth.setSession(sessionGid, contact);
 4. **Update in consuming projects:**
    ```bash
    cd /path/to/your-angular-app
-   npm update @ces/messaging
+   npm update @coreline-engineering-solutions/messaging
    ```
 
    Or force reinstall:
    ```bash
-   npm uninstall @ces/messaging
+   npm uninstall @coreline-engineering-solutions/messaging
    npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main
    ```
 
@@ -272,7 +272,7 @@ npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#
 ```json
 {
   "dependencies": {
-    "@ces/messaging": "git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.0"
+    "@coreline-engineering-solutions/messaging": "git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.0"
   }
 }
 ```
@@ -341,7 +341,7 @@ messaging-library/
 
 ## 🐛 Troubleshooting
 
-### "Cannot find module '@ces/messaging'"
+### "Cannot find module '@coreline-engineering-solutions/messaging'"
 
 **Solution:** Check that `dist/ces-messaging/` is committed to Git:
 ```bash
@@ -370,7 +370,7 @@ npm install
 
 **Solution:** Force reinstall:
 ```bash
-npm uninstall @ces/messaging
+npm uninstall @coreline-engineering-solutions/messaging
 rm -rf node_modules/@ces
 npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main
 ```
@@ -391,12 +391,12 @@ npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#
 
 ### Update library
 ```bash
-npm update @ces/messaging
+npm update @coreline-engineering-solutions/messaging
 ```
 
 ### Force reinstall
 ```bash
-npm uninstall @ces/messaging
+npm uninstall @coreline-engineering-solutions/messaging
 npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main
 ```
 
@@ -424,7 +424,7 @@ npm publish --access public
 
 Then install normally:
 ```bash
-npm install @ces/messaging
+npm install @coreline-engineering-solutions/messaging
 ```
 
 See npm documentation for publishing packages.

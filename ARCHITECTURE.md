@@ -1,4 +1,4 @@
-# Architecture Overview - @ces/messaging
+# Architecture Overview - @coreline-engineering-solutions/messaging
 
 Visual guide to understanding how the messaging library works and integrates with your app.
 
@@ -34,7 +34,7 @@ Visual guide to understanding how the messaging library works and integrates wit
 └─────────────────────────────────────────────────────────────────────┘
                                     ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    @ces/messaging LIBRARY                           │
+│                    @coreline-engineering-solutions/messaging LIBRARY                           │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │  MessagingOverlayComponent                                   │  │
@@ -127,7 +127,7 @@ Visual guide to understanding how the messaging library works and integrates wit
        │
        ↓
 ┌──────────────────────────────────────────────────────────┐
-│  4. @ces/messaging Library                               │
+│  4. @coreline-engineering-solutions/messaging Library                               │
 │     • Stores session in AuthService                      │
 │     • Saves to localStorage                              │
 │     • Shows MessagingOverlay                             │
