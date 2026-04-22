@@ -1,7 +1,7 @@
 {
   "name": "@ces/messaging",
   "version": "1.0.1",
-  "description": "Angular 17+ messaging library with real-time WebSocket support, Material Design UI, and state management",
+  "description": "Angular 17-21+ messaging library with real-time WebSocket support, Material Design UI, and state management",
   "author": "Coreline Engineering Solutions",
   "license": "MIT",
   "repository": {
@@ -21,18 +21,18 @@
     "tslib": "^2.3.0"
   },
   "peerDependencies": {
-    "@angular/animations": ">=17.3.0",
-    "@angular/cdk": ">=17.3.10",
-    "@angular/common": ">=17.3.0",
-    "@angular/compiler": ">=17.3.0",
-    "@angular/core": ">=17.3.0",
-    "@angular/forms": ">=17.3.0",
-    "@angular/material": ">=17.3.10",
-    "@angular/platform-browser": ">=17.3.0",
-    "@angular/platform-browser-dynamic": ">=17.3.0",
-    "@angular/router": ">=17.3.0",
-    "rxjs": "^7.8.0",
-    "zone.js": "^0.14.3"
+    "@angular/animations": "^17.0.0 || ^18.0.0 || ^19.0.0 || ^20.0.0 || ^21.0.0",
+    "@angular/cdk": "^17.0.0 || ^18.0.0 || ^19.0.0 || ^20.0.0 || ^21.0.0",
+    "@angular/common": "^17.0.0 || ^18.0.0 || ^19.0.0 || ^20.0.0 || ^21.0.0",
+    "@angular/compiler": "^17.0.0 || ^18.0.0 || ^19.0.0 || ^20.0.0 || ^21.0.0",
+    "@angular/core": "^17.0.0 || ^18.0.0 || ^19.0.0 || ^20.0.0 || ^21.0.0",
+    "@angular/forms": "^17.0.0 || ^18.0.0 || ^19.0.0 || ^20.0.0 || ^21.0.0",
+    "@angular/material": "^17.0.0 || ^18.0.0 || ^19.0.0 || ^20.0.0 || ^21.0.0",
+    "@angular/platform-browser": "^17.0.0 || ^18.0.0 || ^19.0.0 || ^20.0.0 || ^21.0.0",
+    "@angular/platform-browser-dynamic": "^17.0.0 || ^18.0.0 || ^19.0.0 || ^20.0.0 || ^21.0.0",
+    "@angular/router": "^17.0.0 || ^18.0.0 || ^19.0.0 || ^20.0.0 || ^21.0.0",
+    "rxjs": "^7.8.0 || ^8.0.0",
+    "zone.js": "^0.14.0 || ^0.15.0"
   },
   "module": "fesm2022/ces-messaging.mjs",
   "typings": "index.d.ts",
