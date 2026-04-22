@@ -93,15 +93,25 @@ export type SidebarSide = 'left' | 'right';
  *
  * @param user - User object with email and optional fields
  * @param sessionGid - Session GUID from authentication
+ * @param contactIdHint - Optional field name to use for contact_id (e.g., 'email', 'id', 'userId')
  * @returns Contact object ready for setSession()
  *
  * @example
+ * // Using email as contact_id (default)
  * const contact = createContactFromUser({
  *   email: 'user@example.com',
  *   firstName: 'John',
  *   lastName: 'Doe',
  *   company: 'Acme Corp'
  * }, sessionGid);
+ *
+ * // Using custom field as contact_id
+ * const contact = createContactFromUser({
+ *   email: 'user@example.com',
+ *   id: 'uuid-123',
+ *   firstName: 'John'
+ * }, sessionGid, 'id');
+ *
  * messagingAuth.setSession(sessionGid, contact);
  */
 export declare function createContactFromUser(user: {
@@ -110,4 +120,7 @@ export declare function createContactFromUser(user: {
     lastName?: string;
     company?: string;
     userId?: string;
-}, sessionGid: string): Contact;
+    id?: string;
+    customId?: string;
+    [key: string]: any;
+}, sessionGid: string, contactIdHint?: string): Contact;

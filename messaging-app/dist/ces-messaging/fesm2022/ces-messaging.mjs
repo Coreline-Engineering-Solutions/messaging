@@ -49,20 +49,35 @@ function getMessageSenderName(msg) {
  *
  * @param user - User object with email and optional fields
  * @param sessionGid - Session GUID from authentication
+ * @param contactIdHint - Optional field name to use for contact_id (e.g., 'email', 'id', 'userId')
  * @returns Contact object ready for setSession()
  *
  * @example
+ * // Using email as contact_id (default)
  * const contact = createContactFromUser({
  *   email: 'user@example.com',
  *   firstName: 'John',
  *   lastName: 'Doe',
  *   company: 'Acme Corp'
  * }, sessionGid);
+ *
+ * // Using custom field as contact_id
+ * const contact = createContactFromUser({
+ *   email: 'user@example.com',
+ *   id: 'uuid-123',
+ *   firstName: 'John'
+ * }, sessionGid, 'id');
+ *
  * messagingAuth.setSession(sessionGid, contact);
  */
-function createContactFromUser(user, sessionGid) {
+function createContactFromUser(user, sessionGid, contactIdHint) {
+    // Determine contact_id based on hint or default to email
+    let contactId = user.email;
+    if (contactIdHint && user[contactIdHint]) {
+        contactId = String(user[contactIdHint]);
+    }
     return {
-        contact_id: user.email,
+        contact_id: contactId,
         user_gid: sessionGid,
         email: user.email,
         first_name: user.firstName || '',

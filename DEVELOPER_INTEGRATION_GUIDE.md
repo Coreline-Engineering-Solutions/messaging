@@ -443,6 +443,166 @@ See `FRONTEND_INTEGRATION_GUIDE.md` for complete API documentation.
 
 ---
 
+## Contact ID Strategy
+
+### What is contact_id?
+
+The `contact_id` is a **unique identifier** for each user in the messaging system. It's used to:
+- Route messages to the correct user
+- Identify participants in conversations
+- Connect WebSocket sessions
+- Query the messaging database
+
+### How to Choose contact_id
+
+You have three options:
+
+#### Option 1: Email (Recommended)
+Use the user's email as contact_id. This is the **recommended approach** because:
+- Emails are unique
+- Easy to debug (readable in logs)
+- Works across systems
+- Matches the Contact object
+
+```typescript
+const contact: Contact = {
+  contact_id: user.email,        // ✅ Use email
+  user_gid: sessionGid,
+  email: user.email,
+  first_name: user.firstName,
+  last_name: user.lastName,
+  company_name: user.company,
+  is_active: true
+};
+```
+
+#### Option 2: UUID or User ID
+Use a unique identifier from your system:
+
+```typescript
+const contact: Contact = {
+  contact_id: user.id,           // ✅ Use UUID/user ID
+  user_gid: sessionGid,
+  email: user.email,
+  first_name: user.firstName,
+  last_name: user.lastName,
+  company_name: user.company,
+  is_active: true
+};
+```
+
+#### Option 3: Custom Identifier
+Use any unique identifier your system provides:
+
+```typescript
+const contact: Contact = {
+  contact_id: user.customId,     // ✅ Use custom ID
+  user_gid: sessionGid,
+  email: user.email,
+  first_name: user.firstName,
+  last_name: user.lastName,
+  company_name: user.company,
+  is_active: true
+};
+```
+
+### Backend Mapping
+
+Your backend must:
+1. Accept the `contact_id` in API requests
+2. Store it in the `messaging.contacts` table
+3. Use it to route WebSocket messages
+4. Validate it matches the authenticated user
+
+Example database schema:
+```sql
+CREATE TABLE messaging.contacts (
+  contact_id VARCHAR(255) PRIMARY KEY,  -- Email, UUID, or custom ID
+  user_gid UUID NOT NULL,               -- Session GUID
+  email VARCHAR(255) NOT NULL,
+  first_name VARCHAR(255),
+  last_name VARCHAR(255),
+  company_name VARCHAR(255),
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### Common Mistakes
+
+❌ **Mistake 1: Using session_gid as contact_id**
+```typescript
+// WRONG - session_gid changes on each login
+const contact: Contact = {
+  contact_id: sessionGid,  // ❌ WRONG!
+  // ...
+};
+```
+**Fix:** Use email or user ID instead.
+
+❌ **Mistake 2: Inconsistent contact_id**
+```typescript
+// Login 1: contact_id = "user@example.com"
+// Login 2: contact_id = "USER@EXAMPLE.COM"  // Different!
+// Login 3: contact_id = "123"               // Different again!
+```
+**Fix:** Standardize contact_id format (lowercase emails, consistent UUIDs).
+
+❌ **Mistake 3: Not creating contact record on backend**
+```typescript
+// Frontend sends contact_id = "user@example.com"
+// But backend has no record in messaging.contacts table
+// Result: "Contact not found" error
+```
+**Fix:** Ensure backend creates contact record when user logs in.
+
+❌ **Mistake 4: Mismatched contact_id between frontend and backend**
+```typescript
+// Frontend: contact_id = "user@example.com"
+// Backend: contact_id = "123" (user ID)
+// Result: Messages don't route correctly
+```
+**Fix:** Agree on contact_id format with backend team.
+
+### Using the Helper Function
+
+The library provides `createContactFromUser()` to standardize mapping:
+
+```typescript
+import { createContactFromUser } from '@coreline-engineering-solutions/messaging';
+
+// After login, create contact from user data
+const contact = createContactFromUser({
+  email: response.email,
+  firstName: response.first_name,
+  lastName: response.last_name,
+  company: response.company_name
+}, sessionGid);
+
+// contact_id is automatically set to email
+messagingAuth.setSession(sessionGid, contact);
+```
+
+### Validation
+
+The library validates contact_id at runtime:
+```typescript
+// These will throw helpful errors:
+messagingAuth.setSession(sessionGid, {
+  contact_id: '',  // ❌ Error: contact_id cannot be empty
+  email: 'user@example.com',
+  // ...
+});
+
+messagingAuth.setSession(sessionGid, {
+  contact_id: 'user@example.com',
+  email: 'invalid-email',  // ❌ Error: email must be valid
+  // ...
+});
+```
+
+---
+
 ## Testing the Integration
 
 ### 1. Check Library Import
