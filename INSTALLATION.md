@@ -5,20 +5,28 @@
 Install the messaging library from GitHub:
 
 ```bash
-npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main --legacy-peer-deps
 ```
 
-## Install Specific Version
+## Install from Branch
 
-Install a specific version or branch:
+Install from a specific branch:
 
 ```bash
-# Latest main branch
-npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main
+# Latest main branch (recommended)
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main --legacy-peer-deps
 
-# Specific version tag
-npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.6
+# Other branches
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#develop --legacy-peer-deps
 ```
+
+## Note on --legacy-peer-deps
+
+The `--legacy-peer-deps` flag is recommended because:
+- Library supports Angular 17-21+
+- Your project may use Angular 21.2.9 or later
+- npm strict mode may flag minor version differences
+- This flag allows compatible versions to install without errors
 
 ## Import in Your Code
 
