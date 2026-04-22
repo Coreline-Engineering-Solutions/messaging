@@ -506,8 +506,41 @@ export class MessagingStoreService implements OnDestroy {
         this.loadInbox();
         break;
       case 'error':
-        console.error('WebSocket error:', msg.message);
+        this.handleWebSocketError(msg.message);
         break;
+    }
+  }
+
+  private handleWebSocketError(errorMessage: string | undefined): void {
+    const contactId = this.auth.contactId;
+    
+    if (!errorMessage) {
+      console.error('WebSocket error: Unknown error');
+      return;
+    }
+
+    if (errorMessage.includes('Contact not found') || errorMessage.includes('contact')) {
+      console.error(
+        `❌ Messaging contact not found for ID "${contactId}". ` +
+        `Ensure a record exists in the messaging.contacts table. ` +
+        `If the contact doesn't exist, create one via: POST /messaging/contacts with contact_id="${contactId}". ` +
+        `Error: ${errorMessage}`
+      );
+    } else if (errorMessage.includes('unauthorized') || errorMessage.includes('auth')) {
+      console.error(
+        `❌ WebSocket authentication failed. ` +
+        `Verify session_gid is valid and not expired. ` +
+        `Re-authenticate and call messagingAuth.setSession() again. ` +
+        `Error: ${errorMessage}`
+      );
+    } else if (errorMessage.includes('permission') || errorMessage.includes('forbidden')) {
+      console.error(
+        `❌ Permission denied for contact "${contactId}". ` +
+        `Ensure the contact has access to the messaging system. ` +
+        `Error: ${errorMessage}`
+      );
+    } else {
+      console.error(`❌ WebSocket error: ${errorMessage}`);
     }
   }
 

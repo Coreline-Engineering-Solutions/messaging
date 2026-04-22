@@ -84,6 +84,7 @@ export declare class MessagingStoreService implements OnDestroy {
     getCurrentInbox(): InboxItem[];
     private listenWebSocket;
     private handleWsMessage;
+    private handleWebSocketError;
     private handleNewMessage;
     private appendMessage;
     private updateInboxPreview;

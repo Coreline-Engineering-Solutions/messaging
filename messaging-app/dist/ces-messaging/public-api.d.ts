@@ -1,5 +1,5 @@
 export { MessagingConfig, MESSAGING_CONFIG } from './messaging.config';
-export { AuthSession, Contact, InboxItem, Message, Conversation, ConversationParticipant, CompanyConnection, WebSocketMessage, ChatWindow, Attachment, SidebarSide, getContactDisplayName, getMessageSenderName, } from './models/messaging.models';
+export { AuthSession, Contact, InboxItem, Message, Conversation, ConversationParticipant, CompanyConnection, WebSocketMessage, ChatWindow, Attachment, SidebarSide, getContactDisplayName, getMessageSenderName, createContactFromUser, } from './models/messaging.models';
 export { AuthService } from './services/auth.service';
 export { MessagingApiService } from './services/messaging-api.service';
 export { MessagingWebSocketService } from './services/messaging-websocket.service';

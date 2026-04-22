@@ -16,6 +16,7 @@ export {
   SidebarSide,
   getContactDisplayName,
   getMessageSenderName,
+  createContactFromUser,
 } from './models/messaging.models';
 
 // ── Services ──

@@ -115,3 +115,38 @@ export interface Attachment {
 }
 
 export type SidebarSide = 'left' | 'right';
+
+/**
+ * Helper function to create a Contact object from common user data shapes.
+ * Reduces boilerplate when integrating with existing auth systems.
+ * 
+ * @param user - User object with email and optional fields
+ * @param sessionGid - Session GUID from authentication
+ * @returns Contact object ready for setSession()
+ * 
+ * @example
+ * const contact = createContactFromUser({
+ *   email: 'user@example.com',
+ *   firstName: 'John',
+ *   lastName: 'Doe',
+ *   company: 'Acme Corp'
+ * }, sessionGid);
+ * messagingAuth.setSession(sessionGid, contact);
+ */
+export function createContactFromUser(user: {
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  company?: string;
+  userId?: string;
+}, sessionGid: string): Contact {
+  return {
+    contact_id: user.email,
+    user_gid: sessionGid,
+    email: user.email,
+    first_name: user.firstName || '',
+    last_name: user.lastName || '',
+    company_name: user.company || '',
+    is_active: true
+  };
+}

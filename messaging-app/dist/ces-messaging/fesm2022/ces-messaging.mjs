@@ -43,6 +43,34 @@ function getMessageSenderName(msg) {
     }
     return msg.sender_username || 'Unknown';
 }
+/**
+ * Helper function to create a Contact object from common user data shapes.
+ * Reduces boilerplate when integrating with existing auth systems.
+ *
+ * @param user - User object with email and optional fields
+ * @param sessionGid - Session GUID from authentication
+ * @returns Contact object ready for setSession()
+ *
+ * @example
+ * const contact = createContactFromUser({
+ *   email: 'user@example.com',
+ *   firstName: 'John',
+ *   lastName: 'Doe',
+ *   company: 'Acme Corp'
+ * }, sessionGid);
+ * messagingAuth.setSession(sessionGid, contact);
+ */
+function createContactFromUser(user, sessionGid) {
+    return {
+        contact_id: user.email,
+        user_gid: sessionGid,
+        email: user.email,
+        first_name: user.firstName || '',
+        last_name: user.lastName || '',
+        company_name: user.company || '',
+        is_active: true
+    };
+}
 
 class AuthService {
     http;
@@ -996,8 +1024,35 @@ class MessagingStoreService {
                 this.loadInbox();
                 break;
             case 'error':
-                console.error('WebSocket error:', msg.message);
+                this.handleWebSocketError(msg.message);
                 break;
+        }
+    }
+    handleWebSocketError(errorMessage) {
+        const contactId = this.auth.contactId;
+        if (!errorMessage) {
+            console.error('WebSocket error: Unknown error');
+            return;
+        }
+        if (errorMessage.includes('Contact not found') || errorMessage.includes('contact')) {
+            console.error(`❌ Messaging contact not found for ID "${contactId}". ` +
+                `Ensure a record exists in the messaging.contacts table. ` +
+                `If the contact doesn't exist, create one via: POST /messaging/contacts with contact_id="${contactId}". ` +
+                `Error: ${errorMessage}`);
+        }
+        else if (errorMessage.includes('unauthorized') || errorMessage.includes('auth')) {
+            console.error(`❌ WebSocket authentication failed. ` +
+                `Verify session_gid is valid and not expired. ` +
+                `Re-authenticate and call messagingAuth.setSession() again. ` +
+                `Error: ${errorMessage}`);
+        }
+        else if (errorMessage.includes('permission') || errorMessage.includes('forbidden')) {
+            console.error(`❌ Permission denied for contact "${contactId}". ` +
+                `Ensure the contact has access to the messaging system. ` +
+                `Error: ${errorMessage}`);
+        }
+        else {
+            console.error(`❌ WebSocket error: ${errorMessage}`);
         }
     }
     handleNewMessage(data) {
@@ -2585,5 +2640,5 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
  * Generated bundle index. Do not edit.
  */
 
-export { AuthService, ChatPanelComponent, ChatThreadComponent, FloatingButtonComponent, GroupManagerComponent, InboxListComponent, MESSAGING_CONFIG, MessageInputComponent, MessagingApiService, MessagingAuthBridgeService, MessagingFileService, MessagingOverlayComponent, MessagingStoreService, MessagingWebSocketService, NewConversationComponent, getContactDisplayName, getMessageSenderName };
+export { AuthService, ChatPanelComponent, ChatThreadComponent, FloatingButtonComponent, GroupManagerComponent, InboxListComponent, MESSAGING_CONFIG, MessageInputComponent, MessagingApiService, MessagingAuthBridgeService, MessagingFileService, MessagingOverlayComponent, MessagingStoreService, MessagingWebSocketService, NewConversationComponent, createContactFromUser, getContactDisplayName, getMessageSenderName };
 //# sourceMappingURL=ces-messaging.mjs.map
