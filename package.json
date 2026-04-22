@@ -5,7 +5,16 @@
   "author": "Coreline Engineering Solutions",
   "license": "MIT",
   "files": [
-    "messaging-app/dist/ces-messaging/**/*"
+    "messaging-app/dist/ces-messaging/**/*",
+    "QUICK_START.md",
+    "DEVELOPER_INTEGRATION_GUIDE.md",
+    "INTEGRATION_FIXES.md",
+    "CHANGELOG.md",
+    "GIT_INSTALLATION_GUIDE.md",
+    "ARCHITECTURE.md",
+    "FRONTEND_INTEGRATION_GUIDE.md",
+    "AI_INTEGRATION_PROMPT.md",
+    "PUBLISH_CHECKLIST.md"
   ],
   "main": "./messaging-app/dist/ces-messaging/fesm2022/ces-messaging.mjs",
   "module": "./messaging-app/dist/ces-messaging/fesm2022/ces-messaging.mjs",
