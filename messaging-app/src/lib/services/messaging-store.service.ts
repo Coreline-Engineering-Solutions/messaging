@@ -52,6 +52,9 @@ export class MessagingStoreService implements OnDestroy {
   private wsSub: Subscription | null = null;
   private destroy$ = new Subject<void>();
   private pollTimer: any = null;
+  private groupSettings$ = new BehaviorSubject<{ conversationId: string; name: string } | null>(null);
+
+  readonly groupSettings = this.groupSettings$.asObservable();
 
   constructor(
     private auth: AuthService,
@@ -89,16 +92,12 @@ export class MessagingStoreService implements OnDestroy {
     this.totalUnread$.next(0);
   }
 
-  // ── Polling fallback ──
+  // ── Polling fallback (inbox only - messages rely on WebSocket) ──
   private startPolling(): void {
     this.stopPolling();
     this.pollTimer = setInterval(() => {
       this.loadInbox();
-      const activeId = this.activeConversationId$.value;
-      if (activeId) {
-        this.loadMessages(activeId);
-      }
-    }, 5000);
+    }, 30000);
   }
 
   private stopPolling(): void {
@@ -372,13 +371,26 @@ export class MessagingStoreService implements OnDestroy {
     const contactId = this.auth.contactId;
     if (!contactId) return;
 
-    this.api.createConversation(contactId, participantIds, name).subscribe({
+    const allParticipants = participantIds.includes(contactId)
+      ? participantIds
+      : [contactId, ...participantIds];
+
+    this.api.createConversation(contactId, allParticipants, name).subscribe({
       next: (conv) => {
         this.loadInbox();
         this.openConversation(conv.conversation_id, name, true);
       },
       error: (err: any) => console.error('Failed to create group:', err),
     });
+  }
+
+  openGroupSettings(conversationId: string, name: string): void {
+    this.groupSettings$.next({ conversationId, name });
+    this.setView('group-manager');
+  }
+
+  clearGroupSettings(): void {
+    this.groupSettings$.next(null);
   }
 
   markAsRead(conversationId: string): void {

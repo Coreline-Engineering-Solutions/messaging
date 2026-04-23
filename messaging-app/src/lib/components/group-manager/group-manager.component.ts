@@ -5,83 +5,114 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatButtonModule } from '@angular/material/button';
 import { MatRippleModule } from '@angular/material/core';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { Subscription } from 'rxjs';
 import { MessagingStoreService } from '../../services/messaging-store.service';
-import { Contact, getContactDisplayName } from '../../models/messaging.models';
+import { MessagingApiService } from '../../services/messaging-api.service';
+import { AuthService } from '../../services/auth.service';
+import { Contact, ConversationParticipant, getContactDisplayName } from '../../models/messaging.models';
 
 @Component({
   selector: 'app-group-manager',
   standalone: true,
-  imports: [CommonModule, FormsModule, MatIconModule, MatButtonModule, MatRippleModule, MatTooltipModule],
+  imports: [CommonModule, FormsModule, MatIconModule, MatButtonModule, MatRippleModule, MatTooltipModule, MatProgressSpinnerModule],
   template: `
     <div class="group-manager">
       <div class="header">
         <button mat-icon-button class="hdr-btn" (click)="goBack()" matTooltip="Back" matTooltipPosition="below">
           <mat-icon>arrow_back</mat-icon>
         </button>
-        <h3>{{ isEditMode ? 'Edit Group' : 'Create Group' }}</h3>
+        <h3>{{ isEditMode ? 'Group Settings' : 'Create Group' }}</h3>
       </div>
 
-      <div class="form-section">
-        <label class="field-label">Group Name</label>
-        <input
-          type="text"
-          [(ngModel)]="groupName"
-          placeholder="Enter group name..."
-          class="text-field"
-        />
-      </div>
-
-      <div class="form-section">
-        <label class="field-label">Members (min 2 including you)</label>
-        <div class="search-bar">
-          <mat-icon class="search-icon">search</mat-icon>
+      <div class="scrollable">
+        <div class="form-section">
+          <label class="field-label">Group Name</label>
           <input
             type="text"
-            [(ngModel)]="searchQuery"
-            placeholder="Search contacts..."
-            class="search-input"
+            [(ngModel)]="groupName"
+            placeholder="Enter group name..."
+            class="text-field"
           />
         </div>
-      </div>
 
-      <div *ngIf="selectedContacts.length > 0" class="selected-chips">
-        <div *ngFor="let c of selectedContacts" class="chip">
-          <span>{{ getDisplayName(c) }}</span>
-          <button mat-icon-button class="chip-remove" (click)="removeContact(c)" [disabled]="isCreator(c)">
-            <mat-icon>{{ isCreator(c) ? 'star' : 'close' }}</mat-icon>
-          </button>
+        <ng-container *ngIf="isEditMode">
+          <div class="form-section section-gap">
+            <label class="field-label">Current Members</label>
+            <div *ngIf="loadingMembers" class="loading-row">
+              <mat-spinner diameter="18"></mat-spinner>
+              <span>Loading members...</span>
+            </div>
+            <div *ngIf="!loadingMembers" class="members-list">
+              <div *ngFor="let m of currentMembers" class="member-row">
+                <div class="member-avatar"><mat-icon>person</mat-icon></div>
+                <div class="member-info">
+                  <span class="member-name">{{ getMemberName(m) }}{{ m.contact_id === creatorContactId ? ' (you)' : '' }}</span>
+                  <span class="member-sub">{{ m.contact_id }}</span>
+                </div>
+              </div>
+              <div *ngIf="currentMembers.length === 0" class="empty-members">No members found</div>
+            </div>
+          </div>
+
+          <div class="form-section section-gap">
+            <label class="field-label">Add Members</label>
+            <div class="search-bar">
+              <mat-icon class="search-icon">search</mat-icon>
+              <input type="text" [(ngModel)]="searchQuery" placeholder="Search contacts..." class="search-input" />
+            </div>
+          </div>
+        </ng-container>
+
+        <ng-container *ngIf="!isEditMode">
+          <div class="form-section section-gap">
+            <label class="field-label">Add Members (min 1 other person)</label>
+            <div class="search-bar">
+              <mat-icon class="search-icon">search</mat-icon>
+              <input type="text" [(ngModel)]="searchQuery" placeholder="Search contacts..." class="search-input" />
+            </div>
+          </div>
+        </ng-container>
+
+        <div *ngIf="selectedContacts.length > 0" class="selected-chips">
+          <div *ngFor="let c of selectedContacts" class="chip">
+            <span>{{ getDisplayName(c) }}</span>
+            <button mat-icon-button class="chip-remove" (click)="removeContact(c)">
+              <mat-icon>close</mat-icon>
+            </button>
+          </div>
         </div>
-      </div>
 
-      <div class="contacts-list">
-        <div
-          *ngFor="let contact of filteredContacts"
-          class="contact-item"
-          matRipple
-          [class.selected]="isSelected(contact)"
-          (click)="toggleContact(contact)"
-        >
-          <div class="contact-avatar">
-            <mat-icon>person</mat-icon>
+        <div class="contacts-list">
+          <div
+            *ngFor="let contact of filteredContacts"
+            class="contact-item"
+            matRipple
+            [class.selected]="isSelected(contact)"
+            (click)="toggleContact(contact)"
+          >
+            <div class="contact-avatar">
+              <mat-icon>person</mat-icon>
+            </div>
+            <div class="contact-info">
+              <span class="contact-name">{{ getDisplayName(contact) }}</span>
+              <span class="contact-company">{{ contact.company_name }}</span>
+            </div>
+            <mat-icon *ngIf="isSelected(contact)" class="check-icon">check_circle</mat-icon>
           </div>
-          <div class="contact-info">
-            <span class="contact-name">{{ getDisplayName(contact) }}</span>
-            <span class="contact-company">{{ contact.company_name }}</span>
-          </div>
-          <mat-icon *ngIf="isSelected(contact)" class="check-icon">check_circle</mat-icon>
         </div>
       </div>
 
       <div class="action-bar">
         <button
           mat-raised-button
-          [disabled]="!canCreate"
+          [disabled]="!canSubmit"
           (click)="onSubmit()"
           class="create-btn"
         >
           <mat-icon>{{ isEditMode ? 'save' : 'group_add' }}</mat-icon>
-          {{ isEditMode ? 'Save Changes' : 'Create Group' }} ({{ selectedContacts.length + 1 }} members)
+          <ng-container *ngIf="!isEditMode">Create Group ({{ selectedContacts.length + 1 }} members)</ng-container>
+          <ng-container *ngIf="isEditMode">Save Changes</ng-container>
         </button>
         <button
           *ngIf="isEditMode"
@@ -108,6 +139,7 @@ import { Contact, getContactDisplayName } from '../../models/messaging.models';
       padding: 12px 8px 12px 4px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.15);
       gap: 4px;
+      flex-shrink: 0;
     }
 
     .header h3 {
@@ -131,8 +163,17 @@ import { Contact, getContactDisplayName } from '../../models/messaging.models';
       color: rgba(255, 255, 255, 0.8);
     }
 
+    .scrollable {
+      flex: 1;
+      overflow-y: auto;
+    }
+
     .form-section {
       padding: 12px 16px 0;
+    }
+
+    .section-gap {
+      padding-top: 16px;
     }
 
     .field-label {
@@ -158,12 +199,67 @@ import { Contact, getContactDisplayName } from '../../models/messaging.models';
       box-sizing: border-box;
     }
 
-    .text-field:focus {
-      border-color: rgba(255, 255, 255, 0.5);
+    .text-field:focus { border-color: rgba(255, 255, 255, 0.5); }
+    .text-field::placeholder { color: rgba(255, 255, 255, 0.5); }
+
+    .loading-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: rgba(255,255,255,0.6);
+      font-size: 13px;
+      padding: 8px 0;
     }
 
-    .text-field::placeholder {
-      color: rgba(255, 255, 255, 0.5);
+    .members-list {
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .member-row {
+      display: flex;
+      align-items: center;
+      padding: 8px 12px;
+      gap: 10px;
+      background: rgba(255,255,255,0.07);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .member-row:last-child { border-bottom: none; }
+
+    .member-avatar {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .member-avatar mat-icon { color: #fff; font-size: 18px; }
+
+    .member-info {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .member-name {
+      font-size: 13px;
+      font-weight: 500;
+      color: #fff;
+    }
+
+    .member-sub {
+      font-size: 11px;
+      color: rgba(255,255,255,0.5);
+    }
+
+    .empty-members {
+      font-size: 13px;
+      color: rgba(255,255,255,0.5);
+      padding: 8px 0;
     }
 
     .search-bar {
@@ -191,9 +287,7 @@ import { Contact, getContactDisplayName } from '../../models/messaging.models';
       color: #fff;
     }
 
-    .search-input::placeholder {
-      color: rgba(255, 255, 255, 0.5);
-    }
+    .search-input::placeholder { color: rgba(255, 255, 255, 0.5); }
 
     .selected-chips {
       display: flex;
@@ -227,8 +321,6 @@ import { Contact, getContactDisplayName } from '../../models/messaging.models';
     }
 
     .contacts-list {
-      flex: 1;
-      overflow-y: auto;
       padding-top: 4px;
     }
 
@@ -241,13 +333,8 @@ import { Contact, getContactDisplayName } from '../../models/messaging.models';
       gap: 12px;
     }
 
-    .contact-item:hover {
-      background: rgba(255, 255, 255, 0.08);
-    }
-
-    .contact-item.selected {
-      background: rgba(255, 255, 255, 0.15);
-    }
+    .contact-item:hover { background: rgba(255, 255, 255, 0.08); }
+    .contact-item.selected { background: rgba(255, 255, 255, 0.15); }
 
     .contact-avatar {
       width: 36px;
@@ -260,10 +347,7 @@ import { Contact, getContactDisplayName } from '../../models/messaging.models';
       flex-shrink: 0;
     }
 
-    .contact-avatar mat-icon {
-      color: #fff;
-      font-size: 20px;
-    }
+    .contact-avatar mat-icon { color: #fff; font-size: 20px; }
 
     .contact-info {
       flex: 1;
@@ -271,21 +355,9 @@ import { Contact, getContactDisplayName } from '../../models/messaging.models';
       flex-direction: column;
     }
 
-    .contact-name {
-      font-weight: 500;
-      font-size: 14px;
-      color: #fff;
-    }
-
-    .contact-company {
-      font-size: 12px;
-      color: rgba(255, 255, 255, 0.6);
-    }
-
-    .check-icon {
-      color: #22c55e;
-      font-size: 22px;
-    }
+    .contact-name { font-weight: 500; font-size: 14px; color: #fff; }
+    .contact-company { font-size: 12px; color: rgba(255, 255, 255, 0.6); }
+    .check-icon { color: #22c55e; font-size: 22px; }
 
     .action-bar {
       padding: 12px 16px;
@@ -293,6 +365,7 @@ import { Contact, getContactDisplayName } from '../../models/messaging.models';
       display: flex;
       flex-direction: column;
       gap: 8px;
+      flex-shrink: 0;
     }
 
     .create-btn {
@@ -303,13 +376,8 @@ import { Contact, getContactDisplayName } from '../../models/messaging.models';
       font-weight: 600;
     }
 
-    .create-btn:disabled {
-      opacity: 0.5;
-    }
-
-    .create-btn mat-icon {
-      margin-right: 8px;
-    }
+    .create-btn:disabled { opacity: 0.5; }
+    .create-btn mat-icon { margin-right: 8px; }
 
     .delete-btn {
       width: 100%;
@@ -319,60 +387,114 @@ import { Contact, getContactDisplayName } from '../../models/messaging.models';
       font-weight: 600;
     }
 
-    .delete-btn mat-icon {
-      margin-right: 8px;
-    }
+    .delete-btn mat-icon { margin-right: 8px; }
   `],
 })
 export class GroupManagerComponent implements OnInit, OnDestroy {
   contacts: Contact[] = [];
   selectedContacts: Contact[] = [];
+  currentMembers: ConversationParticipant[] = [];
   groupName = '';
+  originalGroupName = '';
   searchQuery = '';
   isEditMode = false;
   editingConversationId: string | null = null;
   creatorContactId: string | null = null;
-  private sub!: Subscription;
+  loadingMembers = false;
+  private subs: Subscription[] = [];
 
-  constructor(private store: MessagingStoreService) {}
+  constructor(
+    private store: MessagingStoreService,
+    private api: MessagingApiService,
+    private auth: AuthService
+  ) {}
 
   ngOnInit(): void {
+    this.creatorContactId = this.auth.contactId;
     this.store.loadVisibleContacts();
-    this.sub = this.store.visibleContacts.subscribe((c) => (this.contacts = c));
+
+    this.subs.push(
+      this.store.visibleContacts.subscribe((c) => (this.contacts = c))
+    );
+
+    this.subs.push(
+      this.store.groupSettings.subscribe((settings) => {
+        if (settings) {
+          this.isEditMode = true;
+          this.editingConversationId = settings.conversationId;
+          this.groupName = settings.name;
+          this.originalGroupName = settings.name;
+          this.selectedContacts = [];
+          this.loadCurrentMembers(settings.conversationId);
+        } else {
+          this.isEditMode = false;
+          this.editingConversationId = null;
+          this.groupName = '';
+          this.originalGroupName = '';
+          this.selectedContacts = [];
+          this.currentMembers = [];
+        }
+      })
+    );
   }
 
   ngOnDestroy(): void {
-    this.sub?.unsubscribe();
+    this.subs.forEach((s) => s.unsubscribe());
+  }
+
+  private loadCurrentMembers(conversationId: string): void {
+    this.loadingMembers = true;
+    this.api.getConversationParticipants(conversationId).subscribe({
+      next: (members) => {
+        this.currentMembers = members;
+        this.loadingMembers = false;
+      },
+      error: () => {
+        this.loadingMembers = false;
+      },
+    });
   }
 
   get filteredContacts(): Contact[] {
-    if (!this.searchQuery.trim()) return this.contacts;
-    const q = this.searchQuery.toLowerCase();
-    return this.contacts.filter(
-      (c) =>
-        this.getDisplayName(c).toLowerCase().includes(q) ||
-        (c.company_name || '').toLowerCase().includes(q)
+    const alreadyInGroup = new Set(this.currentMembers.map((m) => m.contact_id));
+    let list = this.contacts.filter(
+      (c) => c.contact_id !== this.creatorContactId && !alreadyInGroup.has(c.contact_id)
     );
+    if (this.searchQuery.trim()) {
+      const q = this.searchQuery.toLowerCase();
+      list = list.filter(
+        (c) =>
+          this.getDisplayName(c).toLowerCase().includes(q) ||
+          (c.company_name || '').toLowerCase().includes(q)
+      );
+    }
+    return list;
   }
 
   getDisplayName(contact: Contact): string {
     return getContactDisplayName(contact);
   }
 
-  get canCreate(): boolean {
-    return this.groupName.trim().length > 0 && this.selectedContacts.length >= 1;
+  getMemberName(member: ConversationParticipant): string {
+    if (member.first_name || member.last_name) {
+      return `${member.first_name || ''} ${member.last_name || ''}`.trim();
+    }
+    return member.contact_id;
+  }
+
+  get canSubmit(): boolean {
+    if (!this.groupName.trim()) return false;
+    if (this.isEditMode) {
+      return this.groupName.trim() !== this.originalGroupName || this.selectedContacts.length > 0;
+    }
+    return this.selectedContacts.length >= 1;
   }
 
   isSelected(contact: Contact): boolean {
     return this.selectedContacts.some((c) => c.contact_id === contact.contact_id);
   }
 
-  isCreator(contact: Contact): boolean {
-    return contact.contact_id === this.creatorContactId;
-  }
-
   toggleContact(contact: Contact): void {
-    if (this.isCreator(contact)) return;
     if (this.isSelected(contact)) {
       this.removeContact(contact);
     } else {
@@ -381,31 +503,44 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
   }
 
   removeContact(contact: Contact): void {
-    if (this.isCreator(contact)) return;
     this.selectedContacts = this.selectedContacts.filter(
       (c) => c.contact_id !== contact.contact_id
     );
   }
 
   onSubmit(): void {
-    if (!this.canCreate) return;
+    if (!this.canSubmit) return;
+
     if (this.isEditMode && this.editingConversationId) {
-      this.store.manageGroup('rename', this.editingConversationId, this.groupName.trim());
+      if (this.groupName.trim() !== this.originalGroupName) {
+        this.store.manageGroup('rename', this.editingConversationId, this.groupName.trim());
+      }
+      if (this.selectedContacts.length > 0) {
+        const ids = this.selectedContacts.map((c) => c.contact_id);
+        this.store.manageGroup('add', this.editingConversationId, undefined, ids);
+      }
+      this.store.clearGroupSettings();
+      this.store.setView('chat');
     } else {
       const ids = this.selectedContacts.map((c) => c.contact_id);
       this.store.createGroupConversation(ids, this.groupName.trim());
     }
-    this.goBack();
   }
 
   onDelete(): void {
     if (this.editingConversationId) {
       this.store.deleteGroup(this.editingConversationId);
+      this.store.clearGroupSettings();
       this.goBack();
     }
   }
 
   goBack(): void {
-    this.store.setView('inbox');
+    if (this.isEditMode) {
+      this.store.clearGroupSettings();
+      this.store.setView('chat');
+    } else {
+      this.store.setView('inbox');
+    }
   }
 }

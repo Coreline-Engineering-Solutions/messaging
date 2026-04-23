@@ -30,6 +30,9 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
           <span class="chat-name">{{ conversationName }}</span>
         </div>
         <div class="header-actions">
+          <button *ngIf="isGroup" mat-icon-button class="hdr-btn" (click)="onGroupSettings()" matTooltip="Group settings" matTooltipPosition="below">
+            <mat-icon>settings</mat-icon>
+          </button>
           <button mat-icon-button class="hdr-btn" (click)="onClearConversation()" matTooltip="Clear conversation" matTooltipPosition="below">
             <mat-icon>cleaning_services</mat-icon>
           </button>
@@ -322,6 +325,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
 
   messages: Message[] = [];
   conversationName = '';
+  isGroup = false;
   loading = false;
   myContactId: string | null = null;
 
@@ -353,6 +357,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
         this.shouldScrollToBottom = true;
         const chat = chats.find((c) => c.conversationId === convId);
         this.conversationName = chat?.name || 'Chat';
+        this.isGroup = chat?.isGroup || false;
       }
 
       if (this.conversationId) {
@@ -389,6 +394,12 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   onDeleteConversation(): void {
     if (this.conversationId) {
       this.store.deleteConversation(this.conversationId);
+    }
+  }
+
+  onGroupSettings(): void {
+    if (this.conversationId) {
+      this.store.openGroupSettings(this.conversationId, this.conversationName);
     }
   }
 

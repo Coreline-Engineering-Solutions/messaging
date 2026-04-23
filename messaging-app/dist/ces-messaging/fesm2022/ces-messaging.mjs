@@ -234,6 +234,10 @@ class MessagingApiService {
             .set('sessionGid', this.auth.sessionGid);
         return this.http.get(`${this.base}/conversations/direct`, { params });
     }
+    getConversationParticipants(conversationId) {
+        const params = new HttpParams().set('session_gid', this.auth.sessionGid);
+        return this.http.get(`${this.base}/conversations/${conversationId}/participants`, { params });
+    }
     // ── Contacts ──
     getVisibleContacts(contactId) {
         const params = new HttpParams().set('session_gid', this.auth.sessionGid);
@@ -649,6 +653,8 @@ class MessagingStoreService {
     wsSub = null;
     destroy$ = new Subject();
     pollTimer = null;
+    groupSettings$ = new BehaviorSubject(null);
+    groupSettings = this.groupSettings$.asObservable();
     constructor(auth, api, wsService) {
         this.auth = auth;
         this.api = api;
@@ -679,16 +685,12 @@ class MessagingStoreService {
         this.activeConversationId$.next(null);
         this.totalUnread$.next(0);
     }
-    // ── Polling fallback ──
+    // ── Polling fallback (inbox only - messages rely on WebSocket) ──
     startPolling() {
         this.stopPolling();
         this.pollTimer = setInterval(() => {
             this.loadInbox();
-            const activeId = this.activeConversationId$.value;
-            if (activeId) {
-                this.loadMessages(activeId);
-            }
-        }, 5000);
+        }, 30000);
     }
     stopPolling() {
         if (this.pollTimer) {
@@ -924,13 +926,23 @@ class MessagingStoreService {
         const contactId = this.auth.contactId;
         if (!contactId)
             return;
-        this.api.createConversation(contactId, participantIds, name).subscribe({
+        const allParticipants = participantIds.includes(contactId)
+            ? participantIds
+            : [contactId, ...participantIds];
+        this.api.createConversation(contactId, allParticipants, name).subscribe({
             next: (conv) => {
                 this.loadInbox();
                 this.openConversation(conv.conversation_id, name, true);
             },
             error: (err) => console.error('Failed to create group:', err),
         });
+    }
+    openGroupSettings(conversationId, name) {
+        this.groupSettings$.next({ conversationId, name });
+        this.setView('group-manager');
+    }
+    clearGroupSettings() {
+        this.groupSettings$.next(null);
     }
     markAsRead(conversationId) {
         const contactId = this.auth.contactId;
@@ -1682,6 +1694,7 @@ class ChatThreadComponent {
     scrollContainer;
     messages = [];
     conversationName = '';
+    isGroup = false;
     loading = false;
     myContactId = null;
     conversationId = null;
@@ -1707,6 +1720,7 @@ class ChatThreadComponent {
                 this.shouldScrollToBottom = true;
                 const chat = chats.find((c) => c.conversationId === convId);
                 this.conversationName = chat?.name || 'Chat';
+                this.isGroup = chat?.isGroup || false;
             }
             if (this.conversationId) {
                 const prevLen = this.messages.length;
@@ -1737,6 +1751,11 @@ class ChatThreadComponent {
     onDeleteConversation() {
         if (this.conversationId) {
             this.store.deleteConversation(this.conversationId);
+        }
+    }
+    onGroupSettings() {
+        if (this.conversationId) {
+            this.store.openGroupSettings(this.conversationId, this.conversationName);
         }
     }
     onSendMessage(content) {
@@ -1831,6 +1850,9 @@ class ChatThreadComponent {
           <span class="chat-name">{{ conversationName }}</span>
         </div>
         <div class="header-actions">
+          <button *ngIf="isGroup" mat-icon-button class="hdr-btn" (click)="onGroupSettings()" matTooltip="Group settings" matTooltipPosition="below">
+            <mat-icon>settings</mat-icon>
+          </button>
           <button mat-icon-button class="hdr-btn" (click)="onClearConversation()" matTooltip="Clear conversation" matTooltipPosition="below">
             <mat-icon>cleaning_services</mat-icon>
           </button>
@@ -1921,6 +1943,9 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
           <span class="chat-name">{{ conversationName }}</span>
         </div>
         <div class="header-actions">
+          <button *ngIf="isGroup" mat-icon-button class="hdr-btn" (click)="onGroupSettings()" matTooltip="Group settings" matTooltipPosition="below">
+            <mat-icon>settings</mat-icon>
+          </button>
           <button mat-icon-button class="hdr-btn" (click)="onClearConversation()" matTooltip="Clear conversation" matTooltipPosition="below">
             <mat-icon>cleaning_services</mat-icon>
           </button>
@@ -2125,46 +2150,93 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
 
 class GroupManagerComponent {
     store;
+    api;
+    auth;
     contacts = [];
     selectedContacts = [];
+    currentMembers = [];
     groupName = '';
+    originalGroupName = '';
     searchQuery = '';
     isEditMode = false;
     editingConversationId = null;
     creatorContactId = null;
-    sub;
-    constructor(store) {
+    loadingMembers = false;
+    subs = [];
+    constructor(store, api, auth) {
         this.store = store;
+        this.api = api;
+        this.auth = auth;
     }
     ngOnInit() {
+        this.creatorContactId = this.auth.contactId;
         this.store.loadVisibleContacts();
-        this.sub = this.store.visibleContacts.subscribe((c) => (this.contacts = c));
+        this.subs.push(this.store.visibleContacts.subscribe((c) => (this.contacts = c)));
+        this.subs.push(this.store.groupSettings.subscribe((settings) => {
+            if (settings) {
+                this.isEditMode = true;
+                this.editingConversationId = settings.conversationId;
+                this.groupName = settings.name;
+                this.originalGroupName = settings.name;
+                this.selectedContacts = [];
+                this.loadCurrentMembers(settings.conversationId);
+            }
+            else {
+                this.isEditMode = false;
+                this.editingConversationId = null;
+                this.groupName = '';
+                this.originalGroupName = '';
+                this.selectedContacts = [];
+                this.currentMembers = [];
+            }
+        }));
     }
     ngOnDestroy() {
-        this.sub?.unsubscribe();
+        this.subs.forEach((s) => s.unsubscribe());
+    }
+    loadCurrentMembers(conversationId) {
+        this.loadingMembers = true;
+        this.api.getConversationParticipants(conversationId).subscribe({
+            next: (members) => {
+                this.currentMembers = members;
+                this.loadingMembers = false;
+            },
+            error: () => {
+                this.loadingMembers = false;
+            },
+        });
     }
     get filteredContacts() {
-        if (!this.searchQuery.trim())
-            return this.contacts;
-        const q = this.searchQuery.toLowerCase();
-        return this.contacts.filter((c) => this.getDisplayName(c).toLowerCase().includes(q) ||
-            (c.company_name || '').toLowerCase().includes(q));
+        const alreadyInGroup = new Set(this.currentMembers.map((m) => m.contact_id));
+        let list = this.contacts.filter((c) => c.contact_id !== this.creatorContactId && !alreadyInGroup.has(c.contact_id));
+        if (this.searchQuery.trim()) {
+            const q = this.searchQuery.toLowerCase();
+            list = list.filter((c) => this.getDisplayName(c).toLowerCase().includes(q) ||
+                (c.company_name || '').toLowerCase().includes(q));
+        }
+        return list;
     }
     getDisplayName(contact) {
         return getContactDisplayName(contact);
     }
-    get canCreate() {
-        return this.groupName.trim().length > 0 && this.selectedContacts.length >= 1;
+    getMemberName(member) {
+        if (member.first_name || member.last_name) {
+            return `${member.first_name || ''} ${member.last_name || ''}`.trim();
+        }
+        return member.contact_id;
+    }
+    get canSubmit() {
+        if (!this.groupName.trim())
+            return false;
+        if (this.isEditMode) {
+            return this.groupName.trim() !== this.originalGroupName || this.selectedContacts.length > 0;
+        }
+        return this.selectedContacts.length >= 1;
     }
     isSelected(contact) {
         return this.selectedContacts.some((c) => c.contact_id === contact.contact_id);
     }
-    isCreator(contact) {
-        return contact.contact_id === this.creatorContactId;
-    }
     toggleContact(contact) {
-        if (this.isCreator(contact))
-            return;
         if (this.isSelected(contact)) {
             this.removeContact(contact);
         }
@@ -2173,101 +2245,141 @@ class GroupManagerComponent {
         }
     }
     removeContact(contact) {
-        if (this.isCreator(contact))
-            return;
         this.selectedContacts = this.selectedContacts.filter((c) => c.contact_id !== contact.contact_id);
     }
     onSubmit() {
-        if (!this.canCreate)
+        if (!this.canSubmit)
             return;
         if (this.isEditMode && this.editingConversationId) {
-            this.store.manageGroup('rename', this.editingConversationId, this.groupName.trim());
+            if (this.groupName.trim() !== this.originalGroupName) {
+                this.store.manageGroup('rename', this.editingConversationId, this.groupName.trim());
+            }
+            if (this.selectedContacts.length > 0) {
+                const ids = this.selectedContacts.map((c) => c.contact_id);
+                this.store.manageGroup('add', this.editingConversationId, undefined, ids);
+            }
+            this.store.clearGroupSettings();
+            this.store.setView('chat');
         }
         else {
             const ids = this.selectedContacts.map((c) => c.contact_id);
             this.store.createGroupConversation(ids, this.groupName.trim());
         }
-        this.goBack();
     }
     onDelete() {
         if (this.editingConversationId) {
             this.store.deleteGroup(this.editingConversationId);
+            this.store.clearGroupSettings();
             this.goBack();
         }
     }
     goBack() {
-        this.store.setView('inbox');
+        if (this.isEditMode) {
+            this.store.clearGroupSettings();
+            this.store.setView('chat');
+        }
+        else {
+            this.store.setView('inbox');
+        }
     }
-    static ɵfac = i0.ɵɵngDeclareFactory({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: GroupManagerComponent, deps: [{ token: MessagingStoreService }], target: i0.ɵɵFactoryTarget.Component });
+    static ɵfac = i0.ɵɵngDeclareFactory({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: GroupManagerComponent, deps: [{ token: MessagingStoreService }, { token: MessagingApiService }, { token: AuthService }], target: i0.ɵɵFactoryTarget.Component });
     static ɵcmp = i0.ɵɵngDeclareComponent({ minVersion: "14.0.0", version: "17.3.12", type: GroupManagerComponent, isStandalone: true, selector: "app-group-manager", ngImport: i0, template: `
     <div class="group-manager">
       <div class="header">
         <button mat-icon-button class="hdr-btn" (click)="goBack()" matTooltip="Back" matTooltipPosition="below">
           <mat-icon>arrow_back</mat-icon>
         </button>
-        <h3>{{ isEditMode ? 'Edit Group' : 'Create Group' }}</h3>
+        <h3>{{ isEditMode ? 'Group Settings' : 'Create Group' }}</h3>
       </div>
 
-      <div class="form-section">
-        <label class="field-label">Group Name</label>
-        <input
-          type="text"
-          [(ngModel)]="groupName"
-          placeholder="Enter group name..."
-          class="text-field"
-        />
-      </div>
-
-      <div class="form-section">
-        <label class="field-label">Members (min 2 including you)</label>
-        <div class="search-bar">
-          <mat-icon class="search-icon">search</mat-icon>
+      <div class="scrollable">
+        <div class="form-section">
+          <label class="field-label">Group Name</label>
           <input
             type="text"
-            [(ngModel)]="searchQuery"
-            placeholder="Search contacts..."
-            class="search-input"
+            [(ngModel)]="groupName"
+            placeholder="Enter group name..."
+            class="text-field"
           />
         </div>
-      </div>
 
-      <div *ngIf="selectedContacts.length > 0" class="selected-chips">
-        <div *ngFor="let c of selectedContacts" class="chip">
-          <span>{{ getDisplayName(c) }}</span>
-          <button mat-icon-button class="chip-remove" (click)="removeContact(c)" [disabled]="isCreator(c)">
-            <mat-icon>{{ isCreator(c) ? 'star' : 'close' }}</mat-icon>
-          </button>
+        <ng-container *ngIf="isEditMode">
+          <div class="form-section section-gap">
+            <label class="field-label">Current Members</label>
+            <div *ngIf="loadingMembers" class="loading-row">
+              <mat-spinner diameter="18"></mat-spinner>
+              <span>Loading members...</span>
+            </div>
+            <div *ngIf="!loadingMembers" class="members-list">
+              <div *ngFor="let m of currentMembers" class="member-row">
+                <div class="member-avatar"><mat-icon>person</mat-icon></div>
+                <div class="member-info">
+                  <span class="member-name">{{ getMemberName(m) }}{{ m.contact_id === creatorContactId ? ' (you)' : '' }}</span>
+                  <span class="member-sub">{{ m.contact_id }}</span>
+                </div>
+              </div>
+              <div *ngIf="currentMembers.length === 0" class="empty-members">No members found</div>
+            </div>
+          </div>
+
+          <div class="form-section section-gap">
+            <label class="field-label">Add Members</label>
+            <div class="search-bar">
+              <mat-icon class="search-icon">search</mat-icon>
+              <input type="text" [(ngModel)]="searchQuery" placeholder="Search contacts..." class="search-input" />
+            </div>
+          </div>
+        </ng-container>
+
+        <ng-container *ngIf="!isEditMode">
+          <div class="form-section section-gap">
+            <label class="field-label">Add Members (min 1 other person)</label>
+            <div class="search-bar">
+              <mat-icon class="search-icon">search</mat-icon>
+              <input type="text" [(ngModel)]="searchQuery" placeholder="Search contacts..." class="search-input" />
+            </div>
+          </div>
+        </ng-container>
+
+        <div *ngIf="selectedContacts.length > 0" class="selected-chips">
+          <div *ngFor="let c of selectedContacts" class="chip">
+            <span>{{ getDisplayName(c) }}</span>
+            <button mat-icon-button class="chip-remove" (click)="removeContact(c)">
+              <mat-icon>close</mat-icon>
+            </button>
+          </div>
         </div>
-      </div>
 
-      <div class="contacts-list">
-        <div
-          *ngFor="let contact of filteredContacts"
-          class="contact-item"
-          matRipple
-          [class.selected]="isSelected(contact)"
-          (click)="toggleContact(contact)"
-        >
-          <div class="contact-avatar">
-            <mat-icon>person</mat-icon>
+        <div class="contacts-list">
+          <div
+            *ngFor="let contact of filteredContacts"
+            class="contact-item"
+            matRipple
+            [class.selected]="isSelected(contact)"
+            (click)="toggleContact(contact)"
+          >
+            <div class="contact-avatar">
+              <mat-icon>person</mat-icon>
+            </div>
+            <div class="contact-info">
+              <span class="contact-name">{{ getDisplayName(contact) }}</span>
+              <span class="contact-company">{{ contact.company_name }}</span>
+            </div>
+            <mat-icon *ngIf="isSelected(contact)" class="check-icon">check_circle</mat-icon>
           </div>
-          <div class="contact-info">
-            <span class="contact-name">{{ getDisplayName(contact) }}</span>
-            <span class="contact-company">{{ contact.company_name }}</span>
-          </div>
-          <mat-icon *ngIf="isSelected(contact)" class="check-icon">check_circle</mat-icon>
         </div>
       </div>
 
       <div class="action-bar">
         <button
           mat-raised-button
-          [disabled]="!canCreate"
+          [disabled]="!canSubmit"
           (click)="onSubmit()"
           class="create-btn"
         >
           <mat-icon>{{ isEditMode ? 'save' : 'group_add' }}</mat-icon>
-          {{ isEditMode ? 'Save Changes' : 'Create Group' }} ({{ selectedContacts.length + 1 }} members)
+          <ng-container *ngIf="!isEditMode">Create Group ({{ selectedContacts.length + 1 }} members)</ng-container>
+          <ng-container *ngIf="isEditMode">Save Changes</ng-container>
         </button>
         <button
           *ngIf="isEditMode"
@@ -2280,79 +2392,107 @@ class GroupManagerComponent {
         </button>
       </div>
     </div>
-  `, isInline: true, styles: [".group-manager{display:flex;flex-direction:column;height:100%}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.form-section{padding:12px 16px 0}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{flex:1;overflow-y:auto;padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i2.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i2.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i5.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i5.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }] });
+  `, isInline: true, styles: [".group-manager{display:flex;flex-direction:column;height:100%}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.scrollable{flex:1;overflow-y:auto}.form-section{padding:12px 16px 0}.section-gap{padding-top:16px}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.loading-row{display:flex;align-items:center;gap:8px;color:#fff9;font-size:13px;padding:8px 0}.members-list{border-radius:8px;overflow:hidden}.member-row{display:flex;align-items:center;padding:8px 12px;gap:10px;background:#ffffff12;border-bottom:1px solid rgba(255,255,255,.06)}.member-row:last-child{border-bottom:none}.member-avatar{width:30px;height:30px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.member-avatar mat-icon{color:#fff;font-size:18px}.member-info{display:flex;flex-direction:column}.member-name{font-size:13px;font-weight:500;color:#fff}.member-sub{font-size:11px;color:#ffffff80}.empty-members{font-size:13px;color:#ffffff80;padding:8px 0}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px;flex-shrink:0}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i2.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i2.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i5.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i5.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i7$1.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: GroupManagerComponent, decorators: [{
             type: Component,
-            args: [{ selector: 'app-group-manager', standalone: true, imports: [CommonModule, FormsModule, MatIconModule, MatButtonModule, MatRippleModule, MatTooltipModule], template: `
+            args: [{ selector: 'app-group-manager', standalone: true, imports: [CommonModule, FormsModule, MatIconModule, MatButtonModule, MatRippleModule, MatTooltipModule, MatProgressSpinnerModule], template: `
     <div class="group-manager">
       <div class="header">
         <button mat-icon-button class="hdr-btn" (click)="goBack()" matTooltip="Back" matTooltipPosition="below">
           <mat-icon>arrow_back</mat-icon>
         </button>
-        <h3>{{ isEditMode ? 'Edit Group' : 'Create Group' }}</h3>
+        <h3>{{ isEditMode ? 'Group Settings' : 'Create Group' }}</h3>
       </div>
 
-      <div class="form-section">
-        <label class="field-label">Group Name</label>
-        <input
-          type="text"
-          [(ngModel)]="groupName"
-          placeholder="Enter group name..."
-          class="text-field"
-        />
-      </div>
-
-      <div class="form-section">
-        <label class="field-label">Members (min 2 including you)</label>
-        <div class="search-bar">
-          <mat-icon class="search-icon">search</mat-icon>
+      <div class="scrollable">
+        <div class="form-section">
+          <label class="field-label">Group Name</label>
           <input
             type="text"
-            [(ngModel)]="searchQuery"
-            placeholder="Search contacts..."
-            class="search-input"
+            [(ngModel)]="groupName"
+            placeholder="Enter group name..."
+            class="text-field"
           />
         </div>
-      </div>
 
-      <div *ngIf="selectedContacts.length > 0" class="selected-chips">
-        <div *ngFor="let c of selectedContacts" class="chip">
-          <span>{{ getDisplayName(c) }}</span>
-          <button mat-icon-button class="chip-remove" (click)="removeContact(c)" [disabled]="isCreator(c)">
-            <mat-icon>{{ isCreator(c) ? 'star' : 'close' }}</mat-icon>
-          </button>
+        <ng-container *ngIf="isEditMode">
+          <div class="form-section section-gap">
+            <label class="field-label">Current Members</label>
+            <div *ngIf="loadingMembers" class="loading-row">
+              <mat-spinner diameter="18"></mat-spinner>
+              <span>Loading members...</span>
+            </div>
+            <div *ngIf="!loadingMembers" class="members-list">
+              <div *ngFor="let m of currentMembers" class="member-row">
+                <div class="member-avatar"><mat-icon>person</mat-icon></div>
+                <div class="member-info">
+                  <span class="member-name">{{ getMemberName(m) }}{{ m.contact_id === creatorContactId ? ' (you)' : '' }}</span>
+                  <span class="member-sub">{{ m.contact_id }}</span>
+                </div>
+              </div>
+              <div *ngIf="currentMembers.length === 0" class="empty-members">No members found</div>
+            </div>
+          </div>
+
+          <div class="form-section section-gap">
+            <label class="field-label">Add Members</label>
+            <div class="search-bar">
+              <mat-icon class="search-icon">search</mat-icon>
+              <input type="text" [(ngModel)]="searchQuery" placeholder="Search contacts..." class="search-input" />
+            </div>
+          </div>
+        </ng-container>
+
+        <ng-container *ngIf="!isEditMode">
+          <div class="form-section section-gap">
+            <label class="field-label">Add Members (min 1 other person)</label>
+            <div class="search-bar">
+              <mat-icon class="search-icon">search</mat-icon>
+              <input type="text" [(ngModel)]="searchQuery" placeholder="Search contacts..." class="search-input" />
+            </div>
+          </div>
+        </ng-container>
+
+        <div *ngIf="selectedContacts.length > 0" class="selected-chips">
+          <div *ngFor="let c of selectedContacts" class="chip">
+            <span>{{ getDisplayName(c) }}</span>
+            <button mat-icon-button class="chip-remove" (click)="removeContact(c)">
+              <mat-icon>close</mat-icon>
+            </button>
+          </div>
         </div>
-      </div>
 
-      <div class="contacts-list">
-        <div
-          *ngFor="let contact of filteredContacts"
-          class="contact-item"
-          matRipple
-          [class.selected]="isSelected(contact)"
-          (click)="toggleContact(contact)"
-        >
-          <div class="contact-avatar">
-            <mat-icon>person</mat-icon>
+        <div class="contacts-list">
+          <div
+            *ngFor="let contact of filteredContacts"
+            class="contact-item"
+            matRipple
+            [class.selected]="isSelected(contact)"
+            (click)="toggleContact(contact)"
+          >
+            <div class="contact-avatar">
+              <mat-icon>person</mat-icon>
+            </div>
+            <div class="contact-info">
+              <span class="contact-name">{{ getDisplayName(contact) }}</span>
+              <span class="contact-company">{{ contact.company_name }}</span>
+            </div>
+            <mat-icon *ngIf="isSelected(contact)" class="check-icon">check_circle</mat-icon>
           </div>
-          <div class="contact-info">
-            <span class="contact-name">{{ getDisplayName(contact) }}</span>
-            <span class="contact-company">{{ contact.company_name }}</span>
-          </div>
-          <mat-icon *ngIf="isSelected(contact)" class="check-icon">check_circle</mat-icon>
         </div>
       </div>
 
       <div class="action-bar">
         <button
           mat-raised-button
-          [disabled]="!canCreate"
+          [disabled]="!canSubmit"
           (click)="onSubmit()"
           class="create-btn"
         >
           <mat-icon>{{ isEditMode ? 'save' : 'group_add' }}</mat-icon>
-          {{ isEditMode ? 'Save Changes' : 'Create Group' }} ({{ selectedContacts.length + 1 }} members)
+          <ng-container *ngIf="!isEditMode">Create Group ({{ selectedContacts.length + 1 }} members)</ng-container>
+          <ng-container *ngIf="isEditMode">Save Changes</ng-container>
         </button>
         <button
           *ngIf="isEditMode"
@@ -2365,8 +2505,8 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
         </button>
       </div>
     </div>
-  `, styles: [".group-manager{display:flex;flex-direction:column;height:100%}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.form-section{padding:12px 16px 0}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{flex:1;overflow-y:auto;padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}\n"] }]
-        }], ctorParameters: () => [{ type: MessagingStoreService }] });
+  `, styles: [".group-manager{display:flex;flex-direction:column;height:100%}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.scrollable{flex:1;overflow-y:auto}.form-section{padding:12px 16px 0}.section-gap{padding-top:16px}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.loading-row{display:flex;align-items:center;gap:8px;color:#fff9;font-size:13px;padding:8px 0}.members-list{border-radius:8px;overflow:hidden}.member-row{display:flex;align-items:center;padding:8px 12px;gap:10px;background:#ffffff12;border-bottom:1px solid rgba(255,255,255,.06)}.member-row:last-child{border-bottom:none}.member-avatar{width:30px;height:30px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.member-avatar mat-icon{color:#fff;font-size:18px}.member-info{display:flex;flex-direction:column}.member-name{font-size:13px;font-weight:500;color:#fff}.member-sub{font-size:11px;color:#ffffff80}.empty-members{font-size:13px;color:#ffffff80;padding:8px 0}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px;flex-shrink:0}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}\n"] }]
+        }], ctorParameters: () => [{ type: MessagingStoreService }, { type: MessagingApiService }, { type: AuthService }] });
 
 class ChatPanelComponent {
     store;

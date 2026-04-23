@@ -46,6 +46,11 @@ export declare class MessagingStoreService implements OnDestroy {
     private wsSub;
     private destroy$;
     private pollTimer;
+    private groupSettings$;
+    readonly groupSettings: Observable<{
+        conversationId: string;
+        name: string;
+    }>;
     constructor(auth: AuthService, api: MessagingApiService, wsService: MessagingWebSocketService);
     initialize(): void;
     teardown(): void;
@@ -74,6 +79,8 @@ export declare class MessagingStoreService implements OnDestroy {
     openDirectConversation(recipientContactId: string, displayName: string): void;
     sendDirectMessage(recipientContactId: string, content: string): void;
     createGroupConversation(participantIds: string[], name: string): void;
+    openGroupSettings(conversationId: string, name: string): void;
+    clearGroupSettings(): void;
     markAsRead(conversationId: string): void;
     manageGroup(action: 'create' | 'add' | 'remove' | 'rename', conversationId?: string, groupName?: string, participantContactIds?: string[]): void;
     deleteConversation(conversationId: string): void;

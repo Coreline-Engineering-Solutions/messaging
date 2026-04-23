@@ -12,6 +12,7 @@ export declare class ChatThreadComponent implements OnInit, OnDestroy, AfterView
     scrollContainer: ElementRef;
     messages: Message[];
     conversationName: string;
+    isGroup: boolean;
     loading: boolean;
     myContactId: string | null;
     private conversationId;
@@ -25,6 +26,7 @@ export declare class ChatThreadComponent implements OnInit, OnDestroy, AfterView
     goBack(): void;
     onClearConversation(): void;
     onDeleteConversation(): void;
+    onGroupSettings(): void;
     onSendMessage(content: string): void;
     onSendWithFiles(payload: MessagePayload): void;
     loadOlder(): void;

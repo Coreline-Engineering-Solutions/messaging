@@ -2,7 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { MessagingConfig } from '../messaging.config';
 import { AuthService } from './auth.service';
-import { InboxItem, Message, Contact, Conversation, CompanyConnection } from '../models/messaging.models';
+import { InboxItem, Message, Contact, Conversation, ConversationParticipant, CompanyConnection } from '../models/messaging.models';
 import * as i0 from "@angular/core";
 export declare class MessagingApiService {
     private http;
@@ -17,6 +17,7 @@ export declare class MessagingApiService {
     markConversationRead(conversationId: string, contactId: string): Observable<any>;
     createConversation(creatorContactId: string, participantContactIds: string[], name?: string): Observable<Conversation>;
     getDirectConversation(contactA: string, contactB: string): Observable<any>;
+    getConversationParticipants(conversationId: string): Observable<ConversationParticipant[]>;
     getVisibleContacts(contactId: string): Observable<Contact[]>;
     checkContactProfile(userGid: string, updates?: any): Observable<any>;
     manageGroup(contactId: string, action: 'create' | 'add' | 'remove' | 'rename', conversationId?: string, groupName?: string, participantContactIds?: string[]): Observable<any>;

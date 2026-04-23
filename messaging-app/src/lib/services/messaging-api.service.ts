@@ -8,6 +8,7 @@ import {
   Message,
   Contact,
   Conversation,
+  ConversationParticipant,
   CompanyConnection,
 } from '../models/messaging.models';
 
@@ -111,6 +112,14 @@ export class MessagingApiService {
       .set('contactB', contactB)
       .set('sessionGid', this.auth.sessionGid!);
     return this.http.get(`${this.base}/conversations/direct`, { params });
+  }
+
+  getConversationParticipants(conversationId: string): Observable<ConversationParticipant[]> {
+    const params = new HttpParams().set('session_gid', this.auth.sessionGid!);
+    return this.http.get<ConversationParticipant[]>(
+      `${this.base}/conversations/${conversationId}/participants`,
+      { params }
+    );
   }
 
   // ── Contacts ──
