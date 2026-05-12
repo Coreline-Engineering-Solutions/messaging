@@ -20,28 +20,47 @@ export interface FileRetrieveResponse {
   base64_data: string;
 }
 
+/** Sentinel prefix — never send these IDs to any API. */
+const TEMP_PREFIX = 'temp-';
+function isTempId(id: string | null | undefined): boolean {
+  return !id || id.startsWith(TEMP_PREFIX);
+}
+
 @Injectable({ providedIn: 'root' })
 export class MessagingFileService {
-  private readonly storageUrl: string;
-  private readonly messagingUrl: string;
+  /** Base URL, e.g. https://ces-ticketing-system-db.onrender.com/api */
+  private readonly base: string;
+
+  /** Ordered fallback lists — tried top-to-bottom on 404 / network error. */
+  private readonly uploadEndpoints: string[];
+  private readonly retrieveEndpoints: string[];
+  private readonly deleteEndpoints: string[];
+
+  /** In-session cache: file_id → data URL. Cleared on page reload. */
+  private readonly mediaCache = new Map<string, string>();
 
   constructor(
     private http: HttpClient,
     private auth: AuthService,
     @Inject(MESSAGING_CONFIG) private config: MessagingConfig
   ) {
-    this.storageUrl = config.storageApiUrl;
-    this.messagingUrl = `${config.apiBaseUrl}/messaging`;
+    this.base = this.config.apiBaseUrl.replace(/\/+$/, '');
+
+    this.uploadEndpoints   = [`${this.base}/storage/upload`,   `${this.base}/messaging/storage/upload`,   `${this.base}/messaging/files/upload`];
+    this.retrieveEndpoints = [`${this.base}/storage/retrieve`, `${this.base}/messaging/storage/retrieve`, `${this.base}/messaging/files/retrieve`];
+    this.deleteEndpoints   = [`${this.base}/storage/delete`,   `${this.base}/messaging/storage/delete`,   `${this.base}/messaging/files/delete`];
   }
 
-  uploadFile(file: File, category = 'messaging_attachments'): Observable<FileUploadResponse> {
-    const formData = new FormData();
-    formData.append('file', file, file.name);
-    formData.append('category', category);
+  // ── Upload ───────────────────────────────────────────────────────────────
 
-    return this.http
-      .post<FileUploadResponse>(`${this.storageUrl}/storage/upload`, formData)
-      .pipe(catchError(this.handleError));
+  uploadFile(file: File, category = 'messaging_attachments'): Observable<FileUploadResponse> {
+    const makeBody = () => {
+      const fd = new FormData();
+      fd.append('file', file, file.name);
+      fd.append('category', category);
+      return fd;
+    };
+    return this.tryEndpoints<FileUploadResponse>(this.uploadEndpoints, makeBody);
   }
 
   uploadFiles(files: File[]): Observable<FileUploadResponse[]> {
@@ -49,27 +68,68 @@ export class MessagingFileService {
     return forkJoin(files.map((f) => this.uploadFile(f)));
   }
 
+  // ── Retrieve ─────────────────────────────────────────────────────────────
+
   retrieveFile(fileId: string): Observable<FileRetrieveResponse> {
-    const formData = new FormData();
-    formData.append('file_id', fileId);
-    return this.http
-      .post<FileRetrieveResponse>(`${this.storageUrl}/storage/retrieve`, formData)
-      .pipe(catchError(this.handleError));
+    if (isTempId(fileId)) {
+      return throwError(() => new Error('Cannot retrieve file: upload not complete yet.'));
+    }
+    const makeBody = () => {
+      const fd = new FormData();
+      fd.append('file_id', fileId);
+      return fd;
+    };
+    return this.tryEndpoints<FileRetrieveResponse>(this.retrieveEndpoints, makeBody);
   }
 
+  /**
+   * Returns a data URL for the given file_id.
+   * Cached in memory for the session lifetime — never re-fetched if already loaded.
+   */
   getFileDataUrl(fileId: string): Observable<string> {
+    if (isTempId(fileId)) {
+      return throwError(() => new Error('Cannot retrieve file: upload not complete yet.'));
+    }
+    const cached = this.mediaCache.get(fileId);
+    if (cached) return of(cached);
+
     return this.retrieveFile(fileId).pipe(
-      map((r) => `data:${r.mime_type};base64,${r.base64_data}`)
+      map((r) => `data:${r.mime_type};base64,${r.base64_data}`),
+      tap((dataUrl) => this.mediaCache.set(fileId, dataUrl))
     );
   }
 
-  deleteFile(fileId: string): Observable<any> {
-    const formData = new FormData();
-    formData.append('file_id', fileId);
-    return this.http
-      .post(`${this.storageUrl}/storage/delete`, formData)
-      .pipe(catchError(this.handleError));
+  /** Synchronous cache lookup — null if not loaded yet. */
+  getCachedDataUrl(fileId: string): string | null {
+    if (isTempId(fileId)) return null;
+    return this.mediaCache.get(fileId) ?? null;
   }
+
+  /** Pre-warm cache for a list of file IDs (fire-and-forget, skips temp/cached). */
+  prewarmCache(fileIds: string[]): void {
+    for (const id of fileIds) {
+      if (!isTempId(id) && !this.mediaCache.has(id)) {
+        this.getFileDataUrl(id).subscribe({ error: () => {} });
+      }
+    }
+  }
+
+  // ── Delete ────────────────────────────────────────────────────────────────
+
+  deleteFile(fileId: string): Observable<any> {
+    if (isTempId(fileId)) {
+      return of(null);
+    }
+    this.mediaCache.delete(fileId);
+    const makeBody = () => {
+      const fd = new FormData();
+      fd.append('file_id', fileId);
+      return fd;
+    };
+    return this.tryEndpoints(this.deleteEndpoints, makeBody);
+  }
+
+  // ── Send message with attachments ────────────────────────────────────────
 
   sendMessageWithAttachments(
     conversationId: string,
@@ -78,23 +138,53 @@ export class MessagingFileService {
     fileIds: string[],
     filenames: string[]
   ): Observable<any> {
-    return this.http.post(`${this.messagingUrl}/conversations/${conversationId}/messages`, {
-      session_gid: this.auth.sessionGid,
-      senderContactId,
-      messageType: fileIds.length > 0 ? 'FILE' : 'TEXT',
-      content,
-      attachment_ids: fileIds,
+    // Guard: never send temp file IDs to the backend
+    const realIds = fileIds.filter(id => !isTempId(id));
+    if (realIds.length !== fileIds.length) {
+      return throwError(() => new Error('Upload not finished — cannot attach temp file.'));
+    }
+    const messagingBase = `${this.base}/messaging`;
+    return this.http.post(`${messagingBase}/conversations/${conversationId}/messages`, {
+      sender_id: parseInt(senderContactId, 10),
+      content: content || '',
+      attachment_ids: realIds,
       filenames,
     });
   }
 
-  private handleError(error: HttpErrorResponse) {
-    let msg = 'File operation failed';
-    if (error.status === 401) msg = 'Unauthorized file access';
-    else if (error.status === 404) msg = 'File not found';
-    else if (error.status === 0) msg = 'Network error or CORS issue';
-    else if (error.error?.detail) msg = error.error.detail;
-    console.error('MessagingFileService error:', msg);
-    return throwError(() => new Error(msg));
+  // ── Fallback engine ───────────────────────────────────────────────────────
+
+  /**
+   * POST each URL in `urls` sequentially (using the body from `bodyFn()`).
+   * Falls back to the next URL only on 404 or network error (status 0).
+   * Logs every attempt with its result.
+   */
+  private tryEndpoints<T>(urls: string[], bodyFn: () => FormData): Observable<T> {
+    if (urls.length === 0) {
+      return throwError(() => new Error('All storage endpoints exhausted.'));
+    }
+
+    const [url, ...rest] = urls;
+    return this.http.post<T>(url, bodyFn()).pipe(
+      catchError((err: HttpErrorResponse) => {
+        // Only fall through on not-found or network issues
+        if ((err.status === 404 || err.status === 0) && rest.length > 0) {
+          return this.tryEndpoints<T>(rest, bodyFn);
+        }
+
+        // Translate to a friendly error
+        return throwError(() => this.toFriendlyError(err, url));
+      })
+    );
+  }
+
+  private toFriendlyError(err: HttpErrorResponse, url: string): Error {
+    const detail: string = err.error?.detail || err.error?.message || '';
+    if (err.status === 404 && detail.toLowerCase().includes('not found')) {
+      return new Error('Attachment not available or not uploaded yet.');
+    }
+    if (err.status === 401) return new Error('Unauthorized — check storage API key configuration.');
+    if (err.status === 0)   return new Error('Network error — storage service unreachable.');
+    return new Error(detail || `Storage request failed (${err.status}) — ${url}`);
   }
 }

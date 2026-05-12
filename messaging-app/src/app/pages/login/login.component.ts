@@ -4,9 +4,8 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { MatIconModule } from '@angular/material/icon';
 import { MatButtonModule } from '@angular/material/button';
-import { AuthService } from '../../messaging/services/auth.service';
-import { Contact } from '../../messaging/models/messaging.models';
-import { environment } from '../../../environments/environment';
+import { AuthService } from '../../../lib/services/auth.service';
+import { Contact } from '../../../lib/models/messaging.models';
 
 interface DemoUser {
   label: string;
@@ -320,12 +319,12 @@ export class LoginComponent {
     this.loggingIn = true;
     this.errorMsg = '';
 
-    if (this.apiHost) {
-      (environment as any).apiBaseUrl = this.apiHost;
-      (environment as any).wsBaseUrl = this.apiHost.replace('https://', 'wss://').replace('http://', 'ws://');
-    }
+    const trimmed = this.apiHost?.replace(/\/$/, '');
+    const apiBaseOverride = trimmed
+      ? (trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`)
+      : undefined;
 
-    this.auth.login(this.email, this.password).subscribe({
+    this.auth.login(this.email, this.password, apiBaseOverride).subscribe({
       next: () => {
         this.loggingIn = false;
         this.router.navigate(['/dashboard']);

@@ -3,8 +3,8 @@ import { CommonModule } from '@angular/common';
 import { RouterOutlet, Router, NavigationEnd } from '@angular/router';
 import { filter } from 'rxjs/operators';
 import { NavBarComponent } from './layout/nav-bar/nav-bar.component';
-import { MessagingOverlayComponent } from './messaging/messaging-overlay.component';
-import { AuthService } from './messaging/services/auth.service';
+import { MessagingOverlayComponent } from '../lib/messaging-overlay.component';
+import { AuthService } from '../lib/services/auth.service';
 
 @Component({
   selector: 'app-root',

@@ -20,24 +20,33 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
     NewConversationComponent, GroupManagerComponent,
   ],
   template: `
-    <!-- Sidebar -->
+    <!-- Sidebar / Floating panel -->
     <div
       class="sidebar"
       [class.open]="isOpen"
-      [class.side-left]="side === 'left'"
-      [class.side-right]="side === 'right'"
-      [style.width.px]="sidebarWidth"
+      [class.side-left]="!isFloating && side === 'left'"
+      [class.side-right]="!isFloating && side === 'right'"
+      [class.floating]="isFloating"
+      [style.width.px]="isFloating ? floatWidth : sidebarWidth"
+      [style.height.px]="isFloating ? floatHeight : null"
+      [style.left.px]="isFloating ? floatX : null"
+      [style.top.px]="isFloating ? floatY : null"
     >
-      <!-- Resize handle on inner edge -->
+      <!-- Resize handle (sidebar mode only) -->
       <div
+        *ngIf="!isFloating"
         class="resize-handle"
         [class.handle-left]="side === 'right'"
         [class.handle-right]="side === 'left'"
         (mousedown)="onResizeStart($event)"
       ></div>
 
-      <!-- Sidebar header -->
-      <div class="sidebar-header">
+      <!-- Sidebar header (acts as drag handle in floating mode) -->
+      <div
+        class="sidebar-header"
+        [class.drag-handle]="isFloating"
+        (mousedown)="isFloating && onFloatDragStart($event)"
+      >
         <div class="header-left">
           <svg class="ces-logo-sm" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
             <path d="M 15 20 Q 15 15 20 15 L 80 15 Q 85 15 85 20 L 85 60 Q 85 65 80 65 L 35 65 L 20 80 L 20 65 Q 15 65 15 60 Z"
@@ -49,8 +58,17 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
           <span class="header-title">CES Messenger</span>
         </div>
         <div class="header-actions">
-          <button mat-icon-button class="hdr-btn" (click)="toggleSide()" [matTooltip]="'Move to ' + (side === 'right' ? 'left' : 'right')" matTooltipPosition="below">
+          <!-- Side-swap (sidebar mode only) -->
+          <button *ngIf="!isFloating" mat-icon-button class="hdr-btn" (click)="toggleSide()"
+            [matTooltip]="'Move to ' + (side === 'right' ? 'left' : 'right')" matTooltipPosition="below">
             <mat-icon>{{ side === 'right' ? 'chevron_left' : 'chevron_right' }}</mat-icon>
+          </button>
+          <!-- Pop-out / dock toggle -->
+          <button mat-icon-button class="hdr-btn"
+            (click)="toggleFloat()"
+            [matTooltip]="isFloating ? 'Dock to sidebar' : 'Pop out to floating window'"
+            matTooltipPosition="below">
+            <mat-icon>{{ isFloating ? 'picture_in_picture_alt' : 'open_in_new' }}</mat-icon>
           </button>
           <div class="btn-spacer"></div>
           <button mat-icon-button class="hdr-btn" (click)="close()" matTooltip="Close messenger" matTooltipPosition="below">
@@ -74,6 +92,9 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
         <span *ngIf="wsStatus === 'connecting'">Connecting...</span>
         <span *ngIf="wsStatus === 'disconnected'">Disconnected</span>
       </div>
+
+      <!-- Resize corner (floating mode only) -->
+      <div *ngIf="isFloating" class="float-resize-corner" (mousedown)="onFloatResizeStart($event)"></div>
     </div>
   `,
   styles: [`
@@ -82,11 +103,11 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
       top: 0;
       bottom: 0;
       width: 400px;
-      background: linear-gradient(180deg, #1F4BD8 0%, #173396 100%);
+      background: #041322;
       z-index: 9999;
       display: flex;
       flex-direction: column;
-      box-shadow: 0 0 40px rgba(23, 51, 150, 0.3);
+      box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
       transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }
 
@@ -225,6 +246,40 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
       50% { opacity: 0.3; }
     }
 
+    /* ── Floating mode ── */
+    .sidebar.floating {
+      position: fixed !important;
+      right: unset !important;
+      left: 80px;
+      top: 80px;
+      transform: none !important;
+      border-radius: 12px;
+      overflow: hidden;
+      resize: none;
+      min-width: 280px;
+      min-height: 320px;
+    }
+
+    .drag-handle {
+      cursor: grab;
+      user-select: none;
+    }
+
+    .drag-handle:active {
+      cursor: grabbing;
+    }
+
+    .float-resize-corner {
+      position: absolute;
+      bottom: 0;
+      right: 0;
+      width: 16px;
+      height: 16px;
+      cursor: se-resize;
+      background: linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.25) 50%);
+      border-bottom-right-radius: 12px;
+    }
+
     @media (max-width: 480px) {
       .sidebar {
         width: 100% !important;
@@ -242,12 +297,35 @@ export class ChatPanelComponent implements OnInit, OnDestroy {
   side: SidebarSide = 'right';
   sidebarWidth = 400;
 
+  // ── Floating window state ──
+  isFloating = false;
+  floatX = 80;
+  floatY = 80;
+  floatWidth = 380;
+  floatHeight = 540;
+
   private defaultWidth = 400;
   private resizing = false;
   private resizeStartX = 0;
   private resizeStartWidth = 0;
   private boundResizeMove = this.onResizeMove.bind(this);
   private boundResizeEnd = this.onResizeEnd.bind(this);
+
+  // float drag
+  private floatDragging = false;
+  private floatDragOffX = 0;
+  private floatDragOffY = 0;
+  private boundFloatMove = this.onFloatDragMove.bind(this);
+  private boundFloatEnd  = this.onFloatDragEnd.bind(this);
+
+  // float resize
+  private floatResizing = false;
+  private floatResizeStartX = 0;
+  private floatResizeStartY = 0;
+  private floatResizeStartW = 0;
+  private floatResizeStartH = 0;
+  private boundFloatResizeMove = this.onFloatResizeMove.bind(this);
+  private boundFloatResizeEnd  = this.onFloatResizeEnd.bind(this);
 
   private sub!: Subscription;
 
@@ -257,6 +335,18 @@ export class ChatPanelComponent implements OnInit, OnDestroy {
     this.side = this.store.getSidebarSide();
     const saved = localStorage.getItem('messaging_sidebar_width');
     if (saved) this.sidebarWidth = parseInt(saved, 10) || this.defaultWidth;
+
+    const savedFloat = localStorage.getItem('messaging_float_state');
+    if (savedFloat) {
+      try {
+        const f = JSON.parse(savedFloat);
+        this.isFloating = f.isFloating ?? false;
+        this.floatX = f.x ?? 80;
+        this.floatY = f.y ?? 80;
+        this.floatWidth = f.w ?? 380;
+        this.floatHeight = f.h ?? 540;
+      } catch {}
+    }
 
     this.sub = combineLatest([
       this.store.panelOpen,
@@ -275,6 +365,10 @@ export class ChatPanelComponent implements OnInit, OnDestroy {
     this.sub?.unsubscribe();
     document.removeEventListener('mousemove', this.boundResizeMove);
     document.removeEventListener('mouseup', this.boundResizeEnd);
+    document.removeEventListener('mousemove', this.boundFloatMove);
+    document.removeEventListener('mouseup', this.boundFloatEnd);
+    document.removeEventListener('mousemove', this.boundFloatResizeMove);
+    document.removeEventListener('mouseup', this.boundFloatResizeEnd);
   }
 
   toggleSide(): void {
@@ -285,7 +379,17 @@ export class ChatPanelComponent implements OnInit, OnDestroy {
     this.store.closePanel();
   }
 
-  // ── Resize ──
+  toggleFloat(): void {
+    this.isFloating = !this.isFloating;
+    if (this.isFloating) {
+      // Centre the float window on screen when first popping out
+      this.floatX = Math.max(20, Math.round((window.innerWidth  - this.floatWidth)  / 2));
+      this.floatY = Math.max(20, Math.round((window.innerHeight - this.floatHeight) / 2));
+    }
+    this.saveFloatState();
+  }
+
+  // ── Sidebar resize ──
   onResizeStart(event: MouseEvent): void {
     event.preventDefault();
     this.resizing = true;
@@ -300,13 +404,11 @@ export class ChatPanelComponent implements OnInit, OnDestroy {
   private onResizeMove(event: MouseEvent): void {
     if (!this.resizing) return;
     const dx = event.clientX - this.resizeStartX;
-
     if (this.side === 'right') {
       this.sidebarWidth = Math.max(200, this.resizeStartWidth - dx);
     } else {
       this.sidebarWidth = Math.max(200, this.resizeStartWidth + dx);
     }
-
     this.sidebarWidth = Math.min(this.sidebarWidth, window.innerWidth * 0.9);
   }
 
@@ -318,5 +420,74 @@ export class ChatPanelComponent implements OnInit, OnDestroy {
     document.removeEventListener('mousemove', this.boundResizeMove);
     document.removeEventListener('mouseup', this.boundResizeEnd);
     localStorage.setItem('messaging_sidebar_width', String(this.sidebarWidth));
+  }
+
+  // ── Floating panel drag ──
+  onFloatDragStart(event: MouseEvent): void {
+    // Ignore if coming from a button inside the header
+    if ((event.target as HTMLElement).closest('button')) return;
+    event.preventDefault();
+    this.floatDragging = true;
+    this.floatDragOffX = event.clientX - this.floatX;
+    this.floatDragOffY = event.clientY - this.floatY;
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', this.boundFloatMove);
+    document.addEventListener('mouseup', this.boundFloatEnd);
+  }
+
+  private onFloatDragMove(event: MouseEvent): void {
+    if (!this.floatDragging) return;
+    this.floatX = Math.max(0, Math.min(event.clientX - this.floatDragOffX, window.innerWidth  - this.floatWidth));
+    this.floatY = Math.max(0, Math.min(event.clientY - this.floatDragOffY, window.innerHeight - 60));
+  }
+
+  private onFloatDragEnd(): void {
+    if (!this.floatDragging) return;
+    this.floatDragging = false;
+    document.body.style.userSelect = '';
+    document.removeEventListener('mousemove', this.boundFloatMove);
+    document.removeEventListener('mouseup', this.boundFloatEnd);
+    this.saveFloatState();
+  }
+
+  // ── Floating panel resize (SE corner) ──
+  onFloatResizeStart(event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.floatResizing = true;
+    this.floatResizeStartX = event.clientX;
+    this.floatResizeStartY = event.clientY;
+    this.floatResizeStartW = this.floatWidth;
+    this.floatResizeStartH = this.floatHeight;
+    document.body.style.cursor = 'se-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', this.boundFloatResizeMove);
+    document.addEventListener('mouseup', this.boundFloatResizeEnd);
+  }
+
+  private onFloatResizeMove(event: MouseEvent): void {
+    if (!this.floatResizing) return;
+    this.floatWidth  = Math.max(280, this.floatResizeStartW + (event.clientX - this.floatResizeStartX));
+    this.floatHeight = Math.max(320, this.floatResizeStartH + (event.clientY - this.floatResizeStartY));
+  }
+
+  private onFloatResizeEnd(): void {
+    if (!this.floatResizing) return;
+    this.floatResizing = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    document.removeEventListener('mousemove', this.boundFloatResizeMove);
+    document.removeEventListener('mouseup', this.boundFloatResizeEnd);
+    this.saveFloatState();
+  }
+
+  private saveFloatState(): void {
+    localStorage.setItem('messaging_float_state', JSON.stringify({
+      isFloating: this.isFloating,
+      x: this.floatX,
+      y: this.floatY,
+      w: this.floatWidth,
+      h: this.floatHeight,
+    }));
   }
 }

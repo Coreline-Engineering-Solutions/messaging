@@ -48,8 +48,18 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
                 <div class="member-avatar"><mat-icon>person</mat-icon></div>
                 <div class="member-info">
                   <span class="member-name">{{ getMemberName(m) }}{{ m.contact_id === creatorContactId ? ' (you)' : '' }}</span>
-                  <span class="member-sub">{{ m.contact_id }}</span>
+                  <span class="member-sub">{{ m.company || m.email }}</span>
                 </div>
+                <button 
+                  *ngIf="m.contact_id !== creatorContactId" 
+                  mat-icon-button 
+                  class="remove-member-btn"
+                  (click)="removeMember(m)"
+                  matTooltip="Remove from group"
+                  matTooltipPosition="left"
+                >
+                  <mat-icon>person_remove</mat-icon>
+                </button>
               </div>
               <div *ngIf="currentMembers.length === 0" class="empty-members">No members found</div>
             </div>
@@ -254,6 +264,16 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
     .member-sub {
       font-size: 11px;
       color: rgba(255,255,255,0.5);
+    }
+
+    .remove-member-btn {
+      margin-left: auto;
+      color: rgba(255,255,255,0.6) !important;
+    }
+
+    .remove-member-btn:hover {
+      color: #f87171 !important;
+      background: rgba(248,113,113,0.1) !important;
     }
 
     .empty-members {
@@ -476,10 +496,7 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
   }
 
   getMemberName(member: ConversationParticipant): string {
-    if (member.first_name || member.last_name) {
-      return `${member.first_name || ''} ${member.last_name || ''}`.trim();
-    }
-    return member.contact_id;
+    return member.username || member.email || `Contact ${member.contact_id}`;
   }
 
   get canSubmit(): boolean {
@@ -508,6 +525,15 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
     );
   }
 
+  removeMember(member: ConversationParticipant): void {
+    if (!this.editingConversationId) return;
+    
+    if (confirm(`Remove ${this.getMemberName(member)} from this group?`)) {
+      this.store.manageGroup('remove', this.editingConversationId, undefined, [member.contact_id]);
+      this.currentMembers = this.currentMembers.filter(m => m.contact_id !== member.contact_id);
+    }
+  }
+
   onSubmit(): void {
     if (!this.canSubmit) return;
 
@@ -524,6 +550,7 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
     } else {
       const ids = this.selectedContacts.map((c) => c.contact_id);
       this.store.createGroupConversation(ids, this.groupName.trim());
+      this.store.setView('chat');
     }
   }
 

@@ -1,5 +1,5 @@
 export const environment = {
   production: false,
-  apiBaseUrl: 'https://your-api-host',
-  wsBaseUrl: 'wss://your-api-host',
+  apiBaseUrl: 'https://ces-ticketing-system-db.onrender.com',
+  wsBaseUrl: 'wss://ces-ticketing-system-db.onrender.com',
 };

@@ -1,4 +1,4 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, ViewEncapsulation } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FloatingButtonComponent } from './components/floating-button/floating-button.component';
 import { ChatPanelComponent } from './components/chat-panel/chat-panel.component';
@@ -16,6 +16,16 @@ import { Contact } from './models/messaging.models';
       <app-chat-panel></app-chat-panel>
     </ng-container>
   `,
+  styles: [`
+    .cdk-overlay-container {
+      z-index: 10000 !important;
+    }
+    
+    .mat-mdc-tooltip {
+      z-index: 10001 !important;
+    }
+  `],
+  encapsulation: ViewEncapsulation.None,
 })
 export class MessagingOverlayComponent implements OnInit {
   isAuthenticated = false;
@@ -44,7 +54,6 @@ export class MessagingOverlayComponent implements OnInit {
     // Get session from localStorage (host app session)
     const sessionData = localStorage.getItem('session');
     if (!sessionData) {
-      console.warn('Messaging: No session in localStorage');
       return;
     }
 
@@ -55,7 +64,6 @@ export class MessagingOverlayComponent implements OnInit {
       const userName = parsed.user_name || parsed.name;
 
       if (!sessionId || !email) {
-        console.warn('Messaging: Invalid session data');
         return;
       }
 
@@ -75,8 +83,7 @@ export class MessagingOverlayComponent implements OnInit {
 
       // Set messaging session
       this.auth.setSession(sessionId, contact);
-    } catch (err) {
-      console.error('Messaging: Failed to parse session:', err);
+    } catch {
     }
   }
 }

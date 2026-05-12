@@ -30,6 +30,7 @@ export declare class GroupManagerComponent implements OnInit, OnDestroy {
     isSelected(contact: Contact): boolean;
     toggleContact(contact: Contact): void;
     removeContact(contact: Contact): void;
+    removeMember(member: ConversationParticipant): void;
     onSubmit(): void;
     onDelete(): void;
     goBack(): void;

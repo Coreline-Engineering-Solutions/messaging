@@ -74,7 +74,7 @@ export declare class MessagingStoreService implements OnDestroy {
     loadVisibleContacts(): void;
     openConversation(conversationId: string, name: string, isGroup?: boolean): void;
     closeChat(conversationId: string): void;
-    loadMessages(conversationId: string, beforeMessageId?: string): void;
+    loadMessages(conversationId: string, beforeMessageId?: string, skipReactionHydration?: boolean): void;
     sendMessage(conversationId: string | null, content: string, messageType?: 'TEXT' | 'IMAGE'): void;
     openDirectConversation(recipientContactId: string, displayName: string): void;
     sendDirectMessage(recipientContactId: string, content: string): void;
@@ -86,18 +86,32 @@ export declare class MessagingStoreService implements OnDestroy {
     deleteConversation(conversationId: string): void;
     clearConversation(conversationId: string): void;
     deleteGroup(conversationId: string): void;
+    addReaction(messageId: string, emoji: string): void;
+    removeReaction(messageId: string, emoji: string): void;
     getActiveConversationId(): string | null;
     getMessagesForConversation(conversationId: string): Message[];
     getCurrentInbox(): InboxItem[];
     private listenWebSocket;
     private handleWsMessage;
+    private handleGroupUpdated;
     private handleWebSocketError;
     private handleNewMessage;
+    /** Public — lets components add an optimistic message without a round-trip. */
+    appendOptimisticMessage(message: Message): void;
     private appendMessage;
     private updateInboxPreview;
     private incrementUnread;
+    /**
+     * Normalize backend message shapes so UI can reliably render attachments/media.
+     * Supports legacy and current field names returned by API/WS payloads.
+     */
+    private normalizeMessageShape;
     private playNotificationSound;
     private recalcUnread;
+    private hydrateReactionsForConversation;
+    private refreshMessageReactions;
+    private normalizeReactionRows;
+    private applyReactionOptimistically;
     static ɵfac: i0.ɵɵFactoryDeclaration<MessagingStoreService, never>;
     static ɵprov: i0.ɵɵInjectableDeclaration<MessagingStoreService>;
 }

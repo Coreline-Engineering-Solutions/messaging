@@ -19,7 +19,7 @@ export declare class MessagingApiService {
     getDirectConversation(contactA: string, contactB: string): Observable<any>;
     getConversationParticipants(conversationId: string): Observable<ConversationParticipant[]>;
     getVisibleContacts(contactId: string): Observable<Contact[]>;
-    checkContactProfile(userGid: string, updates?: any): Observable<any>;
+    checkContactProfile(contactId: string, updates?: any): Observable<any>;
     manageGroup(contactId: string, action: 'create' | 'add' | 'remove' | 'rename', conversationId?: string, groupName?: string, participantContactIds?: string[]): Observable<any>;
     deleteConversation(conversationId: string, contactId: string): Observable<any>;
     clearConversation(conversationId: string, contactId: string): Observable<any>;
@@ -28,6 +28,19 @@ export declare class MessagingApiService {
     sendConnectionInvite(adminContactId: string, targetCompany: string): Observable<any>;
     respondToConnection(adminContactId: string, connectionId: string, accept: boolean): Observable<any>;
     getCompanyConnections(contactId: string): Observable<CompanyConnection[]>;
+    addReaction(messageId: string, contactId: string, emoji: string): Observable<any>;
+    removeReaction(messageId: string, contactId: string, emoji: string): Observable<any>;
+    getReactions(messageId: string): Observable<any[]>;
+    getThreadMessages(parentMessageId: string, contactId: string): Observable<Message[]>;
+    sendThreadReply(parentMessageId: string, senderContactId: string, content: string): Observable<any>;
+    editMessage(messageId: string, contactId: string, newContent: string): Observable<any>;
+    deleteMessage(messageId: string, contactId: string): Observable<any>;
+    pinMessage(messageId: string, conversationId: string, contactId: string): Observable<any>;
+    unpinMessage(messageId: string, contactId: string): Observable<any>;
+    updatePresence(contactId: string, status: string, customStatus?: string): Observable<any>;
+    getPresence(contactId: string): Observable<any>;
+    searchMessages(contactId: string, query: string, conversationId?: string): Observable<Message[]>;
+    updateNotificationSettings(conversationId: string, contactId: string, settings: any): Observable<any>;
     static ɵfac: i0.ɵɵFactoryDeclaration<MessagingApiService, never>;
     static ɵprov: i0.ɵɵInjectableDeclaration<MessagingApiService>;
 }

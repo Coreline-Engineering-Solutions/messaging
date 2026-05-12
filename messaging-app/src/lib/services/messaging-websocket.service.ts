@@ -51,12 +51,12 @@ export class MessagingWebSocketService implements OnDestroy {
 
   subscribe(conversationId: string): void {
     this.subscribedConversations.add(conversationId);
-    this.send({ action: 'subscribe', conversation_id: conversationId });
+    this.send({ type: 'subscribe', conversation_id: conversationId });
   }
 
   unsubscribe(conversationId: string): void {
     this.subscribedConversations.delete(conversationId);
-    this.send({ action: 'unsubscribe', conversation_id: conversationId });
+    this.send({ type: 'unsubscribe', conversation_id: conversationId });
   }
 
   subscribeAll(conversationIds: string[]): void {
@@ -72,18 +72,15 @@ export class MessagingWebSocketService implements OnDestroy {
     if (!this.contactId || !this.sessionGid) return;
 
     this.connectionStatus$.next('connecting');
-    console.log('WebSocket connecting to:', `${this.config.wsBaseUrl}/messaging/ws/${this.contactId}`);
 
     try {
       this.ws = new WebSocket(`${this.config.wsBaseUrl}/messaging/ws/${this.contactId}`);
-    } catch (err) {
-      console.error('WebSocket connection failed:', err);
+    } catch {
       this.attemptReconnect();
       return;
     }
 
     this.ws.onopen = () => {
-      console.log('WebSocket connected');
       this.connectionStatus$.next('connected');
       this.reconnectAttempts = 0;
       this.authenticate();
@@ -94,14 +91,11 @@ export class MessagingWebSocketService implements OnDestroy {
     this.ws.onmessage = (event: MessageEvent) => {
       try {
         const msg: WebSocketMessage = JSON.parse(event.data);
-        console.log('WebSocket message received:', msg.type, msg);
         if (msg.type === 'auth_success') {
-          console.log('WebSocket authenticated');
           this.connectionStatus$.next('authenticated');
         }
         this.messages$.next(msg);
-      } catch (err) {
-        console.error('WebSocket message parse error:', err);
+      } catch {
       }
     };
 
@@ -110,7 +104,6 @@ export class MessagingWebSocketService implements OnDestroy {
     };
 
     this.ws.onclose = (event) => {
-      console.log('WebSocket closed:', event.code, event.reason);
       this.connectionStatus$.next('disconnected');
       this.stopPing();
       this.attemptReconnect();
@@ -118,12 +111,12 @@ export class MessagingWebSocketService implements OnDestroy {
   }
 
   private authenticate(): void {
-    this.send({ action: 'auth', session_gid: this.sessionGid });
+    this.send({ type: 'auth', session_gid: this.sessionGid });
   }
 
   private resubscribe(): void {
     this.subscribedConversations.forEach((id) => {
-      this.send({ action: 'subscribe', conversation_id: id });
+      this.send({ type: 'subscribe', conversation_id: id });
     });
   }
 
@@ -138,7 +131,7 @@ export class MessagingWebSocketService implements OnDestroy {
   private startPing(): void {
     this.stopPing();
     this.pingInterval = setInterval(() => {
-      this.send({ action: 'ping' });
+      this.send({ type: 'ping' });
     }, 25000);
   }
 
@@ -151,10 +144,7 @@ export class MessagingWebSocketService implements OnDestroy {
 
   private send(data: any): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      console.log('WebSocket sending:', data.action);
       this.ws.send(JSON.stringify(data));
-    } else {
-      console.warn('WebSocket not open, cannot send:', data.action);
     }
   }
 }
