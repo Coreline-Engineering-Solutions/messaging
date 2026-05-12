@@ -1,8 +1,10 @@
 # See https://docs.github.com/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
 
-# Compiled output
-/dist
-!/dist/ces-messaging
+# Compiled output: ignore app build under dist/, but keep ng-packagr library output
+# tracked (npm / git installs resolve main/module from messaging-app/dist/ces-messaging).
+/dist/*
+!/dist/ces-messaging/
+!/dist/ces-messaging/**
 /tmp
 /out-tsc
 /bazel-out

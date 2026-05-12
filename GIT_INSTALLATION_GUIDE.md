@@ -69,31 +69,30 @@ npm install git+https://YOUR_TOKEN@github.com/Coreline-Engineering-Solutions/mes
 
 ### 1. Build the Library First
 
-**IMPORTANT:** You must build the library and commit the `dist/` folder to Git.
+**IMPORTANT:** Run `npm run build:lib` in `messaging-app/`, then **commit and push** everything under `messaging-app/dist/ces-messaging/`, especially `fesm2022/*.mjs` and `esm2022/coreline-engineering-solutions-messaging.mjs`. Git installs only ship what is in the repo; without those bundles, consumers get `ng build` errors (missing `.mjs`).
 
 ```bash
-cd messaging-library/messaging-app
+cd messaging-app
 npm install
 npm run build:lib
 ```
 
 This creates `dist/ces-messaging/` with the compiled library.
 
-### 2. Update `.gitignore`
+### 2. `.gitignore` (must allow `dist/ces-messaging/**`)
 
-Make sure `dist/ces-messaging/` is **NOT** ignored in Git:
+If FESM bundles never appear in Git, check ignore rules:
 
-**`.gitignore`** - Remove or comment out:
-```
-# dist/  ← Make sure this is commented or removed
+- **Repo root:** use `/dist/` (leading slash) so only the **root** `dist/` folder is ignored — a bare `dist/` pattern matches **every** `dist` directory (including `messaging-app/dist/`) and will exclude the library build from commits.
+- **`messaging-app/.gitignore`:** use something like:
+
+```gitignore
+/dist/*
+!/dist/ces-messaging/
+!/dist/ces-messaging/**
 ```
 
-Or be more specific:
-```
-# Ignore all dist folders except the library build
-dist/*
-!dist/ces-messaging/
-```
+A lone `/dist` plus `!/dist/ces-messaging` **does not** re-include files inside `ces-messaging/`; you need the `/**` negation as above.
 
 ### 3. Commit the Built Library
 
@@ -135,8 +134,8 @@ Update `messaging-app/package.json`:
     "url": "https://github.com/Coreline-Engineering-Solutions/messaging.git",
     "directory": "messaging-app"
   },
-  "main": "dist/ces-messaging/fesm2022/ces-messaging.mjs",
-  "module": "dist/ces-messaging/fesm2022/ces-messaging.mjs",
+  "main": "dist/ces-messaging/fesm2022/coreline-engineering-solutions-messaging.mjs",
+  "module": "dist/ces-messaging/fesm2022/coreline-engineering-solutions-messaging.mjs",
   "typings": "dist/ces-messaging/index.d.ts",
   "private": false,
   "peerDependencies": {

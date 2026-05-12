@@ -18,15 +18,15 @@
     "AI_INTEGRATION_PROMPT.md",
     "PUBLISH_CHECKLIST.md"
   ],
-  "main": "./messaging-app/dist/ces-messaging/fesm2022/ces-messaging.mjs",
-  "module": "./messaging-app/dist/ces-messaging/fesm2022/ces-messaging.mjs",
+  "main": "./messaging-app/dist/ces-messaging/fesm2022/coreline-engineering-solutions-messaging.mjs",
+  "module": "./messaging-app/dist/ces-messaging/fesm2022/coreline-engineering-solutions-messaging.mjs",
   "typings": "./messaging-app/dist/ces-messaging/index.d.ts",
   "exports": {
     ".": {
       "types": "./messaging-app/dist/ces-messaging/index.d.ts",
-      "esm2022": "./messaging-app/dist/ces-messaging/esm2022/ces-messaging.mjs",
-      "esm": "./messaging-app/dist/ces-messaging/esm2022/ces-messaging.mjs",
-      "default": "./messaging-app/dist/ces-messaging/fesm2022/ces-messaging.mjs"
+      "esm2022": "./messaging-app/dist/ces-messaging/esm2022/coreline-engineering-solutions-messaging.mjs",
+      "esm": "./messaging-app/dist/ces-messaging/esm2022/coreline-engineering-solutions-messaging.mjs",
+      "default": "./messaging-app/dist/ces-messaging/fesm2022/coreline-engineering-solutions-messaging.mjs"
     }
   },
   "repository": {
