@@ -14,7 +14,7 @@ export declare class AuthService {
     get sessionGid(): string | null;
     get currentContact(): Contact | null;
     get contactId(): string | null;
-    login(email: string, password: string): Observable<AuthSession>;
+    login(email: string, password: string, apiBaseUrlOverride?: string): Observable<AuthSession>;
     setSession(sessionGid: string, contact: Contact): void;
     setDemoSession(sessionGid: string, contact: Contact): void;
     logout(): void;

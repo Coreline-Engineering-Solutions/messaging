@@ -41,8 +41,9 @@ export class AuthService {
     return this.currentContact$.value?.contact_id ?? null;
   }
 
-  login(email: string, password: string): Observable<AuthSession> {
-    return this.http.post<AuthSession>(`${this.config.apiBaseUrl}/auth`, {
+  login(email: string, password: string, apiBaseUrlOverride?: string): Observable<AuthSession> {
+    const base = (apiBaseUrlOverride ?? this.config.apiBaseUrl).replace(/\/$/, '');
+    return this.http.post<AuthSession>(`${base}/auth`, {
       function: '_login',
       email,
       password,

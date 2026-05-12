@@ -1,16 +1,19 @@
 import { Injectable, OnDestroy } from '@angular/core';
-import { BehaviorSubject, Observable, Subject, Subscription } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, Subscription, forkJoin, of } from 'rxjs';
+import { catchError, map } from 'rxjs/operators';
 import { AuthService } from './auth.service';
 import { MessagingApiService } from './messaging-api.service';
 import { MessagingWebSocketService } from './messaging-websocket.service';
 import {
   InboxItem,
   Message,
+  Attachment,
   Contact,
   ChatWindow,
   WebSocketMessage,
   SidebarSide,
   getContactDisplayName,
+  getMessageSenderName,
 } from '../models/messaging.models';
 
 @Injectable({ providedIn: 'root' })
@@ -199,7 +202,7 @@ export class MessagingStoreService implements OnDestroy {
         const ids = mapped.map((i) => i.conversation_id);
         this.wsService.subscribeAll(ids);
       },
-      error: (err: any) => console.error('Failed to load inbox:', err),
+      error: () => {},
     });
   }
 
@@ -223,12 +226,15 @@ export class MessagingStoreService implements OnDestroy {
           }
         }
       },
-      error: (err: any) => console.error('Failed to load contacts:', err),
+      error: () => {},
     });
   }
 
   // ── Conversations ──
   openConversation(conversationId: string, name: string, isGroup = false): void {
+    if (!conversationId || conversationId === 'undefined') {
+      return;
+    }
     this.activeConversationId$.next(conversationId);
     this.activeView$.next('chat');
     this.openPanel();
@@ -241,7 +247,13 @@ export class MessagingStoreService implements OnDestroy {
       ]);
     }
 
-    this.loadMessages(conversationId);
+    const existing = this.messagesMap$.value.get(conversationId);
+    if (existing && existing.length > 0) {
+      // Already cached — silent background refresh for new messages, skip reaction hydration
+      this.loadMessages(conversationId, undefined, true);
+    } else {
+      this.loadMessages(conversationId);
+    }
     this.markAsRead(conversationId);
     this.wsService.subscribe(conversationId);
   }
@@ -257,7 +269,10 @@ export class MessagingStoreService implements OnDestroy {
   }
 
   // ── Messages ──
-  loadMessages(conversationId: string, beforeMessageId?: string): void {
+  loadMessages(conversationId: string, beforeMessageId?: string, skipReactionHydration = false): void {
+    if (!conversationId || conversationId === 'undefined') {
+      return;
+    }
     const contactId = this.auth.contactId;
     if (!contactId) return;
 
@@ -268,21 +283,34 @@ export class MessagingStoreService implements OnDestroy {
         const map = new Map(this.messagesMap$.value);
         const existing = map.get(conversationId) || [];
 
-        const sorted = [...messages].sort((a, b) => 
+        const normalized = messages.map((m: any) => this.normalizeMessageShape(m));
+        const sorted = [...normalized].sort((a, b) => 
           new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
         );
 
         if (beforeMessageId) {
-          map.set(conversationId, [...sorted, ...existing]);
+          // Prepend older messages, preserving existing reactions
+          const merged = [...sorted, ...existing];
+          map.set(conversationId, merged);
+        } else if (skipReactionHydration) {
+          // Silent refresh — merge new messages but preserve existing reaction state
+          const existingById = new Map(existing.map(m => [String(m.message_id), m]));
+          const merged = sorted.map(m => {
+            const cached = existingById.get(String(m.message_id));
+            return cached ? { ...m, reactions: cached.reactions } : m;
+          });
+          map.set(conversationId, merged);
         } else {
           map.set(conversationId, sorted);
         }
 
         this.messagesMap$.next(map);
+        if (!skipReactionHydration) {
+          this.hydrateReactionsForConversation(conversationId, map.get(conversationId) || []);
+        }
         this.loadingMessages$.next(false);
       },
-      error: (err: any) => {
-        console.error('Failed to load messages:', err);
+      error: () => {
         this.loadingMessages$.next(false);
       },
     });
@@ -317,7 +345,7 @@ export class MessagingStoreService implements OnDestroy {
         };
         this.appendMessage(optimistic);
       },
-      error: (err: any) => console.error('Failed to send message:', err),
+      error: () => {},
     });
   }
 
@@ -355,15 +383,17 @@ export class MessagingStoreService implements OnDestroy {
     this.api.sendDirectMessage(contactId, recipientContactId, content).subscribe({
       next: (res) => {
         this.loadInbox();
-        if (res?.conversation_id) {
+        // Backend may return conversation_id, id, or conversationId
+        const convId = String(res?.conversation_id || res?.id || res?.conversationId || '');
+        if (convId) {
           const recipient = this.visibleContacts$.value.find(
             (c) => c.contact_id === recipientContactId
           );
           const name = recipient ? getContactDisplayName(recipient) : 'Direct Message';
-          this.openConversation(res.conversation_id, name, false);
+          this.openConversation(convId, name, false);
         }
       },
-      error: (err: any) => console.error('Failed to send DM:', err),
+      error: () => {},
     });
   }
 
@@ -377,10 +407,16 @@ export class MessagingStoreService implements OnDestroy {
 
     this.api.createConversation(contactId, allParticipants, name).subscribe({
       next: (conv) => {
+        // Backend may return conversation_id, id, or conversationId
+        const convId = String((conv as any)?.conversation_id || (conv as any)?.id || (conv as any)?.conversationId || '');
+        if (!convId) {
+          this.loadInbox();
+          return;
+        }
         this.loadInbox();
-        this.openConversation(conv.conversation_id, name, true);
+        this.openConversation(convId, name, true);
       },
-      error: (err: any) => console.error('Failed to create group:', err),
+      error: () => {},
     });
   }
 
@@ -394,6 +430,7 @@ export class MessagingStoreService implements OnDestroy {
   }
 
   markAsRead(conversationId: string): void {
+    if (!conversationId || conversationId === 'undefined') return;
     const contactId = this.auth.contactId;
     if (!contactId) return;
 
@@ -421,7 +458,7 @@ export class MessagingStoreService implements OnDestroy {
 
     this.api.manageGroup(contactId, action, conversationId, groupName, participantContactIds).subscribe({
       next: () => this.loadInbox(),
-      error: (err: any) => console.error('Group action failed:', err),
+      error: () => {},
     });
   }
 
@@ -444,7 +481,7 @@ export class MessagingStoreService implements OnDestroy {
         }
         this.closeChat(conversationId);
       },
-      error: (err: any) => console.error('Delete conversation failed:', err),
+      error: () => {},
     });
   }
 
@@ -464,7 +501,7 @@ export class MessagingStoreService implements OnDestroy {
         );
         this.inbox$.next(items);
       },
-      error: (err: any) => console.error('Clear conversation failed:', err),
+      error: () => {},
     });
   }
 
@@ -486,7 +523,58 @@ export class MessagingStoreService implements OnDestroy {
         }
         this.closeChat(conversationId);
       },
-      error: (err: any) => console.error('Delete group failed:', err),
+      error: () => {},
+    });
+  }
+
+  // ── Reactions ──
+  addReaction(messageId: string, emoji: string): void {
+    const contactId = this.auth.contactId;
+    if (!contactId) return;
+
+    // Enforce one reaction per user — remove any existing reaction with a different emoji
+    for (const msgs of this.messagesMap$.value.values()) {
+      const msg = msgs.find(m => String(m.message_id) === String(messageId));
+      if (msg?.reactions) {
+        for (const r of msg.reactions) {
+          if (r.hasReacted && r.emoji !== emoji) {
+            this.applyReactionOptimistically(messageId, r.emoji, false);
+            this.api.removeReaction(messageId, contactId, r.emoji).subscribe({ error: () => {} });
+          }
+        }
+      }
+      break;
+    }
+
+    // Optimistic UI so user sees reaction immediately.
+    this.applyReactionOptimistically(messageId, emoji, true);
+
+    this.api.addReaction(messageId, contactId, emoji).subscribe({
+      next: () => {
+        this.refreshMessageReactions(messageId);
+      },
+      error: () => {
+        // Revert optimistic update when request fails.
+        this.applyReactionOptimistically(messageId, emoji, false);
+      },
+    });
+  }
+
+  removeReaction(messageId: string, emoji: string): void {
+    const contactId = this.auth.contactId;
+    if (!contactId) return;
+
+    // Optimistic UI so user sees reaction removal immediately.
+    this.applyReactionOptimistically(messageId, emoji, false);
+
+    this.api.removeReaction(messageId, contactId, emoji).subscribe({
+      next: () => {
+        this.refreshMessageReactions(messageId);
+      },
+      error: () => {
+        // Revert optimistic update when request fails.
+        this.applyReactionOptimistically(messageId, emoji, true);
+      },
     });
   }
 
@@ -516,6 +604,12 @@ export class MessagingStoreService implements OnDestroy {
         break;
       case 'conversation_updated':
         this.loadInbox();
+        if (this.activeConversationId$.value) {
+          this.loadMessages(this.activeConversationId$.value);
+        }
+        break;
+      case 'group_updated':
+        this.handleGroupUpdated(msg.data);
         break;
       case 'error':
         this.handleWebSocketError(msg.message);
@@ -523,56 +617,19 @@ export class MessagingStoreService implements OnDestroy {
     }
   }
 
-  private handleWebSocketError(errorMessage: string | undefined): void {
-    const contactId = this.auth.contactId;
-    
-    if (!errorMessage) {
-      console.error('WebSocket error: Unknown error');
-      return;
-    }
+  private handleGroupUpdated(data: any): void {
+    this.loadInbox();
+  }
 
-    if (errorMessage.includes('Contact not found') || errorMessage.includes('contact')) {
-      console.error(
-        `❌ Messaging contact not found for ID "${contactId}". ` +
-        `Ensure a record exists in the messaging.contacts table. ` +
-        `If the contact doesn't exist, create one via: POST /messaging/contacts with contact_id="${contactId}". ` +
-        `Error: ${errorMessage}`
-      );
-    } else if (errorMessage.includes('unauthorized') || errorMessage.includes('auth')) {
-      console.error(
-        `❌ WebSocket authentication failed. ` +
-        `Verify session_gid is valid and not expired. ` +
-        `Re-authenticate and call messagingAuth.setSession() again. ` +
-        `Error: ${errorMessage}`
-      );
-    } else if (errorMessage.includes('permission') || errorMessage.includes('forbidden')) {
-      console.error(
-        `❌ Permission denied for contact "${contactId}". ` +
-        `Ensure the contact has access to the messaging system. ` +
-        `Error: ${errorMessage}`
-      );
-    } else {
-      console.error(`❌ WebSocket error: ${errorMessage}`);
-    }
+  private handleWebSocketError(errorMessage: string | undefined): void {
+    void errorMessage;
   }
 
   private handleNewMessage(data: any): void {
     if (!data) return;
 
-    const message: Message = {
-      message_id: data.message_id,
-      conversation_id: data.conversation_id,
-      sender_id: data.sender_id,
-      sender_name: data.sender_name || data.sender_username,
-      sender_username: data.sender_username,
-      sender_first_name: data.sender_first_name,
-      sender_last_name: data.sender_last_name,
-      message_type: data.message_type,
-      content: data.content,
-      media_url: data.media_url,
-      created_at: data.created_at,
-      is_read: data.is_read,
-    };
+    // Pass through full payload so nested / alternate attachment fields are not dropped.
+    const message: Message = this.normalizeMessageShape(data);
 
     const isFromOther = String(message.sender_id) !== String(this.auth.contactId);
 
@@ -603,11 +660,17 @@ export class MessagingStoreService implements OnDestroy {
     }
   }
 
+  /** Public — lets components add an optimistic message without a round-trip. */
+  appendOptimisticMessage(message: Message): void {
+    this.appendMessage(message);
+  }
+
   private appendMessage(message: Message): void {
     const map = new Map(this.messagesMap$.value);
     const msgs = [...(map.get(message.conversation_id) || []), message];
     map.set(message.conversation_id, msgs);
     this.messagesMap$.next(map);
+    this.refreshMessageReactions(message.message_id);
   }
 
   private updateInboxPreview(message: Message): void {
@@ -636,18 +699,309 @@ export class MessagingStoreService implements OnDestroy {
     this.recalcUnread(items);
   }
 
+  /**
+   * Normalize backend message shapes so UI can reliably render attachments/media.
+   * Supports legacy and current field names returned by API/WS payloads.
+   */
+  private normalizeMessageShape(raw: any): Message {
+    const base: Message = {
+      message_id: String(raw?.message_id ?? raw?.id ?? ''),
+      conversation_id: String(raw?.conversation_id ?? raw?.conversationId ?? ''),
+      sender_id: String(raw?.sender_id ?? raw?.senderId ?? ''),
+      sender_name: raw?.sender_name,
+      sender_username: raw?.sender_username,
+      sender_first_name: raw?.sender_first_name,
+      sender_last_name: raw?.sender_last_name,
+      message_type: (raw?.message_type ?? raw?.messageType ?? 'TEXT') as Message['message_type'],
+      content: raw?.content ?? '',
+      media_url: raw?.media_url ?? raw?.mediaUrl ?? raw?.url ?? raw?.file_url,
+      created_at: raw?.created_at ?? raw?.createdAt ?? new Date().toISOString(),
+      is_read: raw?.is_read,
+      reactions: raw?.reactions,
+      mentions: raw?.mentions,
+      attachments: raw?.attachments,
+      is_pinned: raw?.is_pinned,
+      pinned_at: raw?.pinned_at,
+      pinned_by: raw?.pinned_by,
+    };
+
+    const uuidRe =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+    // Normalize attachment objects (API may use fileId / id instead of file_id).
+    if (Array.isArray(base.attachments) && base.attachments.length > 0) {
+      const mapped: Attachment[] = (base.attachments as any[]).map((a) => ({
+        file_id: String(
+          a?.file_id ?? a?.fileId ?? a?.id ?? a?.attachment_id ?? a?.storage_file_id ?? ''
+        ).trim(),
+        filename: String(a?.filename ?? a?.file_name ?? a?.name ?? a?.original_filename ?? ''),
+        mime_type: a?.mime_type ?? a?.mimeType,
+        url: a?.url ?? a?.file_url ?? a?.download_url,
+      })).filter((a) => !!a.file_id && !a.file_id.startsWith('temp-'));
+
+      if (mapped.length > 0) {
+        return { ...base, attachments: mapped };
+      }
+    }
+
+    // Reconstruct attachments from alternate API fields.
+    let attachmentIds: string[] = [];
+    if (Array.isArray(raw?.attachment_ids)) {
+      attachmentIds = raw.attachment_ids.map((x: any) => String(x).trim()).filter(Boolean);
+    } else if (typeof raw?.attachment_ids === 'string' && raw.attachment_ids.trim()) {
+      attachmentIds = raw.attachment_ids
+        .split(/[,\s]+/)
+        .map((s: string) => s.trim())
+        .filter(Boolean);
+    }
+
+    if (attachmentIds.length === 0 && Array.isArray(raw?.file_ids)) {
+      attachmentIds = raw.file_ids.map((x: any) => String(x).trim()).filter(Boolean);
+    }
+
+    const pushId = (v: any) => {
+      const s = v != null && v !== '' ? String(v).trim() : '';
+      if (s && !attachmentIds.includes(s)) attachmentIds.push(s);
+    };
+
+    pushId(raw?.file_id);
+    pushId(raw?.attachment_id);
+    pushId(raw?.storage_file_id);
+    pushId(raw?.blob_id);
+
+    // Backend stores first attachment id in messaging.message.media_url (UUID), not a public URL.
+    const mediaAsId = String(base.media_url || '').trim();
+    if (
+      mediaAsId &&
+      !mediaAsId.startsWith('http://') &&
+      !mediaAsId.startsWith('https://') &&
+      !mediaAsId.startsWith('data:')
+    ) {
+      pushId(mediaAsId);
+    }
+
+    const contentTrim = String(base.content || '').trim();
+    if (attachmentIds.length === 0 && uuidRe.test(contentTrim)) {
+      attachmentIds.push(contentTrim);
+    }
+    // Some APIs store storage / attachment id as numeric string in content for FILE messages.
+    if (
+      attachmentIds.length === 0 &&
+      /^\d+$/.test(contentTrim) &&
+      (base.message_type === 'FILE' || base.message_type === 'IMAGE')
+    ) {
+      attachmentIds.push(contentTrim);
+    }
+
+    const filenames: string[] = Array.isArray(raw?.filenames)
+      ? raw.filenames.map((x: any) => String(x))
+      : raw?.filename
+      ? [String(raw.filename)]
+      : raw?.file_name
+      ? [String(raw.file_name)]
+      : base.content && !uuidRe.test(contentTrim)
+      ? [String(base.content)]
+      : [];
+
+    if (attachmentIds.length > 0 || filenames.length > 0) {
+      const fallbackMime = raw?.mime_type ?? raw?.attachment_mime_type;
+      const urlFallback = raw?.file_url ?? raw?.url ?? raw?.media_url ?? raw?.mediaUrl;
+      const ids = attachmentIds.length > 0 ? attachmentIds : [];
+      const built: Attachment[] = ids.map((id, idx) => ({
+        file_id: id,
+        filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
+        mime_type: fallbackMime,
+        url: urlFallback,
+      }));
+
+      // Filename only + direct URL (no storage id): still renderable as <img src>.
+      if (
+        built.length === 0 &&
+        filenames.length > 0 &&
+        urlFallback &&
+        String(urlFallback).match(/^https?:\/\//i)
+      ) {
+        built.push({
+          file_id: '',
+          filename: filenames[0],
+          mime_type: fallbackMime,
+          url: String(urlFallback),
+        });
+      }
+
+      if (built.length > 0) {
+        return { ...base, attachments: built };
+      }
+    }
+
+    return base;
+  }
+
   private playNotificationSound(): void {
     try {
       const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIGGS57OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBQLSKDf8sFuIwUug8/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy2os7ChRgs+jsq1gVC0ig3/LBbiMFLoLP8tuJNwgYZLvs6KFQEQtMpeHxuWUcBTaN1fPOfS8FKH7M8tqLOwoUYLPo7KtYFQtIoN/ywW4jBS6Cz/LbiTcIGGS77OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBULSKDf8sFuIwUugs/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy2os7ChRgs+jsq1gVC0ig3/LBbiMFLoLP8tuJNwgYZLvs6KFQEQtMpeHxuWUcBTaN1fPOfS8FKH7M8tqLOwoUYLPo7KtYFQtIoN/ywW4jBS6Cz/LbiTcIGGS77OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBULSKDf8sFuIwUugs/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy2os7ChRgs+jsq1gVC0ig3/LBbiMFLoLP8tuJNwgYZLvs6KFQEQtMpeHxuWUcBTaN1fPOfS8FKH7M8tqLOwoUYLPo7KtYFQtIoN/ywW4jBS6Cz/LbiTcIGGS77OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBULSKDf8sFuIwUugs/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy2os7ChRgs+jsq1gVC0ig3/LBbiMFLoLP8tuJNwgYZLvs6KFQEQtMpeHxuWUcBTaN1fPOfS8FKH7M8tqLOwoUYLPo7KtYFQtIoN/ywW4jBS6Cz/LbiTcIGGS77OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBULSKDf8sFuIwUugs/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy2os7ChRgs+jsq1gVC0ig3/LBbiMFLoLP8tuJNwgYZLvs6KFQEQtMpeHxuWUcBTaN1fPOfS8FKH7M8tqLOwoUYLPo7KtYFQtIoN/ywW4jBS6Cz/LbiTcIGGS77OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBULSKDf8sFuIwUugs/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy');
       audio.volume = 0.3;
       audio.play().catch(() => {});
-    } catch (err) {
-      console.warn('Notification sound failed:', err);
+    } catch {
     }
   }
 
   private recalcUnread(items: InboxItem[]): void {
     const total = items.reduce((sum, i) => sum + Number(i.unread_count || 0), 0);
     this.totalUnread$.next(total);
+  }
+
+  private hydrateReactionsForConversation(conversationId: string, messages: Message[]): void {
+    const fetchable = messages.filter(
+      (m) => !!m.message_id && !String(m.message_id).startsWith('temp-')
+    );
+    if (!fetchable.length) return;
+
+    const jobs = fetchable.map((m) =>
+      this.api.getReactions(m.message_id).pipe(
+        map((rows) => ({ messageId: m.message_id, reactions: this.normalizeReactionRows(rows) })),
+        catchError(() => of({ messageId: m.message_id, reactions: [] }))
+      )
+    );
+
+    forkJoin(jobs).subscribe((results) => {
+      const map = new Map(this.messagesMap$.value);
+      const current = [...(map.get(conversationId) || [])];
+      if (!current.length) return;
+
+      let changed = false;
+      for (const result of results) {
+        const idx = current.findIndex((m) => String(m.message_id) === String(result.messageId));
+        if (idx === -1) continue;
+        current[idx] = { ...current[idx], reactions: result.reactions };
+        changed = true;
+      }
+
+      if (changed) {
+        map.set(conversationId, current);
+        this.messagesMap$.next(map);
+      }
+    });
+  }
+
+  private refreshMessageReactions(messageId: string): void {
+    if (!messageId || String(messageId).startsWith('temp-')) return;
+
+    this.api.getReactions(messageId).subscribe({
+      next: (rows) => {
+        const normalized = this.normalizeReactionRows(rows);
+        const map = new Map(this.messagesMap$.value);
+        let changed = false;
+
+        for (const [conversationId, msgs] of map.entries()) {
+          const idx = msgs.findIndex((m) => String(m.message_id) === String(messageId));
+          if (idx === -1) continue;
+          const nextMsgs = [...msgs];
+          nextMsgs[idx] = { ...nextMsgs[idx], reactions: normalized };
+          map.set(conversationId, nextMsgs);
+          changed = true;
+          break;
+        }
+
+        if (changed) {
+          this.messagesMap$.next(map);
+        }
+      },
+      error: () => {},
+    });
+  }
+
+  private normalizeReactionRows(rows: any[]): any[] {
+    const byEmoji = new Map<string, { emoji: string; count: number; hasReacted: boolean; reactors: string[] }>();
+    const myContactId = String(this.auth.contactId || '');
+    const contacts = this.visibleContacts$.value;
+
+    for (const row of rows || []) {
+      const emoji = String(row?.emoji || '').trim();
+      if (!emoji) continue;
+
+      const contactId = String(row?.contact_id ?? row?.contactId ?? '');
+      const explicitHasReacted = row?.hasReacted ?? row?.has_reacted;
+      const hasReacted = explicitHasReacted === true || (contactId && contactId === myContactId);
+
+      const countFromRow = Number(row?.count ?? row?.reaction_count ?? 0);
+      const existing = byEmoji.get(emoji) || { emoji, count: 0, hasReacted: false, reactors: [] };
+
+      // Some APIs return one row per reaction; some return pre-aggregated count.
+      existing.count += countFromRow > 0 ? countFromRow : 1;
+      existing.hasReacted = existing.hasReacted || !!hasReacted;
+
+      // Track reactor display names when individual contactId is available
+      if (contactId && countFromRow <= 1) {
+        let name: string;
+        if (contactId === myContactId) {
+          name = 'You';
+        } else {
+          const contact = contacts.find(c => String(c.contact_id) === contactId);
+          name = contact ? getContactDisplayName(contact) : `User ${contactId}`;
+        }
+        if (!existing.reactors.includes(name)) {
+          existing.reactors.push(name);
+        }
+      }
+
+      byEmoji.set(emoji, existing);
+    }
+
+    return Array.from(byEmoji.values()).filter((r) => r.count > 0);
+  }
+
+  private applyReactionOptimistically(messageId: string, emoji: string, add: boolean): void {
+    const map = new Map(this.messagesMap$.value);
+    let didUpdate = false;
+
+    for (const [conversationId, msgs] of map.entries()) {
+      const idx = msgs.findIndex((m) => String(m.message_id) === String(messageId));
+      if (idx === -1) continue;
+
+      const target = msgs[idx];
+      const nextReactions = [...(target.reactions || [])];
+      const rIdx = nextReactions.findIndex((r) => r.emoji === emoji);
+
+      if (add) {
+        if (rIdx >= 0) {
+          const current = nextReactions[rIdx];
+          if (!current.hasReacted) {
+            nextReactions[rIdx] = {
+              ...current,
+              hasReacted: true,
+              count: Number(current.count || 0) + 1,
+            };
+          }
+        } else {
+          nextReactions.push({ emoji, count: 1, hasReacted: true });
+        }
+      } else {
+        if (rIdx >= 0) {
+          const current = nextReactions[rIdx];
+          const nextCount = Math.max(Number(current.count || 0) - (current.hasReacted ? 1 : 0), 0);
+          if (nextCount === 0) {
+            nextReactions.splice(rIdx, 1);
+          } else {
+            nextReactions[rIdx] = {
+              ...current,
+              hasReacted: false,
+              count: nextCount,
+            };
+          }
+        }
+      }
+
+      const updatedMsg: Message = { ...target, reactions: nextReactions };
+      const updatedMsgs = [...msgs];
+      updatedMsgs[idx] = updatedMsg;
+      map.set(conversationId, updatedMsgs);
+      didUpdate = true;
+      break;
+    }
+
+    if (didUpdate) {
+      this.messagesMap$.next(map);
+    }
   }
 }

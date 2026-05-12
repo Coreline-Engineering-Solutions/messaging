@@ -14,6 +14,17 @@ export {
   ChatWindow,
   Attachment,
   SidebarSide,
+  MessageReaction,
+  PresenceStatus,
+  TypingIndicator,
+  Thread,
+  Mention,
+  PinnedMessage,
+  ReadReceipt,
+  NotificationSettings,
+  ChannelPermissions,
+  ParticipantRole,
+  SearchFilter,
   getContactDisplayName,
   getMessageSenderName,
   createContactFromUser,
@@ -36,3 +47,10 @@ export { InboxListComponent } from './components/inbox-list/inbox-list.component
 export { NewConversationComponent } from './components/new-conversation/new-conversation.component';
 export { GroupManagerComponent } from './components/group-manager/group-manager.component';
 export { MessageInputComponent, MessagePayload } from './components/message-input/message-input.component';
+export { ThreadViewerComponent } from './components/thread-viewer/thread-viewer.component';
+export { ReactionPickerComponent } from './components/reaction-picker/reaction-picker.component';
+export { MessageActionsComponent } from './components/message-actions/message-actions.component';
+export { PresenceIndicatorComponent } from './components/presence-indicator/presence-indicator.component';
+export { TypingIndicatorComponent } from './components/typing-indicator/typing-indicator.component';
+export { SearchPanelComponent } from './components/search-panel/search-panel.component';
+export { MentionInputComponent } from './components/mention-input/mention-input.component';

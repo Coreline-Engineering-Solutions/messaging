@@ -20,16 +20,36 @@ export declare class MessagingFileService {
     private http;
     private auth;
     private config;
-    private readonly storageUrl;
-    private readonly messagingUrl;
+    /** Base URL, e.g. https://ces-ticketing-system-db.onrender.com/api */
+    private readonly base;
+    /** Ordered fallback lists — tried top-to-bottom on 404 / network error. */
+    private readonly uploadEndpoints;
+    private readonly retrieveEndpoints;
+    private readonly deleteEndpoints;
+    /** In-session cache: file_id → data URL. Cleared on page reload. */
+    private readonly mediaCache;
     constructor(http: HttpClient, auth: AuthService, config: MessagingConfig);
     uploadFile(file: File, category?: string): Observable<FileUploadResponse>;
     uploadFiles(files: File[]): Observable<FileUploadResponse[]>;
     retrieveFile(fileId: string): Observable<FileRetrieveResponse>;
+    /**
+     * Returns a data URL for the given file_id.
+     * Cached in memory for the session lifetime — never re-fetched if already loaded.
+     */
     getFileDataUrl(fileId: string): Observable<string>;
+    /** Synchronous cache lookup — null if not loaded yet. */
+    getCachedDataUrl(fileId: string): string | null;
+    /** Pre-warm cache for a list of file IDs (fire-and-forget, skips temp/cached). */
+    prewarmCache(fileIds: string[]): void;
     deleteFile(fileId: string): Observable<any>;
     sendMessageWithAttachments(conversationId: string, senderContactId: string, content: string, fileIds: string[], filenames: string[]): Observable<any>;
-    private handleError;
+    /**
+     * POST each URL in `urls` sequentially (using the body from `bodyFn()`).
+     * Falls back to the next URL only on 404 or network error (status 0).
+     * Logs every attempt with its result.
+     */
+    private tryEndpoints;
+    private toFriendlyError;
     static ɵfac: i0.ɵɵFactoryDeclaration<MessagingFileService, never>;
     static ɵprov: i0.ɵɵInjectableDeclaration<MessagingFileService>;
 }

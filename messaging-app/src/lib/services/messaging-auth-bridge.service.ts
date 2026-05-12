@@ -41,7 +41,6 @@ export class MessagingAuthBridgeService {
         return { session, contact };
       }),
       catchError(error => {
-        console.error('Messaging authentication failed:', error);
         return throwError(() => error);
       })
     );
@@ -70,7 +69,6 @@ export class MessagingAuthBridgeService {
       return of(null); // Already authenticated
     }
 
-    console.log('Messaging authentication required for:', email);
     return of(null);
   }
 }

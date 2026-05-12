@@ -190,7 +190,7 @@ import { InboxItem } from '../../models/messaging.models';
       width: 48px;
       height: 48px;
       border-radius: 50%;
-      background: linear-gradient(135deg, #dbeafe 0%, #93c5fd 100%);
+      background: #0d2540;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -198,16 +198,16 @@ import { InboxItem } from '../../models/messaging.models';
     }
 
     .avatar mat-icon {
-      color: #1F4BD8;
+      color: rgba(255, 255, 255, 0.7);
       font-size: 24px;
     }
 
     .group-avatar {
-      background: linear-gradient(135deg, #dbeafe 0%, #60a5fa 100%);
+      background: #0a1f38;
     }
 
     .group-avatar mat-icon {
-      color: #173396;
+      color: rgba(255, 255, 255, 0.7);
     }
 
     .conversation-info {
@@ -259,12 +259,12 @@ import { InboxItem } from '../../models/messaging.models';
     }
 
     .has-unread .conv-preview {
-      color: #374151;
+      color: rgba(255, 255, 255, 0.9);
       font-weight: 500;
     }
 
     .unread-badge {
-      background: #1F4BD8;
+      background: #1a5fa8;
       color: #fff;
       border-radius: 10px;
       min-width: 20px;
@@ -302,7 +302,7 @@ import { InboxItem } from '../../models/messaging.models';
     .context-menu {
       position: fixed;
       z-index: 10001;
-      background: #1e1e2e;
+      background: #071d30;
       border-radius: 8px;
       padding: 4px 0;
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);

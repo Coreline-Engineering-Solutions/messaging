@@ -42,6 +42,16 @@ export interface Message {
     created_at: string;
     is_read?: boolean | string;
     read_at?: string;
+    edited_at?: string;
+    deleted_at?: string;
+    parent_message_id?: string;
+    thread_count?: number;
+    reactions?: MessageReaction[];
+    mentions?: string[];
+    attachments?: Attachment[];
+    is_pinned?: boolean;
+    pinned_at?: string;
+    pinned_by?: string;
 }
 /** Get display name from message sender fields */
 export declare function getMessageSenderName(msg: Message): string;
@@ -51,13 +61,19 @@ export interface Conversation {
     is_group: boolean;
     created_at: string;
     participants?: ConversationParticipant[];
+    description?: string;
+    is_private?: boolean;
+    created_by?: string;
+    pinned_messages?: PinnedMessage[];
+    notification_settings?: NotificationSettings;
 }
 export interface ConversationParticipant {
     contact_id: string;
-    first_name: string;
-    last_name: string;
+    email: string;
+    username: string;
+    company: string;
     profile_image_url?: string;
-    joined_at: string;
+    joined_at?: string;
 }
 export interface CompanyConnection {
     connection_id: string;
@@ -67,7 +83,7 @@ export interface CompanyConnection {
     created_at: string;
 }
 export interface WebSocketMessage {
-    type: 'new_message' | 'conversation_updated' | 'connection_invite_received' | 'pong' | 'auth_success' | 'error';
+    type: 'new_message' | 'conversation_updated' | 'group_updated' | 'connection_invite_received' | 'pong' | 'auth_success' | 'error';
     timestamp?: string;
     data?: any;
     message?: string;
@@ -85,6 +101,82 @@ export interface Attachment {
     mime_type?: string;
     size_bytes?: number;
     url?: string;
+}
+export interface MessageReaction {
+    reaction_id?: string;
+    message_id?: string;
+    contact_id?: string;
+    emoji: string;
+    created_at?: string;
+    count?: number;
+    hasReacted?: boolean;
+    reactors?: string[];
+}
+export interface PresenceStatus {
+    contact_id: string;
+    status: 'online' | 'offline' | 'away' | 'busy';
+    last_seen?: string;
+    custom_status?: string;
+}
+export interface TypingIndicator {
+    conversation_id: string;
+    contact_id: string;
+    contact_name: string;
+    timestamp: string;
+}
+export interface Thread {
+    parent_message_id: string;
+    reply_count: number;
+    last_reply_at: string;
+    participants: string[];
+    is_following?: boolean;
+}
+export interface Mention {
+    message_id: string;
+    mentioned_contact_id: string;
+    mention_type: 'user' | 'channel' | 'everyone';
+    position: number;
+}
+export interface PinnedMessage {
+    message_id: string;
+    conversation_id: string;
+    pinned_by: string;
+    pinned_at: string;
+}
+export interface ReadReceipt {
+    message_id: string;
+    contact_id: string;
+    read_at: string;
+}
+export interface NotificationSettings {
+    conversation_id: string;
+    is_muted: boolean;
+    mute_until?: string;
+    notify_on_mention: boolean;
+    notify_on_all_messages: boolean;
+}
+export interface ChannelPermissions {
+    can_post: boolean;
+    can_delete_own: boolean;
+    can_delete_any: boolean;
+    can_pin: boolean;
+    can_invite: boolean;
+    can_manage_settings: boolean;
+}
+export interface ParticipantRole {
+    contact_id: string;
+    conversation_id: string;
+    role: 'admin' | 'member' | 'guest';
+    permissions: ChannelPermissions;
+    joined_at: string;
+}
+export interface SearchFilter {
+    query: string;
+    user_id?: string;
+    date_from?: string;
+    date_to?: string;
+    file_type?: string;
+    conversation_id?: string;
 }
 export type SidebarSide = 'left' | 'right';
 /**

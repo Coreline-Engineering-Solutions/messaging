@@ -6,6 +6,7 @@
   "license": "MIT",
   "files": [
     "messaging-app/dist/ces-messaging/**/*",
+    "!messaging-app/dist/ces-messaging/**/*.tgz",
     "INSTALLATION.md",
     "QUICK_START.md",
     "DEVELOPER_INTEGRATION_GUIDE.md",

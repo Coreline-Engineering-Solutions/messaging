@@ -49,18 +49,20 @@ import { SidebarSide } from '../../models/messaging.models';
       width: 44px;
       height: 44px;
       border-radius: 50%;
-      background: linear-gradient(135deg, #1F4BD8 0%, #173396 100%);
+      background: #041322;
+      border: 2px solid rgba(255, 255, 255, 0.18);
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 3px 16px rgba(23, 51, 150, 0.4);
-      transition: transform 0.2s ease, box-shadow 0.2s ease;
+      box-shadow: 0 3px 16px rgba(0, 0, 0, 0.6);
+      transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
       position: relative;
     }
 
     .fab-inner:hover {
       transform: scale(1.1);
-      box-shadow: 0 4px 20px rgba(23, 51, 150, 0.6);
+      border-color: rgba(255, 255, 255, 0.4);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
     }
 
     .fab-inner.has-unread {
@@ -91,8 +93,8 @@ import { SidebarSide } from '../../models/messaging.models';
     }
 
     @keyframes pulse {
-      0%, 100% { box-shadow: 0 3px 16px rgba(23, 51, 150, 0.4); }
-      50% { box-shadow: 0 3px 24px rgba(23, 51, 150, 0.7); }
+      0%, 100% { box-shadow: 0 3px 16px rgba(0, 0, 0, 0.6); border-color: rgba(255,255,255,0.18); }
+      50% { box-shadow: 0 3px 24px rgba(255, 255, 255, 0.15); border-color: rgba(255,255,255,0.4); }
     }
   `],
 })

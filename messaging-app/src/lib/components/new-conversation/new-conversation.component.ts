@@ -143,7 +143,7 @@ import { Contact, getContactDisplayName } from '../../models/messaging.models';
       width: 40px;
       height: 40px;
       border-radius: 50%;
-      background: linear-gradient(135deg, #dbeafe 0%, #93c5fd 100%);
+      background: #0d2540;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -151,7 +151,7 @@ import { Contact, getContactDisplayName } from '../../models/messaging.models';
     }
 
     .contact-avatar mat-icon {
-      color: #1F4BD8;
+      color: rgba(255, 255, 255, 0.7);
     }
 
     .contact-info {

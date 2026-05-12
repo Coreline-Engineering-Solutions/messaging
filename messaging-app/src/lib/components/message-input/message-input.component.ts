@@ -135,24 +135,42 @@ export interface MessagePayload {
 
     .input-wrapper {
       display: flex;
-      align-items: flex-end;
+      align-items: center;
       gap: 4px;
       background: rgba(255, 255, 255, 0.1);
       border-radius: 24px;
-      padding: 2px 4px 2px 4px;
+      padding: 2px 4px;
     }
 
-    .attach-btn {
-      width: 32px;
-      height: 32px;
+    .attach-btn,
+    .send-btn {
       flex-shrink: 0;
+      width: 36px;
+      height: 36px;
+      padding: 0 !important;
+      margin: 0;
+      min-width: 36px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      line-height: 0 !important;
     }
 
-    .attach-btn mat-icon {
+    .attach-btn mat-icon,
+    .send-btn mat-icon {
       color: rgba(255, 255, 255, 0.7);
       font-size: 20px;
       width: 20px;
       height: 20px;
+      line-height: 20px;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .send-btn mat-icon {
+      color: rgba(255, 255, 255, 0.9);
     }
 
     .message-textarea {
@@ -173,21 +191,24 @@ export interface MessagePayload {
       color: rgba(255, 255, 255, 0.5);
     }
 
-    .send-btn {
-      width: 32px;
-      height: 32px;
-      flex-shrink: 0;
-    }
-
-    .send-btn mat-icon {
-      color: rgba(255, 255, 255, 0.9);
-      font-size: 20px;
-      width: 20px;
-      height: 20px;
-    }
-
     .send-btn:disabled mat-icon {
       color: rgba(255, 255, 255, 0.3);
+    }
+
+    /* MDC mat-icon-button inner wrapper often shifts glyphs downward without this */
+    :host ::ng-deep .attach-btn .mat-mdc-button-touch-target,
+    :host ::ng-deep .send-btn .mat-mdc-button-touch-target {
+      height: 36px !important;
+      width: 36px !important;
+    }
+
+    :host ::ng-deep .attach-btn .mdc-icon-button__icon,
+    :host ::ng-deep .send-btn .mdc-icon-button__icon {
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      margin: 0 !important;
+      padding: 0 !important;
     }
 
     .drag-overlay {

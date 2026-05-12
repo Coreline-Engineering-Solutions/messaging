@@ -26,8 +26,7 @@ export class MessagingApiService {
 
   // ── Inbox ──
   getInbox(contactId: string): Observable<InboxItem[]> {
-    const params = new HttpParams().set('session_gid', this.auth.sessionGid!);
-    return this.http.get<InboxItem[]>(`${this.base}/contacts/${contactId}/inbox`, { params });
+    return this.http.get<InboxItem[]>(`${this.base}/contacts/${contactId}/inbox`);
   }
 
   // ── Messages ──
@@ -38,11 +37,10 @@ export class MessagingApiService {
     limit = 50
   ): Observable<Message[]> {
     let params = new HttpParams()
-      .set('contactId', contactId)
-      .set('limit', limit.toString())
-      .set('sessionGid', this.auth.sessionGid!);
+      .set('contact_id', contactId)
+      .set('limit', limit.toString());
     if (beforeMessageId) {
-      params = params.set('beforeMessageId', beforeMessageId);
+      params = params.set('before', beforeMessageId);
     }
     return this.http.get<Message[]>(
       `${this.base}/conversations/${conversationId}/messages`,
@@ -58,15 +56,9 @@ export class MessagingApiService {
     mediaUrl?: string
   ): Observable<any> {
     const body: any = {
-      session_gid: this.auth.sessionGid,
-      senderContactId,
-      messageType,
+      sender_id: parseInt(senderContactId),
+      content,
     };
-    if (messageType === 'TEXT') {
-      body.content = content;
-    } else {
-      body.mediaUrl = mediaUrl || content;
-    }
     return this.http.post(`${this.base}/conversations/${conversationId}/messages`, body);
   }
 
@@ -77,18 +69,15 @@ export class MessagingApiService {
     messageType: 'TEXT' | 'IMAGE' = 'TEXT'
   ): Observable<any> {
     return this.http.post(`${this.base}/direct-messages`, {
-      session_gid: this.auth.sessionGid,
-      senderContactId,
-      recipientContactId,
-      messageType,
+      sender_id: parseInt(senderContactId),
+      recipient_id: parseInt(recipientContactId),
       content,
     });
   }
 
   markConversationRead(conversationId: string, contactId: string): Observable<any> {
     return this.http.post(`${this.base}/conversations/${conversationId}/read`, {
-      session_gid: this.auth.sessionGid,
-      contactId,
+      contact_id: parseInt(contactId, 10),
     });
   }
 
@@ -99,9 +88,8 @@ export class MessagingApiService {
     name?: string
   ): Observable<Conversation> {
     return this.http.post<Conversation>(`${this.base}/conversations`, {
-      session_gid: this.auth.sessionGid,
-      creatorContactId,
-      participantContactIds,
+      creator_id: parseInt(creatorContactId),
+      participants: participantContactIds.map(id => parseInt(id)),
       name: name || null,
     });
   }
@@ -109,33 +97,26 @@ export class MessagingApiService {
   getDirectConversation(contactA: string, contactB: string): Observable<any> {
     const params = new HttpParams()
       .set('contactA', contactA)
-      .set('contactB', contactB)
-      .set('sessionGid', this.auth.sessionGid!);
+      .set('contactB', contactB);
     return this.http.get(`${this.base}/conversations/direct`, { params });
   }
 
   getConversationParticipants(conversationId: string): Observable<ConversationParticipant[]> {
-    const params = new HttpParams().set('session_gid', this.auth.sessionGid!);
     return this.http.get<ConversationParticipant[]>(
-      `${this.base}/conversations/${conversationId}/participants`,
-      { params }
+      `${this.base}/conversations/${conversationId}/participants`
     );
   }
 
   // ── Contacts ──
   getVisibleContacts(contactId: string): Observable<Contact[]> {
-    const params = new HttpParams().set('session_gid', this.auth.sessionGid!);
     return this.http.get<Contact[]>(
-      `${this.base}/contacts/${contactId}/visible-contacts`,
-      { params }
+      `${this.base}/contacts/${contactId}/visible-contacts`
     );
   }
 
-  checkContactProfile(userGid: string, updates?: any): Observable<any> {
+  checkContactProfile(contactId: string, updates?: any): Observable<any> {
     return this.http.post(`${this.base}/contacts/check`, {
-      session_gid: this.auth.sessionGid,
-      userGid,
-      updates: updates || {},
+      contact_id: parseInt(contactId),
     });
   }
 
@@ -147,35 +128,33 @@ export class MessagingApiService {
     groupName?: string,
     participantContactIds?: string[]
   ): Observable<any> {
-    const body: any = {
-      session_gid: this.auth.sessionGid,
-      contactId,
-      action,
+    const payload: any = {
+      contact_id: parseInt(contactId),
     };
-    if (conversationId) body.conversationId = conversationId;
-    if (groupName) body.groupName = groupName;
-    if (participantContactIds) body.participantContactIds = participantContactIds;
-    return this.http.post(`${this.base}/groups`, body);
+    if (conversationId) payload.conversation_id = parseInt(conversationId);
+    if (groupName) payload.name = groupName;
+    if (participantContactIds) payload.participant_ids = participantContactIds.map(id => parseInt(id));
+    return this.http.post(`${this.base}/groups`, {
+      action,
+      payload,
+    });
   }
 
   // ── Delete / Clear ──
   deleteConversation(conversationId: string, contactId: string): Observable<any> {
     return this.http.post(`${this.base}/conversations/${conversationId}/delete`, {
-      session_gid: this.auth.sessionGid,
       contactId,
     });
   }
 
   clearConversation(conversationId: string, contactId: string): Observable<any> {
     return this.http.post(`${this.base}/conversations/${conversationId}/clear`, {
-      session_gid: this.auth.sessionGid,
       contactId,
     });
   }
 
   deleteGroup(conversationId: string, contactId: string): Observable<any> {
     return this.http.post(`${this.base}/groups/${conversationId}/delete`, {
-      session_gid: this.auth.sessionGid,
       contactId,
     });
   }
@@ -184,32 +163,120 @@ export class MessagingApiService {
   uploadAttachment(file: File): Observable<any> {
     const formData = new FormData();
     formData.append('file', file, file.name);
-    formData.append('session_gid', this.auth.sessionGid!);
     return this.http.post(`${this.base}/attachments/upload`, formData);
   }
 
   // ── Connections ──
   sendConnectionInvite(adminContactId: string, targetCompany: string): Observable<any> {
     return this.http.post(`${this.base}/connections/invites`, {
-      session_gid: this.auth.sessionGid,
-      adminContactId,
-      targetCompany,
+      admin_contact_id: parseInt(adminContactId),
+      target_company: targetCompany,
     });
   }
 
   respondToConnection(adminContactId: string, connectionId: string, accept: boolean): Observable<any> {
     return this.http.post(`${this.base}/connections/${connectionId}/respond`, {
-      session_gid: this.auth.sessionGid,
-      adminContactId,
+      admin_contact_id: parseInt(adminContactId),
       accept,
     });
   }
 
   getCompanyConnections(contactId: string): Observable<CompanyConnection[]> {
-    const params = new HttpParams().set('session_gid', this.auth.sessionGid!);
     return this.http.get<CompanyConnection[]>(
-      `${this.base}/contacts/${contactId}/connections`,
-      { params }
+      `${this.base}/contacts/${contactId}/connections`
     );
+  }
+
+  // ── Reactions ──
+  addReaction(messageId: string, contactId: string, emoji: string): Observable<any> {
+    return this.http.post(`${this.base}/messages/${messageId}/reactions`, {
+      contact_id: parseInt(contactId),
+      emoji,
+    });
+  }
+
+  removeReaction(messageId: string, contactId: string, emoji: string): Observable<any> {
+    return this.http.delete(`${this.base}/messages/${messageId}/reactions`, {
+      body: {
+        contact_id: parseInt(contactId),
+        emoji,
+      },
+    });
+  }
+
+  getReactions(messageId: string): Observable<any[]> {
+    return this.http.get<any[]>(`${this.base}/messages/${messageId}/reactions`);
+  }
+
+  // ── Threads ──
+  getThreadMessages(parentMessageId: string, contactId: string): Observable<Message[]> {
+    const params = new HttpParams()
+      .set('contact_id', contactId);
+    return this.http.get<Message[]>(`${this.base}/messages/${parentMessageId}/thread`, { params });
+  }
+
+  sendThreadReply(parentMessageId: string, senderContactId: string, content: string): Observable<any> {
+    return this.http.post(`${this.base}/messages/${parentMessageId}/replies`, {
+      sender_id: parseInt(senderContactId),
+      content,
+    });
+  }
+
+  // ── Message Actions ──
+  editMessage(messageId: string, contactId: string, newContent: string): Observable<any> {
+    return this.http.put(`${this.base}/messages/${messageId}`, {
+      contactId,
+      content: newContent,
+    });
+  }
+
+  deleteMessage(messageId: string, contactId: string): Observable<any> {
+    return this.http.delete(`${this.base}/messages/${messageId}`, {
+      body: {
+        contactId,
+      },
+    });
+  }
+
+  pinMessage(messageId: string, conversationId: string, contactId: string): Observable<any> {
+    return this.http.post(`${this.base}/messages/${messageId}/pin`, {
+      conversationId,
+      contactId,
+    });
+  }
+
+  unpinMessage(messageId: string, contactId: string): Observable<any> {
+    return this.http.delete(`${this.base}/messages/${messageId}/pin`, {
+      body: {
+        contactId,
+      },
+    });
+  }
+
+  // ── Presence ──
+  updatePresence(contactId: string, status: string, customStatus?: string): Observable<any> {
+    const params = new HttpParams().set('status', status);
+    return this.http.put(`${this.base}/contacts/${contactId}/presence`, null, { params });
+  }
+
+  getPresence(contactId: string): Observable<any> {
+    return this.http.get(`${this.base}/contacts/${contactId}/presence`);
+  }
+
+  // ── Search ──
+  searchMessages(contactId: string, query: string, conversationId?: string): Observable<Message[]> {
+    return this.http.post<Message[]>(`${this.base}/search`, {
+      contact_id: parseInt(contactId),
+      query,
+      conversation_id: conversationId ? parseInt(conversationId) : null,
+    });
+  }
+
+  // ── Notifications ──
+  updateNotificationSettings(conversationId: string, contactId: string, settings: any): Observable<any> {
+    return this.http.put(`${this.base}/conversations/${conversationId}/notifications`, {
+      contactId,
+      ...settings,
+    });
   }
 }
