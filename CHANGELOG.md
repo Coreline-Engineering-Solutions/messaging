@@ -4,6 +4,26 @@ All notable changes to the @coreline-engineering-solutions/messaging library wil
 
 ---
 
+## [1.0.7] - 2026-05-12
+
+### Added
+
+- `CONSUMER_SETUP.md` for host-app install paths (`npm link`, `file:`, Git).
+- `SECURITY.md` for vulnerability reporting.
+- GitHub Actions workflow to build the library on push/PR; Dependabot for `messaging-app` npm dependencies.
+
+### Changed
+
+- Aligned **root** and **`messaging-app`** package versions to **1.0.7**; rebuilt `messaging-app/dist/ces-messaging` for publish/install from tags.
+- `demo_webste/` added to `.gitignore` and removed from the tracked tree (personal testing only).
+- Documentation index updated; removed overlapping guides (`INTEGRATION_FIXES.md`, `GIT_INSTALLATION_GUIDE.md`, `PUBLISH_CHECKLIST.md`) and the old `examples/` snippets.
+
+### Fixed
+
+- Demo-style consumers reference `@coreline-engineering-solutions/messaging` consistently with the published package name.
+
+---
+
 ## [1.0.1] - 2026-04-17
 
 ### ✅ Fixed - All Integration Issues Resolved

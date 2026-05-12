@@ -1,22 +1,25 @@
 {
   "name": "@coreline-engineering-solutions/messaging",
-  "version": "1.0.6",
+  "version": "1.0.7",
+  "scripts": {
+    "build:lib": "npm run build:lib --prefix messaging-app"
+  },
   "description": "Angular 17-21+ messaging library with real-time WebSocket support, Material Design UI, and state management",
   "author": "Coreline Engineering Solutions",
   "license": "MIT",
   "files": [
     "messaging-app/dist/ces-messaging/**/*",
     "!messaging-app/dist/ces-messaging/**/*.tgz",
+    "CONSUMER_SETUP.md",
+    "VERSIONING.md",
+    "SECURITY.md",
     "INSTALLATION.md",
     "QUICK_START.md",
     "DEVELOPER_INTEGRATION_GUIDE.md",
-    "INTEGRATION_FIXES.md",
     "CHANGELOG.md",
-    "GIT_INSTALLATION_GUIDE.md",
     "ARCHITECTURE.md",
     "FRONTEND_INTEGRATION_GUIDE.md",
-    "AI_INTEGRATION_PROMPT.md",
-    "PUBLISH_CHECKLIST.md"
+    "AI_INTEGRATION_PROMPT.md"
   ],
   "main": "./messaging-app/dist/ces-messaging/fesm2022/ces-messaging.mjs",
   "module": "./messaging-app/dist/ces-messaging/fesm2022/ces-messaging.mjs",

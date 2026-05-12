@@ -5,7 +5,7 @@
 Install the messaging library from GitHub:
 
 ```bash
-npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main --legacy-peer-deps
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.7 --legacy-peer-deps
 ```
 
 ## Install from Branch
@@ -13,7 +13,10 @@ npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#
 Install from a specific branch:
 
 ```bash
-# Latest main branch (recommended)
+# Latest tagged release (recommended)
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.7 --legacy-peer-deps
+
+# Or track main branch
 npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main --legacy-peer-deps
 
 # Other branches
@@ -54,6 +57,7 @@ These will be installed automatically with npm.
 
 ## Next Steps
 
-1. See [QUICK_START.md](QUICK_START.md) for 5-minute integration
-2. See [DEVELOPER_INTEGRATION_GUIDE.md](DEVELOPER_INTEGRATION_GUIDE.md) for complete setup
-3. See [ARCHITECTURE.md](ARCHITECTURE.md) for system overview
+1. See [CONSUMER_SETUP.md](CONSUMER_SETUP.md) for local `npm link`, `file:`, or Git workflows
+2. See [QUICK_START.md](QUICK_START.md) for 5-minute integration
+3. See [DEVELOPER_INTEGRATION_GUIDE.md](DEVELOPER_INTEGRATION_GUIDE.md) for complete setup
+4. See [ARCHITECTURE.md](ARCHITECTURE.md) for system overview

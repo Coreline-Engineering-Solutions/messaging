@@ -7,6 +7,8 @@ A complete, production-ready Angular 17+ messaging system with real-time WebSock
 [![Material](https://img.shields.io/badge/Material-17.3-purple)](https://material.angular.io/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
+**Use this library in your Angular app:** start with [**CONSUMER_SETUP.md**](CONSUMER_SETUP.md) (install paths + checklist), then [**QUICK_START.md**](QUICK_START.md) for wiring `MESSAGING_CONFIG` and the overlay.
+
 ---
 
 ## ✨ Features
@@ -29,8 +31,8 @@ A complete, production-ready Angular 17+ messaging system with real-time WebSock
 ### Installation
 
 ```bash
-# Install v1.0.1 (recommended - includes all fixes)
-npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.1
+# Install pinned release (recommended)
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#v1.0.7 --legacy-peer-deps
 
 # Install peer dependencies
 npm install @angular/material@^17.3.10 @angular/cdk@^17.3.10
@@ -98,15 +100,16 @@ onLoginSuccess(sessionGid: string, userId: string, email: string) {
 
 | Document | Description |
 |----------|-------------|
+| **[CONSUMER_SETUP.md](CONSUMER_SETUP.md)** | Install in another project (`npm link`, `file:`, Git) |
+| **[VERSIONING.md](VERSIONING.md)** | Tags, semver, and release steps |
 | **[QUICK_START.md](QUICK_START.md)** | 5-minute integration guide |
+| **[INSTALLATION.md](INSTALLATION.md)** | Git install one-liner and peer dependencies |
 | **[DEVELOPER_INTEGRATION_GUIDE.md](DEVELOPER_INTEGRATION_GUIDE.md)** | Complete step-by-step guide |
-| **[INTEGRATION_FIXES.md](INTEGRATION_FIXES.md)** | ⭐ Integration issues resolved |
 | **[CHANGELOG.md](CHANGELOG.md)** | Version history and changes |
-| **[GIT_INSTALLATION_GUIDE.md](GIT_INSTALLATION_GUIDE.md)** | Installing from Git repository |
+| **[SECURITY.md](SECURITY.md)** | Security reporting policy |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | System architecture & diagrams |
 | **[FRONTEND_INTEGRATION_GUIDE.md](FRONTEND_INTEGRATION_GUIDE.md)** | Complete API documentation |
 | **[AI_INTEGRATION_PROMPT.md](AI_INTEGRATION_PROMPT.md)** | Prompt for AI assistants |
-| **[examples/](examples/)** | Working code examples |
 
 ---
 
@@ -185,10 +188,7 @@ Output: `messaging-app/dist/ces-messaging/`
 
 ### Run Demo App
 
-```bash
-cd messaging-app
-npm start
-```
+Use **CONSUMER_SETUP.md** (optional local sandbox) if you keep a personal Angular app that depends on `file:../messaging-app/dist/ces-messaging`. The in-repo **`demo_webste/`** path is gitignored and not part of the published tree.
 
 ### Run Tests
 
@@ -208,13 +208,13 @@ npm test
 5. Tag: `git tag -a v1.1.0 -m "Release v1.1.0"`
 6. Push: `git push origin main --tags`
 
-See [PUBLISH_CHECKLIST.md](PUBLISH_CHECKLIST.md) for details.
+Confirm **CI** (`.github/workflows/ci.yml`) is green, `messaging-app/dist/ces-messaging` matches your published `files` layout, and the root `package.json` version matches the tag.
 
 ---
 
 ## 🎨 Customization
 
-All components use inline styles that can be easily customized. See the `examples/` folder for styled versions.
+All components use inline styles that can be easily customized. Follow **QUICK_START.md** and **CONSUMER_SETUP.md** in a small host app or optional local sandbox.
 
 ---
 
@@ -265,7 +265,7 @@ MIT License - see [LICENSE](LICENSE) file for details
 ## 📞 Support
 
 - Check the documentation in the repository
-- Review example code in `examples/` folder
+- See **CONSUMER_SETUP.md** for install paths and a minimal host checklist
 - Use `AI_INTEGRATION_PROMPT.md` with your AI assistant
 - Open an issue on GitHub
 

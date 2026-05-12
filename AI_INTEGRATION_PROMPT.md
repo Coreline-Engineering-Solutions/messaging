@@ -177,11 +177,13 @@ Please help me with the following:
 ## Available Documentation
 
 The library includes these documentation files:
+- `CONSUMER_SETUP.md` - Install paths for other projects (`npm link`, `file:`, Git)
+- `INSTALLATION.md` - Git install one-liner and peer dependencies
 - `QUICK_START.md` - 5-minute integration guide
 - `DEVELOPER_INTEGRATION_GUIDE.md` - Complete step-by-step guide
 - `ARCHITECTURE.md` - System architecture and diagrams
 - `FRONTEND_INTEGRATION_GUIDE.md` - Complete API documentation
-- `examples/` folder - Working code examples
+- `SECURITY.md` - Security reporting policy
 
 ---
 

@@ -16,7 +16,7 @@ This guide shows exactly what you need to do to integrate the messaging library 
 ## Step 1: Build the Library
 
 ```bash
-cd messaging-library/messaging-app
+cd messaging-app
 npm install
 npm run build:lib
 ```
@@ -45,10 +45,10 @@ npm link @coreline-engineering-solutions/messaging
 # In the library folder
 cd dist/ces-messaging
 npm pack
-# This creates: ces-messaging-1.0.0.tgz
+# This creates: coreline-engineering-solutions-messaging-<version>.tgz
 
 # In your Angular app
-npm install /path/to/ces-messaging-1.0.0.tgz
+npm install /path/to/coreline-engineering-solutions-messaging-1.0.7.tgz
 ```
 
 ### Option C: Copy to node_modules
@@ -642,7 +642,7 @@ After login, open browser console:
 
 **Solution:** Rebuild and reinstall the library
 ```bash
-cd messaging-library/messaging-app
+cd messaging-app
 npm run build:lib
 cd dist/ces-messaging
 npm link
@@ -727,11 +727,12 @@ your-angular-app/
 
 ## Additional Resources
 
+- **CONSUMER_SETUP.md** — Optional local sandbox (`file:` / `npm link` / Git)
+- **INSTALLATION.md** - Git install one-liner
 - **QUICK_START.md** - 5-minute integration guide
 - **FRONTEND_INTEGRATION_GUIDE.md** - Complete API documentation
 - **ARCHITECTURE.md** - System architecture and diagrams
 - **AI_INTEGRATION_PROMPT.md** - Copy/paste prompt for AI assistants
-- **examples/** - Working code examples
 
 ## Support
 

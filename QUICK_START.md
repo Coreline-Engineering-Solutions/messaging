@@ -8,8 +8,16 @@ Get the messaging library integrated into your Angular app in **5 simple steps**
 
 ### Step 1: Build the Library (2 minutes)
 
+From the **repository root**:
+
 ```bash
-cd messaging-library/messaging-app
+npm run build:lib
+```
+
+Or from `messaging-app`:
+
+```bash
+cd messaging-app
 npm install
 npm run build:lib
 ```
@@ -28,8 +36,9 @@ npm install @angular/material@^17.3.10 @angular/cdk@^17.3.10
 # Option B: npm pack (for distribution)
 cd dist/ces-messaging
 npm pack
+# Creates coreline-engineering-solutions-messaging-<version>.tgz
 cd /path/to/your-angular-app
-npm install /path/to/ces-messaging-1.0.0.tgz
+npm install /path/to/coreline-engineering-solutions-messaging-1.0.7.tgz
 npm install @angular/material@^17.3.10 @angular/cdk@^17.3.10
 ```
 
@@ -127,19 +136,15 @@ Your messaging system is now integrated. The floating chat button will appear af
 
 ## 📚 Next Steps
 
-### For Complete Examples
-See the `examples/` folder for:
-- Full login component with UI
-- Dashboard with messaging stats
-- Navbar with unread counts
-- Complete styling examples
+### For a runnable consumer
+Use **CONSUMER_SETUP.md** (optional local sandbox app with a `file:` dependency on `messaging-app/dist/ces-messaging`). Overview: same doc.
 
 ### For Detailed Documentation
 - **DEVELOPER_INTEGRATION_GUIDE.md** - Complete step-by-step guide
 - **FRONTEND_INTEGRATION_GUIDE.md** - Complete API documentation
 - **ARCHITECTURE.md** - System architecture and diagrams
 - **AI_INTEGRATION_PROMPT.md** - Prompt for AI assistants
-- **examples/README.md** - Example files guide
+- **CONSUMER_SETUP.md** - Install paths (`link`, `file:`, Git) for other projects
 
 ### For Backend Setup
 You need a backend that provides:
@@ -156,7 +161,7 @@ See `FRONTEND_INTEGRATION_GUIDE.md` for complete API specification.
 ### "Cannot find module '@coreline-engineering-solutions/messaging'"
 ```bash
 # Rebuild and relink
-cd messaging-library/messaging-app
+cd messaging-app
 npm run build:lib
 cd dist/ces-messaging
 npm link
@@ -167,12 +172,12 @@ npm link @coreline-engineering-solutions/messaging
 ### Floating button not showing
 - Check: `messagingAuth.isAuthenticated()` returns `true`
 - Check: `MessagingOverlayComponent` is in app template
-- Check: Browser console for errors
+- Check the browser **Network** tab and app error handling for failures
 
 ### WebSocket not connecting
 - Verify `wsBaseUrl` in config
 - Check backend WebSocket server is running
-- Check browser console for connection errors
+- Check the browser **Network** tab (WS filter) for connection failures
 
 ---
 
@@ -247,19 +252,18 @@ messagingAuth.setSession(sessionGid, contact)
 
 ## 🎨 Customization
 
-All components use inline styles that can be easily customized. See `examples/` for styled versions.
+All components use inline styles that can be easily customized. Use a small host app or optional local sandbox (see **CONSUMER_SETUP.md**).
 
 ---
 
 ## 📞 Support
 
 - Check `DEVELOPER_INTEGRATION_GUIDE.md` for detailed instructions
-- Review `examples/` folder for working code
-- Check browser console for errors
+- See **`CONSUMER_SETUP.md`** for working integration patterns
 - Verify backend API is accessible
 
 ---
 
 **Built with Angular 17+ | Material Design | WebSocket | RxJS**
 
-*Ready to integrate in 5 minutes. Production-ready out of the box.*
+*Ready to integrate in minutes. See [CONSUMER_SETUP.md](CONSUMER_SETUP.md) and [SECURITY.md](SECURITY.md) before production use.*

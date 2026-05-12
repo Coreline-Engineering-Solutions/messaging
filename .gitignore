@@ -1,3 +1,6 @@
+# Local-only sandbox (not tracked)
+demo_webste/
+
 # Dependencies
 node_modules/
 .venv/
@@ -11,9 +14,8 @@ __pycache__/
 # Environment
 .env
 
-# Build output
-dist/
-!messaging-app/dist/ces-messaging/
+# Build output (repo root only); see messaging-app/.gitignore for messaging-app/
+/dist/
 .angular/
 
 # IDE

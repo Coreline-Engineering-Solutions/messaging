@@ -40,10 +40,10 @@ Copy `dist/ces-messaging/` into your host app's `node_modules/@coreline-engineer
 ```bash
 cd dist/ces-messaging
 npm pack
-# Produces @ces-messaging-1.0.0.tgz
+# Produces coreline-engineering-solutions-messaging-<version>.tgz
 
 # In your host app:
-npm install /path/to/@ces-messaging-1.0.0.tgz
+npm install /path/to/coreline-engineering-solutions-messaging-1.0.1.tgz
 ```
 
 ## Integration
