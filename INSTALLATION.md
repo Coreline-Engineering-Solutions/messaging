@@ -28,6 +28,11 @@ The `--legacy-peer-deps` flag is recommended because:
 - npm strict mode may flag minor version differences
 - This flag allows compatible versions to install without errors
 
+## Configuration hints (CES / FastAPI)
+
+- WebSocket URL used by the library: **`${wsBaseUrl}/messaging/ws/${contactId}`**. If REST is at `https://host/api`, set **`wsBaseUrl` to `wss://host/api`** (same `/api` prefix as `apiBaseUrl`).
+- Many backends expect a **numeric** `contact_id` in paths; use **by-email** (or your API’s lookup) first, then set `Contact.contact_id`. See **QUICK_START.md** and **FRONTEND_INTEGRATION_GUIDE.md**.
+
 ## Import in Your Code
 
 After installation, import components and services:

@@ -1,6 +1,10 @@
 import { Injectable, Inject, OnDestroy } from '@angular/core';
 import { BehaviorSubject, Subject } from 'rxjs';
 import { MESSAGING_CONFIG, MessagingConfig } from '../messaging.config';
+import {
+  warnEmailLikeContactId,
+  warnIfWsBaseUrlMissingApiPrefixWhenApiHasIt,
+} from '../messaging-dev-warnings';
 import { WebSocketMessage } from '../models/messaging.models';
 
 @Injectable({ providedIn: 'root' })
@@ -72,6 +76,9 @@ export class MessagingWebSocketService implements OnDestroy {
     if (!this.contactId || !this.sessionGid) return;
 
     this.connectionStatus$.next('connecting');
+
+    warnIfWsBaseUrlMissingApiPrefixWhenApiHasIt(this.config.apiBaseUrl, this.config.wsBaseUrl);
+    warnEmailLikeContactId(this.contactId);
 
     try {
       this.ws = new WebSocket(`${this.config.wsBaseUrl}/messaging/ws/${this.contactId}`);

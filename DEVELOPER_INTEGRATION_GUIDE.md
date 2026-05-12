@@ -100,6 +100,12 @@ export const appConfig: ApplicationConfig = {
 };
 ```
 
+#### CES / FastAPI style (`/api` prefix and numeric `contact_id`)
+
+The WebSocket URL is always **`${wsBaseUrl}/messaging/ws/${contactId}`**. If REST lives at `https://host/api/...`, set **`wsBaseUrl` to `wss://host/api`** (same path prefix as HTTP), not only `wss://host`.
+
+Many APIs expect **`contact_id` as a number** in URL segments. Resolve via **by-email** (or your server’s equivalent) first, then pass that id in `Contact.contact_id`. Using an email string when the backend expects bigint typically breaks inbox and WS routes.
+
 ### 4.2 Update `index.html`
 
 Add Material Icons and fonts:

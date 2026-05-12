@@ -9,6 +9,14 @@ All messaging endpoints are available at:
 https://your-api-host/messaging
 ```
 
+When the host app mounts the API under **`/api`**, the browser still hits paths like `https://your-api-host/api/messaging/...`. Configure the Angular library with **`apiBaseUrl`** ending in **`/api`**, and set **`wsBaseUrl`** to the **same path prefix** (e.g. `wss://your-api-host/api`) so the client opens:
+
+`wss://your-api-host/api/messaging/ws/{contact_id}`
+
+### `contact_id`: numeric vs email
+
+Many backends treat `{contact_id}` in routes as a **bigint or integer**. In that case you must use the **numeric** contact id returned by your backend (often after a **by-email** lookup). Putting a raw email in `{contact_id}` will fail URL parsing or database casts. Integrate using the numeric id in `Contact.contact_id` unless your API contract explicitly allows email in those segments.
+
 ## Authentication
 
 All messaging endpoints use **session-based authentication** via `session_gid` (UUID from login). Include `session_gid` in every request body or as query parameter for GET requests.

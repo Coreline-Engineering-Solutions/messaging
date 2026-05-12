@@ -54,6 +54,8 @@ export const appConfig: ApplicationConfig = {
 };
 ```
 
+If your API is under **`/api`**, use **`wss://…/api`** for `wsBaseUrl` too (same path prefix as `apiBaseUrl`). The library opens **`${wsBaseUrl}/messaging/ws/${contactId}`**. Many backends need a **numeric** `contact_id`; resolve with **by-email** first when your server provides it.
+
 **`src/index.html`** - Add Material Icons:
 ```html
 <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">

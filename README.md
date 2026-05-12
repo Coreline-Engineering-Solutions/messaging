@@ -57,6 +57,8 @@ export const appConfig: ApplicationConfig = {
 };
 ```
 
+When REST is mounted at **`/api`**, set **`wsBaseUrl` to `wss://…/api`** as well. Use a **numeric** `contact_id` in `Contact` when your routes expect bigint (see **by-email** / `createContactFromUser` in docs).
+
 **`app.component.ts`**
 ```typescript
 import { MessagingOverlayComponent } from '@coreline-engineering-solutions/messaging';
@@ -71,7 +73,8 @@ import { MessagingOverlayComponent } from '@coreline-engineering-solutions/messa
 export class AppComponent {}
 ```
 
-**After Login**
+**After Login** — `contact_id` must match your backend (often a **numeric** messaging id from **by-email** or your user profile, not the login email string when paths use bigint):
+
 ```typescript
 import { AuthService, Contact } from '@coreline-engineering-solutions/messaging';
 

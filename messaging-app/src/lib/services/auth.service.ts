@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { BehaviorSubject, Observable, of } from 'rxjs';
 import { tap, catchError } from 'rxjs/operators';
 import { MESSAGING_CONFIG, MessagingConfig } from '../messaging.config';
+import { warnEmailLikeContactId } from '../messaging-dev-warnings';
 import { AuthSession, Contact } from '../models/messaging.models';
 
 @Injectable({ providedIn: 'root' })
@@ -56,6 +57,7 @@ export class AuthService {
   }
 
   setSession(sessionGid: string, contact: Contact): void {
+    warnEmailLikeContactId(contact.contact_id);
     this.sessionGid$.next(sessionGid);
     this.currentContact$.next(contact);
     this.persistSession();

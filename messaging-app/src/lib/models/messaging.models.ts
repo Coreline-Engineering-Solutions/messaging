@@ -222,28 +222,40 @@ export type SidebarSide = 'left' | 'right';
 /**
  * Helper function to create a Contact object from common user data shapes.
  * Reduces boilerplate when integrating with existing auth systems.
- * 
+ *
+ * **`contact_id` must match your backend**  
+ * Many APIs (including typical CES / FastAPI bigint routes) expect a **numeric** contact id in
+ * URL paths such as `/messaging/contacts/{contact_id}/...`. Email is a common human identifier
+ * but is often **wrong** for those routes. Prefer:
+ * - resolving the server contact id first (e.g. `GET .../messaging/contacts/by-email?email=...` when your API provides it), then passing that id as `contact_id`, or
+ * - `contactIdHint: 'id'` / `'userId'` when your auth user already carries the numeric messaging id.
+ *
  * @param user - User object with email and optional fields
  * @param sessionGid - Session GUID from authentication
- * @param contactIdHint - Optional field name to use for contact_id (e.g., 'email', 'id', 'userId')
- * @returns Contact object ready for setSession()
- * 
+ * @param contactIdHint - Optional field name for `contact_id` (see `MessagingConfig.contactIdHint`)
+ * @returns Contact object ready for `setSession()`
+ *
  * @example
- * // Using email as contact_id (default)
+ * // Backend expects numeric id — use server lookup first, then set contact_id
+ * // const numericId = await fetchByEmail(user.email);
+ * // createContactFromUser({ ...user, id: numericId }, sessionGid, 'id');
+ *
+ * @example
+ * // Using email as contact_id (only if your backend truly accepts email in paths)
  * const contact = createContactFromUser({
  *   email: 'user@example.com',
  *   firstName: 'John',
  *   lastName: 'Doe',
  *   company: 'Acme Corp'
  * }, sessionGid);
- * 
- * // Using custom field as contact_id
+ *
+ * @example
  * const contact = createContactFromUser({
  *   email: 'user@example.com',
- *   id: 'uuid-123',
+ *   id: '12345',
  *   firstName: 'John'
  * }, sessionGid, 'id');
- * 
+ *
  * messagingAuth.setSession(sessionGid, contact);
  */
 export function createContactFromUser(user: {

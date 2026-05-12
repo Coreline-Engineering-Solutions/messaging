@@ -2,6 +2,7 @@ import { Injectable, Inject } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { MESSAGING_CONFIG, MessagingConfig } from '../messaging.config';
+import { warnEmailLikeContactId } from '../messaging-dev-warnings';
 import { AuthService } from './auth.service';
 import {
   InboxItem,
@@ -26,6 +27,7 @@ export class MessagingApiService {
 
   // ── Inbox ──
   getInbox(contactId: string): Observable<InboxItem[]> {
+    warnEmailLikeContactId(contactId);
     return this.http.get<InboxItem[]>(`${this.base}/contacts/${contactId}/inbox`);
   }
 
@@ -109,6 +111,7 @@ export class MessagingApiService {
 
   // ── Contacts ──
   getVisibleContacts(contactId: string): Observable<Contact[]> {
+    warnEmailLikeContactId(contactId);
     return this.http.get<Contact[]>(
       `${this.base}/contacts/${contactId}/visible-contacts`
     );
@@ -182,6 +185,7 @@ export class MessagingApiService {
   }
 
   getCompanyConnections(contactId: string): Observable<CompanyConnection[]> {
+    warnEmailLikeContactId(contactId);
     return this.http.get<CompanyConnection[]>(
       `${this.base}/contacts/${contactId}/connections`
     );
@@ -255,11 +259,13 @@ export class MessagingApiService {
 
   // ── Presence ──
   updatePresence(contactId: string, status: string, customStatus?: string): Observable<any> {
+    warnEmailLikeContactId(contactId);
     const params = new HttpParams().set('status', status);
     return this.http.put(`${this.base}/contacts/${contactId}/presence`, null, { params });
   }
 
   getPresence(contactId: string): Observable<any> {
+    warnEmailLikeContactId(contactId);
     return this.http.get(`${this.base}/contacts/${contactId}/presence`);
   }
 
