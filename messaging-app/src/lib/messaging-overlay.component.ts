@@ -17,6 +17,11 @@ import { Contact } from './models/messaging.models';
     </ng-container>
   `,
   styles: [`
+    :host {
+      position: relative;
+      z-index: 1000;
+    }
+
     .cdk-overlay-container {
       z-index: 10000 !important;
     }

@@ -129,14 +129,14 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
       transform: translateX(0);
     }
 
-    /* ── Resize handle ── */
+    /* ── Resize handle (below header so header controls stay clickable) ── */
     .resize-handle {
       position: absolute;
       top: 0;
       bottom: 0;
       width: 5px;
       cursor: ew-resize;
-      z-index: 10;
+      z-index: 1;
       transition: background 0.15s;
     }
 
@@ -161,6 +161,8 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
       padding: 12px 12px 12px 16px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.15);
       flex-shrink: 0;
+      position: relative;
+      z-index: 2;
     }
 
     .header-left {
@@ -194,8 +196,19 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
     .hdr-btn {
       width: 32px;
       height: 32px;
+      min-width: 32px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       border-radius: 6px !important;
       transition: background 0.15s, box-shadow 0.15s;
+      --mdc-icon-button-state-layer-size: 32px;
+    }
+
+    .hdr-btn .mat-mdc-button-touch-target {
+      width: 32px;
+      height: 32px;
     }
 
     .hdr-btn:hover {
