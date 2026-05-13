@@ -36,26 +36,58 @@ The library expects **external authentication**. My app must:
 
 The library does NOT handle login/registration - it only manages the messaging session after authentication.
 
+### Install the library (pick one)
+
+**A — From Git (typical for consumer apps)**
+
+```bash
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main --legacy-peer-deps
+```
+
+Use `#v1.x.x` instead of `#main` to pin a release tag. Install Angular Material/CDK peers compatible with the host app’s Angular major (e.g. `^17.3.0` for Angular 17).
+
+**B — Local clone / npm link (library developers only)**
+
+```bash
+cd messaging-app
+npm install
+npm run build:lib
+cd dist/ces-messaging && npm link
+# then in consumer app:
+npm link @coreline-engineering-solutions/messaging
+```
+
+### CES / FastAPI style: `/api` prefix and numeric `contact_id`
+
+If the messaging REST API lives under **`/api`** (e.g. `https://host/api/messaging/...`):
+
+1. Set **`apiBaseUrl`** to include **`/api`**, e.g. `https://host/api`.
+2. Set **`wsBaseUrl`** to the **same path prefix**, e.g. `wss://host/api` — not bare `wss://host` unless WebSockets are intentionally mounted at the host root.
+
+The library opens WebSockets at:
+
+`{wsBaseUrl}/messaging/ws/{contactId}`
+
+so `wsBaseUrl` must match wherever your server upgrades WS (usually the same gateway prefix as HTTP).
+
+**`contact_id`:** Many backends use **integer/bigint** ids in URL paths. Before `setSession`, resolve the numeric messaging contact id (e.g. **`GET /api/messaging/contacts/by-email/{email}`** when your API provides it). Put that **numeric** id in `Contact.contact_id` (digits as string is fine). Do **not** pass a raw email as `contact_id` when paths expect a number.
+
+The library may emit **`console.warn`** in development if `apiBaseUrl` contains `/api` but `wsBaseUrl` does not, or if `contact_id` contains `@` — treat as configuration hints.
+
 ### Integration Requirements
 
 **What I need to do:**
 
-1. **Build and install the library**
-   ```bash
-   cd messaging-library/messaging-app
-   npm install
-   npm run build:lib
-   npm link dist/ces-messaging
-   ```
+1. Install the library (see **Install the library** above).
 
 2. **Configure API endpoints** in `app.config.ts`:
    ```typescript
    import { MESSAGING_CONFIG, MessagingConfig } from '@coreline-engineering-solutions/messaging';
    
    const messagingConfig: MessagingConfig = {
-     apiBaseUrl: 'https://my-backend-api.com',
-     wsBaseUrl: 'wss://my-backend-api.com',
-     storageApiUrl: 'https://my-storage-api.com/api'
+     apiBaseUrl: 'https://my-backend-api.com/api',
+     wsBaseUrl: 'wss://my-backend-api.com/api',
+     storageApiUrl: 'https://my-backend-api.com/api'
    };
    
    providers: [
@@ -73,13 +105,13 @@ The library does NOT handle login/registration - it only manages the messaging s
    `
    ```
 
-4. **Initialize after login**:
+4. **Initialize after login** — `contact_id` must be the **numeric** messaging id your API expects in paths (resolve via by-email or profile field if needed):
    ```typescript
    import { AuthService, Contact } from '@coreline-engineering-solutions/messaging';
    
    onLoginSuccess(response) {
      const contact: Contact = {
-       contact_id: response.user_id,
+       contact_id: String(response.messaging_contact_id), // numeric id from API, not email
        user_gid: response.session_gid,
        email: response.email,
        company_name: response.company_name,
@@ -99,10 +131,10 @@ The library does NOT handle login/registration - it only manages the messaging s
 
 ### Backend API Requirements
 
-My backend must provide these REST endpoints:
+My backend must provide these REST endpoints (paths below are **after** the `{apiBaseUrl}/messaging` prefix that the library adds; if `apiBaseUrl` is `https://host/api`, full paths are `https://host/api/messaging/...`):
 
 ```
-Base: https://my-api.com/messaging
+Base (relative to apiBaseUrl): /messaging
 
 GET    /contacts/{contactId}/inbox
 GET    /contacts/{contactId}/visible-contacts
@@ -120,8 +152,10 @@ All endpoints require `session_gid` in request body or query params.
 
 ### WebSocket Requirements
 
+The browser URL is **`{wsBaseUrl}/messaging/ws/{contactId}`** (must match your server). Example when HTTP API is under `/api`:
+
 ```
-WS: wss://my-api.com/messaging/ws/{contactId}
+WS: wss://my-api.com/api/messaging/ws/{contactId}
 
 Client sends:
 {
