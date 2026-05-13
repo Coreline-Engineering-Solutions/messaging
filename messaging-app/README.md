@@ -1,3 +1,5 @@
+Updated 2026-05-13
+
 # @coreline-engineering-solutions/messaging — Angular Messaging Library
 
 A reusable Angular 17 library that adds a full-featured messaging sidebar to any Angular application. Includes real-time WebSocket messaging, file attachments, group management, and a modern blue-themed UI.
