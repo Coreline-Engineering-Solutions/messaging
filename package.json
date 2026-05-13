@@ -7,16 +7,8 @@
   "files": [
     "messaging-app/dist/ces-messaging/**/*",
     "!messaging-app/dist/ces-messaging/**/*.tgz",
-    "INSTALLATION.md",
-    "QUICK_START.md",
-    "DEVELOPER_INTEGRATION_GUIDE.md",
-    "INTEGRATION_FIXES.md",
-    "CHANGELOG.md",
-    "GIT_INSTALLATION_GUIDE.md",
-    "ARCHITECTURE.md",
-    "FRONTEND_INTEGRATION_GUIDE.md",
-    "AI_INTEGRATION_PROMPT.md",
-    "PUBLISH_CHECKLIST.md"
+    "README.md",
+    "MESSAGING_INTEGRATION.md"
   ],
   "main": "./messaging-app/dist/ces-messaging/fesm2022/coreline-engineering-solutions-messaging.mjs",
   "module": "./messaging-app/dist/ces-messaging/fesm2022/coreline-engineering-solutions-messaging.mjs",

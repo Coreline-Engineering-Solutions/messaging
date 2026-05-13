@@ -1,141 +1,94 @@
-# Messaging Integration - CES Ticketing System API
+# Messaging Integration (Single Source of Truth)
 
-## Overview
+This is the only integration guide for `@coreline-engineering-solutions/messaging` in this repo.
 
-Messaging functionality integrated into ticketing API at `/api/messaging` prefix.
+## Contract (Library Expectations)
 
-## Architecture
+The library always builds URLs like this:
 
-**Dual Database Approach:**
-- **Ticketing endpoints** → Sync `psycopg2` connections
-- **Messaging endpoints** → Async `asyncpg` pool (managed via lifespan)
+- REST: `${apiBaseUrl}/messaging/...`
+- WebSocket: `${wsBaseUrl}/messaging/ws/${contactId}`
 
-Both use same PostgreSQL database but different connection methods.
+If your backend is mounted under `/api`, configure:
 
-## What Was Added
+- `apiBaseUrl = https://host/api`
+- `wsBaseUrl = wss://host/api`
 
-### 1. Dependencies
-```python
-from app.messaging_lib import (
-    ConnectionManager,
-    DBHelper,
-    pg_listener,
-    init_messaging,
-    create_messaging_router
-)
-```
+Do not use root `wss://host` unless your websocket endpoint is intentionally mounted at root.
 
-### 2. Lifespan Manager
-- Creates asyncpg pool for messaging
-- Initializes ConnectionManager for WebSocket
-- Starts PostgreSQL LISTEN/NOTIFY listener
-- Cleans up on shutdown
+## Required `contact_id` Rules
 
-### 3. Endpoints
+- `Contact.contact_id` must be a string.
+- For CES/FastAPI-style backends that cast IDs to `int`/`bigint`, it must be a numeric value.
+- Do not pass raw email as `contact_id` for path-based routes.
+- Resolve by email first when needed:
+  - `GET /api/messaging/contacts/by-email/{email}`
 
-**Router-based (from messaging_lib):**
-- All standard messaging endpoints at `/api/messaging/*`
-- See `API_ENDPOINTS.md` for full list
+## Angular Consumer Setup (Minimum)
 
-**Custom endpoints:**
-- `GET /api/messaging/contacts/by-email/{email}` - Lookup contact by email
-- `GET /api/messaging/conversations/{conversation_id}/participants` - Get participants
-- `GET /api/messaging/contacts/{contact_id}/inbox-enhanced` - Enhanced inbox
-
-**WebSocket:**
-- `WS /api/messaging/ws/{contact_id}` - Real-time messaging
-
-### Angular app (`@coreline-engineering-solutions/messaging`)
-
-The client builds the socket URL as **`{wsBaseUrl}/messaging/ws/{contactId}`**. Because this API mounts the socket under **`/api/messaging/ws/...`**, set:
-
-- **`wsBaseUrl`** = same origin as REST **including the `/api` segment**, e.g. `wss://your-host/api` (not `wss://your-host`).
-
-REST routes under `messaging_lib` use **`int(contact_id)`** for inbox, visible-contacts, etc. Use **numeric** `contact_id` from the DB (e.g. resolve with **`GET /api/messaging/contacts/by-email/{email}`**) before calling `AuthService.setSession` — do not pass raw email as `contact_id` in the path.
-
-## Configuration
-
-Uses **separate messaging database** from environment variable:
-```python
-# In .env
-MESSAGING_DB_URL=postgresql://user:password@host:5432/messaging_db?sslmode=require
-
-# In app/main.py
-messaging_db_url = settings.MESSAGING_DB_URL
-```
-
-**Two databases:**
-- Ticketing DB → `DB_HOST`, `DB_NAME`, etc. (psycopg2)
-- Messaging DB → `MESSAGING_DB_URL` (asyncpg)
-
-## Running
+Install:
 
 ```bash
-cd ticketing-api
-uvicorn app.main:app --reload --port 8000
+npm install git+https://github.com/Coreline-Engineering-Solutions/messaging.git#main --legacy-peer-deps
+npm install @angular/material@^17.3.0 @angular/cdk@^17.3.0 --legacy-peer-deps
 ```
 
-Messaging endpoints available at `http://localhost:8000/api/messaging/*`
+Configure:
 
-## Testing
-
-### Health Check
-```bash
-curl http://localhost:8000/
+```typescript
+const messagingConfig: MessagingConfig = {
+  apiBaseUrl: 'https://your-messaging-host/api',
+  wsBaseUrl: 'wss://your-messaging-host/api',
+  storageApiUrl: 'https://your-messaging-host/api',
+};
 ```
 
-### Test Messaging
-```bash
-# Get inbox
-curl http://localhost:8000/api/messaging/contacts/123/inbox
+Session init:
 
-# Send direct message
-curl -X POST http://localhost:8000/api/messaging/direct-messages \
-  -H "Content-Type: application/json" \
-  -d '{"sender_id":"123","recipient_id":"456","content":"Test"}'
+```typescript
+const contact: Contact = {
+  contact_id: String(numericContactId),
+  user_gid: sessionGid,
+  email,
+  company_name,
+  is_active: true,
+};
+messagingAuth.setSession(sessionGid, contact);
 ```
 
-### WebSocket Test
-```javascript
-const ws = new WebSocket('ws://localhost:8000/api/messaging/ws/123');
-ws.onopen = () => ws.send(JSON.stringify({type: 'auth'}));
-ws.onmessage = (e) => console.log(JSON.parse(e.data));
-```
+Recommended defensive behavior in host apps:
 
-## Real-time Features
+- Clear stale messaging session before initializing a new one.
+- Keep messaging logged out if no valid numeric contact ID is available.
+- Coerce `contact_id` to string before calling `setSession`.
 
-PostgreSQL LISTEN/NOTIFY broadcasts:
-- `new_message` - New messages
-- `message_read` - Read receipts
-- `conversation_created` - New conversations
-- `group_updated` - Group changes
-- `connection_update` - Connection status
-- `contact_update` - Contact changes
+## CES Incident Summary (Known Failure Pattern)
 
-Events auto-broadcast to connected WebSocket clients.
+Observed failure mode:
 
-## File Structure
+1. Frontend pointed messaging calls to an old host -> messaging routes returned 404.
+2. By-email lookup also hit old host -> `GET /api/messaging/contacts/by-email/{email}` returned 404.
+3. Stale/invalid contact state reached library init -> runtime error:
+   - `TypeError: contactId?.includes is not a function`
 
-```
-ticketing-api/
-├── app/
-│   ├── main.py                 # Integrated messaging + ticketing
-│   ├── messaging_lib.py        # Messaging library (copied)
-│   ├── config.py               # Shared DB config
-│   ├── ticket_service.py       # Ticketing logic
-│   └── ...
-├── MESSAGING_INTEGRATION.md    # This file
-└── ...
-```
+Fix that worked:
 
-## Notes
+- Split API bases: messaging uses its own host.
+- Keep non-messaging auth/app APIs on their own host.
+- Set messaging config to `/api` for both REST and WS base.
+- Update by-email lookup to the messaging host.
+- Add defensive session cleanup and `contact_id` coercion.
 
-- Messaging uses `str` for contact_id (flexible typing)
-- Ticketing uses `int` for IDs
-- Both coexist - no conflicts
-- PostgreSQL listener auto-reconnects on failure
-- WebSocket handles auth, ping/pong, typing indicators
+Current result: build passes and messaging loads correctly.
 
-## API Documentation
+## Packaging / Release Rules (Git Installs)
 
-See `API_ENDPOINTS.md` in project root for complete endpoint reference.
+For `npm install git+...` consumers, built output must be present in Git:
+
+1. Build library:
+   - `cd messaging-app && npm run build:lib`
+2. Ensure `messaging-app/dist/ces-messaging/**` is tracked.
+3. Push `main`.
+4. In consumer app, reinstall dependency so lockfile moves to latest commit.
+
+If consumers report "Failed to resolve entry for package", first verify `node_modules/@coreline-engineering-solutions/messaging/messaging-app/dist/ces-messaging/fesm2022/coreline-engineering-solutions-messaging.mjs` exists.
