@@ -458,23 +458,39 @@ class MessagingWebSocketService {
         this.reconnectAttempts = 0;
         this.doConnect();
     }
+    /** Drop any in-flight or previous socket so a new WebSocket() never overlaps CONNECTING + OPEN. */
+    abandonCurrentSocket() {
+        if (!this.ws)
+            return;
+        this.ws.onopen = null;
+        this.ws.onmessage = null;
+        this.ws.onerror = null;
+        this.ws.onclose = null;
+        try {
+            this.ws.close();
+        }
+        catch {
+            /* ignore */
+        }
+        this.ws = null;
+    }
     disconnect() {
         this.stopPing();
         clearTimeout(this.reconnectTimer);
-        if (this.ws) {
-            this.ws.onclose = null;
-            this.ws.close();
-            this.ws = null;
-        }
+        this.abandonCurrentSocket();
         this.connectionStatus$.next('disconnected');
     }
     subscribe(conversationId) {
         this.subscribedConversations.add(conversationId);
-        this.send({ type: 'subscribe', conversation_id: conversationId });
+        if (this.ws?.readyState === WebSocket.OPEN) {
+            this.send({ type: 'subscribe', conversation_id: conversationId });
+        }
     }
     unsubscribe(conversationId) {
         this.subscribedConversations.delete(conversationId);
-        this.send({ type: 'unsubscribe', conversation_id: conversationId });
+        if (this.ws?.readyState === WebSocket.OPEN) {
+            this.send({ type: 'unsubscribe', conversation_id: conversationId });
+        }
     }
     subscribeAll(conversationIds) {
         conversationIds.forEach((id) => this.subscribe(id));
@@ -489,6 +505,7 @@ class MessagingWebSocketService {
         this.connectionStatus$.next('connecting');
         warnIfWsBaseUrlMissingApiPrefixWhenApiHasIt(this.config.apiBaseUrl, this.config.wsBaseUrl);
         warnEmailLikeContactId(this.contactId);
+        this.abandonCurrentSocket();
         try {
             this.ws = new WebSocket(`${this.config.wsBaseUrl}/messaging/ws/${this.contactId}`);
         }
@@ -962,7 +979,8 @@ class MessagingStoreService {
                 const currentContact = this.auth.currentContact;
                 if (currentContact && currentContact.email) {
                     const match = contacts.find(c => c.email === currentContact.email);
-                    if (match && match.contact_id !== currentContact.contact_id) {
+                    if (match &&
+                        String(match.contact_id) !== String(currentContact.contact_id)) {
                         this.auth.setSession(this.auth.sessionGid, { ...currentContact, contact_id: match.contact_id });
                         this.wsService.disconnect();
                         this.wsService.connect(match.contact_id, this.auth.sessionGid);
@@ -1063,19 +1081,39 @@ class MessagingStoreService {
         }
         if (!conversationId)
             return;
+        const tempMessageId = 'temp-' + Date.now();
+        const optimistic = {
+            message_id: tempMessageId,
+            conversation_id: conversationId,
+            sender_id: contactId,
+            sender_name: 'You',
+            message_type: messageType,
+            content,
+            created_at: new Date().toISOString(),
+            is_read: true,
+        };
+        this.appendMessage(optimistic);
         this.api.sendMessage(conversationId, contactId, content, messageType).subscribe({
             next: (res) => {
-                const optimistic = {
-                    message_id: 'temp-' + Date.now(),
+                const realId = res?.message_id ?? res?.id ?? res?.messageId;
+                if (realId == null || String(realId).startsWith('temp-')) {
+                    return;
+                }
+                const merged = this.normalizeMessageShape({
+                    ...optimistic,
+                    ...res,
+                    message_id: String(realId),
                     conversation_id: conversationId,
-                    sender_id: contactId,
-                    sender_name: 'You',
-                    message_type: messageType,
-                    content,
-                    created_at: new Date().toISOString(),
-                    is_read: true,
-                };
-                this.appendMessage(optimistic);
+                });
+                const map = new Map(this.messagesMap$.value);
+                const msgs = [...(map.get(conversationId) || [])];
+                const idx = msgs.findIndex((m) => m.message_id === tempMessageId);
+                if (idx >= 0) {
+                    msgs[idx] = merged;
+                    map.set(conversationId, msgs);
+                    this.messagesMap$.next(map);
+                    this.refreshMessageReactions(merged.message_id);
+                }
             },
             error: () => { },
         });
@@ -1291,6 +1329,17 @@ class MessagingStoreService {
         return this.inbox$.value;
     }
     // ── Private helpers ──
+    /**
+     * Prefer `{ type, data }`; support flat `{ type, ...fields }` envelopes from older backends.
+     */
+    wsEventPayload(msg) {
+        if (msg.data !== undefined && msg.data !== null) {
+            return msg.data;
+        }
+        const raw = msg;
+        const { type: _t, data: _d, timestamp: _ts, message: _msg, ...rest } = raw;
+        return Object.keys(rest).length ? rest : null;
+    }
     listenWebSocket() {
         this.wsSub?.unsubscribe();
         this.wsSub = this.wsService.onMessage$.subscribe((msg) => this.handleWsMessage(msg));
@@ -1298,7 +1347,7 @@ class MessagingStoreService {
     handleWsMessage(msg) {
         switch (msg.type) {
             case 'new_message':
-                this.handleNewMessage(msg.data);
+                this.handleNewMessage(this.wsEventPayload(msg));
                 break;
             case 'conversation_updated':
                 this.loadInbox();
@@ -1307,7 +1356,7 @@ class MessagingStoreService {
                 }
                 break;
             case 'group_updated':
-                this.handleGroupUpdated(msg.data);
+                this.handleGroupUpdated(this.wsEventPayload(msg));
                 break;
             case 'error':
                 this.handleWebSocketError(msg.message);

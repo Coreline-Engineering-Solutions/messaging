@@ -218,7 +218,10 @@ export class MessagingStoreService implements OnDestroy {
         const currentContact = this.auth.currentContact;
         if (currentContact && currentContact.email) {
           const match = contacts.find(c => c.email === currentContact.email);
-          if (match && match.contact_id !== currentContact.contact_id) {
+          if (
+            match &&
+            String(match.contact_id) !== String(currentContact.contact_id)
+          ) {
             this.auth.setSession(this.auth.sessionGid!, { ...currentContact, contact_id: match.contact_id });
             
             this.wsService.disconnect();
@@ -331,19 +334,40 @@ export class MessagingStoreService implements OnDestroy {
 
     if (!conversationId) return;
 
+    const tempMessageId = 'temp-' + Date.now();
+    const optimistic: Message = {
+      message_id: tempMessageId,
+      conversation_id: conversationId,
+      sender_id: contactId,
+      sender_name: 'You',
+      message_type: messageType,
+      content,
+      created_at: new Date().toISOString(),
+      is_read: true,
+    };
+    this.appendMessage(optimistic);
+
     this.api.sendMessage(conversationId, contactId, content, messageType).subscribe({
       next: (res) => {
-        const optimistic: Message = {
-          message_id: 'temp-' + Date.now(),
+        const realId = res?.message_id ?? res?.id ?? res?.messageId;
+        if (realId == null || String(realId).startsWith('temp-')) {
+          return;
+        }
+        const merged = this.normalizeMessageShape({
+          ...optimistic,
+          ...res,
+          message_id: String(realId),
           conversation_id: conversationId,
-          sender_id: contactId,
-          sender_name: 'You',
-          message_type: messageType,
-          content,
-          created_at: new Date().toISOString(),
-          is_read: true,
-        };
-        this.appendMessage(optimistic);
+        });
+        const map = new Map(this.messagesMap$.value);
+        const msgs = [...(map.get(conversationId) || [])];
+        const idx = msgs.findIndex((m) => m.message_id === tempMessageId);
+        if (idx >= 0) {
+          msgs[idx] = merged;
+          map.set(conversationId, msgs);
+          this.messagesMap$.next(map);
+          this.refreshMessageReactions(merged.message_id);
+        }
       },
       error: () => {},
     });
@@ -592,6 +616,18 @@ export class MessagingStoreService implements OnDestroy {
   }
 
   // ── Private helpers ──
+  /**
+   * Prefer `{ type, data }`; support flat `{ type, ...fields }` envelopes from older backends.
+   */
+  private wsEventPayload(msg: WebSocketMessage): any {
+    if (msg.data !== undefined && msg.data !== null) {
+      return msg.data;
+    }
+    const raw = msg as unknown as Record<string, unknown>;
+    const { type: _t, data: _d, timestamp: _ts, message: _msg, ...rest } = raw;
+    return Object.keys(rest).length ? rest : null;
+  }
+
   private listenWebSocket(): void {
     this.wsSub?.unsubscribe();
     this.wsSub = this.wsService.onMessage$.subscribe((msg) => this.handleWsMessage(msg));
@@ -600,7 +636,7 @@ export class MessagingStoreService implements OnDestroy {
   private handleWsMessage(msg: WebSocketMessage): void {
     switch (msg.type) {
       case 'new_message':
-        this.handleNewMessage(msg.data);
+        this.handleNewMessage(this.wsEventPayload(msg));
         break;
       case 'conversation_updated':
         this.loadInbox();
@@ -609,7 +645,7 @@ export class MessagingStoreService implements OnDestroy {
         }
         break;
       case 'group_updated':
-        this.handleGroupUpdated(msg.data);
+        this.handleGroupUpdated(this.wsEventPayload(msg));
         break;
       case 'error':
         this.handleWebSocketError(msg.message);

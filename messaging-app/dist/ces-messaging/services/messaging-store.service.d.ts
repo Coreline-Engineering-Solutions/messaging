@@ -91,6 +91,10 @@ export declare class MessagingStoreService implements OnDestroy {
     getActiveConversationId(): string | null;
     getMessagesForConversation(conversationId: string): Message[];
     getCurrentInbox(): InboxItem[];
+    /**
+     * Prefer `{ type, data }`; support flat `{ type, ...fields }` envelopes from older backends.
+     */
+    private wsEventPayload;
     private listenWebSocket;
     private handleWsMessage;
     private handleGroupUpdated;

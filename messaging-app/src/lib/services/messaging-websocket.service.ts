@@ -42,25 +42,40 @@ export class MessagingWebSocketService implements OnDestroy {
     this.doConnect();
   }
 
+  /** Drop any in-flight or previous socket so a new WebSocket() never overlaps CONNECTING + OPEN. */
+  private abandonCurrentSocket(): void {
+    if (!this.ws) return;
+    this.ws.onopen = null;
+    this.ws.onmessage = null;
+    this.ws.onerror = null;
+    this.ws.onclose = null;
+    try {
+      this.ws.close();
+    } catch {
+      /* ignore */
+    }
+    this.ws = null;
+  }
+
   disconnect(): void {
     this.stopPing();
     clearTimeout(this.reconnectTimer);
-    if (this.ws) {
-      this.ws.onclose = null;
-      this.ws.close();
-      this.ws = null;
-    }
+    this.abandonCurrentSocket();
     this.connectionStatus$.next('disconnected');
   }
 
   subscribe(conversationId: string): void {
     this.subscribedConversations.add(conversationId);
-    this.send({ type: 'subscribe', conversation_id: conversationId });
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.send({ type: 'subscribe', conversation_id: conversationId });
+    }
   }
 
   unsubscribe(conversationId: string): void {
     this.subscribedConversations.delete(conversationId);
-    this.send({ type: 'unsubscribe', conversation_id: conversationId });
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.send({ type: 'unsubscribe', conversation_id: conversationId });
+    }
   }
 
   subscribeAll(conversationIds: string[]): void {
@@ -79,6 +94,8 @@ export class MessagingWebSocketService implements OnDestroy {
 
     warnIfWsBaseUrlMissingApiPrefixWhenApiHasIt(this.config.apiBaseUrl, this.config.wsBaseUrl);
     warnEmailLikeContactId(this.contactId);
+
+    this.abandonCurrentSocket();
 
     try {
       this.ws = new WebSocket(`${this.config.wsBaseUrl}/messaging/ws/${this.contactId}`);

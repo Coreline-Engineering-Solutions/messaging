@@ -19,6 +19,8 @@ export declare class MessagingWebSocketService implements OnDestroy {
     constructor(config: MessagingConfig);
     get isConnected(): boolean;
     connect(contactId: string, sessionGid: string): void;
+    /** Drop any in-flight or previous socket so a new WebSocket() never overlaps CONNECTING + OPEN. */
+    private abandonCurrentSocket;
     disconnect(): void;
     subscribe(conversationId: string): void;
     unsubscribe(conversationId: string): void;
