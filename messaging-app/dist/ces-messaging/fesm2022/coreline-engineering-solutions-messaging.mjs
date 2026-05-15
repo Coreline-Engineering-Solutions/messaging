@@ -1099,18 +1099,20 @@ class MessagingStoreService {
                 if (realId == null || String(realId).startsWith('temp-')) {
                     return;
                 }
+                const pickedContent = this.coalesceMessageText(res, optimistic.content);
                 const merged = this.normalizeMessageShape({
                     ...optimistic,
                     ...res,
                     message_id: String(realId),
                     conversation_id: conversationId,
+                    content: pickedContent,
                 });
                 const map = new Map(this.messagesMap$.value);
                 const msgs = [...(map.get(conversationId) || [])];
                 const idx = msgs.findIndex((m) => m.message_id === tempMessageId);
                 if (idx >= 0) {
                     msgs[idx] = merged;
-                    map.set(conversationId, msgs);
+                    map.set(conversationId, this.dedupeMessagesByIdKeepFirst(msgs));
                     this.messagesMap$.next(map);
                     this.refreshMessageReactions(merged.message_id);
                 }
@@ -1372,23 +1374,66 @@ class MessagingStoreService {
     handleNewMessage(data) {
         if (!data)
             return;
-        // Pass through full payload so nested / alternate attachment fields are not dropped.
-        const message = this.normalizeMessageShape(data);
-        const isFromOther = String(message.sender_id) !== String(this.auth.contactId);
-        const existing = this.messagesMap$.value.get(message.conversation_id) || [];
-        const isDuplicate = existing.some((m) => m.message_id === message.message_id ||
-            (m.sender_id === message.sender_id &&
-                m.content === message.content &&
+        let message = this.normalizeMessageShape(data);
+        const myContactId = String(this.auth.contactId ?? '');
+        const convId = String(message.conversation_id ?? '');
+        const existing = this.messagesMap$.value.get(convId) || [];
+        const ownEcho = myContactId &&
+            String(message.sender_id) === myContactId &&
+            !!message.message_id &&
+            !String(message.message_id).startsWith('temp-');
+        // WS often arrives before HTTP finishes replacing temp-; merge into temp instead of appending a duplicate row.
+        if (ownEcho) {
+            const tempIdx = existing.findIndex((m) => {
+                if (!String(m.message_id).startsWith('temp-'))
+                    return false;
+                if (String(m.conversation_id) !== convId)
+                    return false;
+                if (String(m.sender_id) !== myContactId)
+                    return false;
+                const dt = Math.abs(new Date(m.created_at).getTime() - new Date(message.created_at).getTime());
+                if (dt >= 120_000)
+                    return false;
+                const a = String(m.content ?? '').trim();
+                const b = String(message.content ?? '').trim();
+                return a === b || !b;
+            });
+            if (tempIdx >= 0) {
+                const merged = this.normalizeMessageShape({
+                    ...existing[tempIdx],
+                    ...data,
+                    message_id: message.message_id,
+                    conversation_id: convId,
+                    content: this.coalesceMessageText(data, existing[tempIdx].content),
+                });
+                const map = new Map(this.messagesMap$.value);
+                const msgs = this.dedupeMessagesByIdKeepFirst([...existing]);
+                msgs[tempIdx] = merged;
+                map.set(convId, this.dedupeMessagesByIdKeepFirst(msgs));
+                this.messagesMap$.next(map);
+                this.refreshMessageReactions(merged.message_id);
+                message = merged;
+                this.updateInboxPreview(message);
+                if (this.activeConversationId$.value === message.conversation_id) {
+                    this.markAsRead(message.conversation_id);
+                }
+                return;
+            }
+        }
+        const isFromOther = String(message.sender_id) !== myContactId;
+        const isDuplicate = existing.some((m) => String(m.message_id) === String(message.message_id) ||
+            (String(m.sender_id) === String(message.sender_id) &&
+                String(m.content ?? '') === String(message.content ?? '') &&
                 Math.abs(new Date(m.created_at).getTime() - new Date(message.created_at).getTime()) < 2000));
         if (!isDuplicate) {
             this.appendMessage(message);
             if (isFromOther) {
                 this.playNotificationSound();
             }
+            this.updateInboxPreview(message);
         }
-        this.updateInboxPreview(message);
         if (this.activeConversationId$.value !== message.conversation_id) {
-            if (isFromOther) {
+            if (isFromOther && !isDuplicate) {
                 this.incrementUnread(message.conversation_id);
             }
         }
@@ -1408,11 +1453,17 @@ class MessagingStoreService {
         this.refreshMessageReactions(message.message_id);
     }
     updateInboxPreview(message) {
+        const text = String(message.content ?? '').trim();
+        const media = this.messageLooksLikeMedia(message);
+        if (!text && !media) {
+            return;
+        }
+        const preview = text || '[Image]';
         const items = this.inbox$.value.map((item) => {
             if (item.conversation_id === message.conversation_id) {
                 return {
                     ...item,
-                    last_message_preview: message.content || '[Image]',
+                    last_message_preview: preview,
                     last_message_at: message.created_at,
                 };
             }
@@ -1420,6 +1471,40 @@ class MessagingStoreService {
         });
         items.sort((a, b) => new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime());
         this.inbox$.next(items);
+    }
+    /** First non-empty text field from API / WS objects (POST bodies often omit `content`). */
+    coalesceMessageText(raw, fallback = '') {
+        const cands = [raw?.content, raw?.body, raw?.text, fallback];
+        for (const c of cands) {
+            if (typeof c === 'string' && c.trim())
+                return c;
+            if (c != null && typeof c !== 'object' && String(c).trim())
+                return String(c).trim();
+        }
+        return typeof fallback === 'string' ? fallback : String(fallback ?? '');
+    }
+    messageLooksLikeMedia(m) {
+        const t = m.message_type;
+        if (t && t !== 'TEXT')
+            return true;
+        const u = String(m.media_url ?? '').trim();
+        if (u && (u.startsWith('http://') || u.startsWith('https://') || u.startsWith('data:'))) {
+            return true;
+        }
+        return Array.isArray(m.attachments) && m.attachments.length > 0;
+    }
+    /** Same logical message_id can appear twice when WS beats HTTP temp replacement — keep first row. */
+    dedupeMessagesByIdKeepFirst(msgs) {
+        const seen = new Set();
+        return msgs.filter((m) => {
+            const id = String(m.message_id ?? '');
+            if (!id)
+                return true;
+            if (seen.has(id))
+                return false;
+            seen.add(id);
+            return true;
+        });
     }
     incrementUnread(conversationId) {
         const items = this.inbox$.value.map((item) => item.conversation_id === conversationId
@@ -1442,7 +1527,7 @@ class MessagingStoreService {
             sender_first_name: raw?.sender_first_name,
             sender_last_name: raw?.sender_last_name,
             message_type: (raw?.message_type ?? raw?.messageType ?? 'TEXT'),
-            content: raw?.content ?? '',
+            content: raw?.content ?? raw?.body ?? raw?.text ?? '',
             media_url: raw?.media_url ?? raw?.mediaUrl ?? raw?.url ?? raw?.file_url,
             created_at: raw?.created_at ?? raw?.createdAt ?? new Date().toISOString(),
             is_read: raw?.is_read,

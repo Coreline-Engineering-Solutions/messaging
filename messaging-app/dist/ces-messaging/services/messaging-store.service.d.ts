@@ -104,6 +104,11 @@ export declare class MessagingStoreService implements OnDestroy {
     appendOptimisticMessage(message: Message): void;
     private appendMessage;
     private updateInboxPreview;
+    /** First non-empty text field from API / WS objects (POST bodies often omit `content`). */
+    private coalesceMessageText;
+    private messageLooksLikeMedia;
+    /** Same logical message_id can appear twice when WS beats HTTP temp replacement — keep first row. */
+    private dedupeMessagesByIdKeepFirst;
     private incrementUnread;
     /**
      * Normalize backend message shapes so UI can reliably render attachments/media.
