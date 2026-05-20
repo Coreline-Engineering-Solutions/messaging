@@ -655,6 +655,12 @@ class MessagingFileService {
             return null;
         return this.mediaCache.get(fileId) ?? null;
     }
+    /** Cache a URL returned by upload so later WS / REST refreshes do not fall back to spinners. */
+    rememberFileUrl(fileId, url) {
+        if (isTempId(fileId) || !url)
+            return;
+        this.mediaCache.set(fileId, url);
+    }
     /** Pre-warm cache for a list of file IDs (fire-and-forget, skips temp/cached). */
     prewarmCache(fileIds) {
         for (const id of fileIds) {
@@ -1045,17 +1051,21 @@ class MessagingStoreService {
                     const merged = [...sorted, ...existing];
                     map.set(conversationId, merged);
                 }
-                else if (skipReactionHydration) {
-                    // Silent refresh — merge new messages but preserve existing reaction state
-                    const existingById = new Map(existing.map(m => [String(m.message_id), m]));
+                else {
+                    // Merge new messages with existing: preserve attachment urls and reactions
+                    // so optimistic previews/blob URLs don't disappear when the server refresh arrives.
                     const merged = sorted.map(m => {
-                        const cached = existingById.get(String(m.message_id));
-                        return cached ? { ...m, reactions: cached.reactions } : m;
+                        const prior = this.findPriorMessageForFresh(m, existing);
+                        if (!prior)
+                            return m;
+                        const mergedAttachments = this.mergeAttachments(m.attachments, prior.attachments);
+                        return {
+                            ...m,
+                            reactions: prior.reactions ?? m.reactions,
+                            attachments: mergedAttachments,
+                        };
                     });
                     map.set(conversationId, merged);
-                }
-                else {
-                    map.set(conversationId, sorted);
                 }
                 this.messagesMap$.next(map);
                 if (!skipReactionHydration) {
@@ -1407,6 +1417,7 @@ class MessagingStoreService {
                     conversation_id: convId,
                     content: this.coalesceMessageText(data, existing[tempIdx].content),
                 });
+                merged.attachments = this.mergeAttachments(merged.attachments, existing[tempIdx].attachments);
                 const map = new Map(this.messagesMap$.value);
                 const msgs = this.dedupeMessagesByIdKeepFirst([...existing]);
                 msgs[tempIdx] = merged;
@@ -1489,7 +1500,7 @@ class MessagingStoreService {
         if (t && t !== 'TEXT')
             return true;
         const u = String(m.media_url ?? '').trim();
-        if (u && (u.startsWith('http://') || u.startsWith('https://') || u.startsWith('data:'))) {
+        if (u && (u.startsWith('http://') || u.startsWith('https://') || u.startsWith('data:') || u.startsWith('blob:'))) {
             return true;
         }
         return Array.isArray(m.attachments) && m.attachments.length > 0;
@@ -1507,12 +1518,72 @@ class MessagingStoreService {
             return true;
         });
     }
+    findPriorMessageForFresh(fresh, existing) {
+        const byId = existing.find(m => String(m.message_id) === String(fresh.message_id));
+        if (byId)
+            return byId;
+        const freshAttachments = fresh.attachments || [];
+        if (!freshAttachments.length)
+            return undefined;
+        const freshNames = new Set(freshAttachments
+            .map(a => String(a.filename || '').trim().toLowerCase())
+            .filter(Boolean));
+        if (!freshNames.size)
+            return undefined;
+        const freshTime = new Date(fresh.created_at).getTime();
+        return existing.find(prior => {
+            const priorAttachments = prior.attachments || [];
+            if (!priorAttachments.length)
+                return false;
+            if (String(prior.conversation_id) !== String(fresh.conversation_id))
+                return false;
+            if (String(prior.sender_id) !== String(fresh.sender_id))
+                return false;
+            const priorTime = new Date(prior.created_at).getTime();
+            if (Number.isFinite(freshTime) &&
+                Number.isFinite(priorTime) &&
+                Math.abs(freshTime - priorTime) > 300_000) {
+                return false;
+            }
+            return priorAttachments.some(att => freshNames.has(String(att.filename || '').trim().toLowerCase()));
+        });
+    }
     incrementUnread(conversationId) {
         const items = this.inbox$.value.map((item) => item.conversation_id === conversationId
             ? { ...item, unread_count: Number(item.unread_count) + 1 }
             : item);
         this.inbox$.next(items);
         this.recalcUnread(items);
+    }
+    /**
+     * Merge fresh API attachments with prior cached ones, preserving any url/blob
+     * that the optimistic message or previous load already resolved.
+     */
+    mergeAttachments(fresh, prior) {
+        if (!fresh?.length)
+            return prior?.length ? prior : fresh;
+        if (!prior?.length)
+            return fresh;
+        const merged = fresh.map((f, idx) => {
+            const match = prior.find(p => (p.file_id && p.file_id === f.file_id) ||
+                (p.filename && p.filename === f.filename)) ?? prior[idx];
+            if (!match)
+                return f;
+            return {
+                ...f,
+                url: f.url ?? match.url,
+                mime_type: f.mime_type ?? match.mime_type,
+                filename: f.filename || match.filename,
+            };
+        });
+        const seen = new Set(merged.map(a => `${a.file_id || ''}|${a.filename || ''}`));
+        for (const p of prior) {
+            const key = `${p.file_id || ''}|${p.filename || ''}`;
+            if (!seen.has(key)) {
+                merged.push(p);
+            }
+        }
+        return merged;
     }
     /**
      * Normalize backend message shapes so UI can reliably render attachments/media.
@@ -1575,12 +1646,33 @@ class MessagingStoreService {
         pushId(raw?.attachment_id);
         pushId(raw?.storage_file_id);
         pushId(raw?.blob_id);
+        // Newer API versions may encode multiple attachments in media_url JSON.
+        const mediaValue = String(base.media_url || '').trim();
+        if (mediaValue.startsWith('{') || mediaValue.startsWith('[')) {
+            try {
+                const parsed = JSON.parse(mediaValue);
+                const items = Array.isArray(parsed) ? parsed : parsed?.attachments;
+                if (Array.isArray(items)) {
+                    const mapped = items.map((a, idx) => ({
+                        file_id: String(a?.file_id ?? a?.fileId ?? a?.id ?? '').trim(),
+                        filename: String(a?.filename ?? a?.file_name ?? `Attachment ${idx + 1}`),
+                        mime_type: a?.mime_type ?? a?.mimeType,
+                        url: a?.url ?? a?.file_url ?? a?.download_url,
+                    })).filter((a) => !!a.file_id && !a.file_id.startsWith('temp-'));
+                    if (mapped.length > 0) {
+                        return { ...base, media_url: undefined, attachments: mapped };
+                    }
+                }
+            }
+            catch { /* fall back to legacy media_url handling */ }
+        }
         // Backend stores first attachment id in messaging.message.media_url (UUID), not a public URL.
         const mediaAsId = String(base.media_url || '').trim();
         if (mediaAsId &&
             !mediaAsId.startsWith('http://') &&
             !mediaAsId.startsWith('https://') &&
-            !mediaAsId.startsWith('data:')) {
+            !mediaAsId.startsWith('data:') &&
+            !mediaAsId.startsWith('blob:')) {
             pushId(mediaAsId);
         }
         const contentTrim = String(base.content || '').trim();
@@ -1604,13 +1696,16 @@ class MessagingStoreService {
                         : [];
         if (attachmentIds.length > 0 || filenames.length > 0) {
             const fallbackMime = raw?.mime_type ?? raw?.attachment_mime_type;
+            const mimeTypes = Array.isArray(raw?.mime_types)
+                ? raw.mime_types.map((x) => x == null ? undefined : String(x))
+                : [];
             const urlFallback = raw?.file_url ?? raw?.url ?? raw?.media_url ?? raw?.mediaUrl;
             const ids = attachmentIds.length > 0 ? attachmentIds : [];
             const built = ids.map((id, idx) => ({
                 file_id: id,
                 filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
-                mime_type: fallbackMime,
-                url: urlFallback,
+                mime_type: mimeTypes[idx] || fallbackMime,
+                url: String(urlFallback || '').startsWith('{') ? undefined : urlFallback,
             }));
             // Filename only + direct URL (no storage id): still renderable as <img src>.
             if (built.length === 0 &&
@@ -2385,9 +2480,16 @@ class ChatThreadComponent {
                     this.uploading = false;
                     return;
                 }
-                // Step 2: Pre-warm image cache so the optimistic bubble renders immediately.
+                // Step 2: Keep upload URLs on both the cache and optimistic attachment.
+                // REST refreshes can return a different attachment id, so filename-based
+                // merges need the URL on the attachment object too.
+                const previewUrls = responses.map((r, idx) => r.url || URL.createObjectURL(payload.files[idx]));
+                responses.forEach((r, idx) => {
+                    this.fileService.rememberFileUrl(r.file_id, previewUrls[idx]);
+                });
+                // Step 3: Pre-warm image cache so the optimistic bubble renders immediately.
                 this.fileService.prewarmCache(fileIds);
-                // Step 3: Send the message with the real file_ids.
+                // Step 4: Send the message with the real file_ids.
                 this.fileService
                     .sendMessageWithAttachments(this.conversationId, this.auth.contactId, payload.text || filenames.join(', '), fileIds, filenames, mimeTypes)
                     .subscribe({
@@ -2414,7 +2516,7 @@ class ChatThreadComponent {
                                 filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
                                 mime_type: mimeTypes[idx] || undefined,
                                 size_bytes: payload.files[idx]?.size,
-                                url: responses[idx]?.url,
+                                url: previewUrls[idx],
                             })),
                         };
                         this.store.appendOptimisticMessage(optimistic);
@@ -2547,12 +2649,25 @@ class ChatThreadComponent {
     }
     /** Returns the primary attachment for a message, if any. */
     getPrimaryAttachment(msg) {
-        if (msg.attachments && msg.attachments.length > 0)
-            return msg.attachments[0];
+        const attachments = this.getRenderableAttachments(msg);
+        if (attachments.length > 0)
+            return attachments[0];
+        return null;
+    }
+    getRenderableAttachments(msg) {
+        if (msg.attachments && msg.attachments.length > 0) {
+            return msg.attachments.map((a, idx) => ({
+                file_id: String(a.file_id ?? '').trim(),
+                filename: String(a.filename || `Attachment ${idx + 1}`),
+                mime_type: a.mime_type,
+                size_bytes: a.size_bytes,
+                url: a.url,
+            }));
+        }
         // Some API responses provide file metadata in alternate fields.
         const anyMsg = msg;
         const mu = String(msg.media_url || '').trim();
-        const mediaIsDirectUrl = mu.startsWith('http://') || mu.startsWith('https://') || mu.startsWith('data:');
+        const mediaIsDirectUrl = mu.startsWith('http://') || mu.startsWith('https://') || mu.startsWith('data:') || mu.startsWith('blob:');
         const fileId = anyMsg?.file_id ||
             anyMsg?.attachment_id ||
             anyMsg?.attachment_ids?.[0] ||
@@ -2562,36 +2677,41 @@ class ChatThreadComponent {
         const filename = explicitFilename ||
             (fileId || mime || msg.message_type !== 'TEXT' ? msg.content : '');
         if (fileId || explicitFilename || mime || msg.message_type === 'FILE' || msg.message_type === 'IMAGE') {
-            return {
-                file_id: String(fileId || ''),
-                filename: String(filename || 'File'),
-                mime_type: mime ? String(mime) : undefined,
-                url: mediaIsDirectUrl ? mu : undefined,
-            };
+            return [{
+                    file_id: String(fileId || ''),
+                    filename: String(filename || 'File'),
+                    mime_type: mime ? String(mime) : undefined,
+                    url: mediaIsDirectUrl ? mu : undefined,
+                }];
         }
-        return null;
+        return [];
     }
     isImageAttachment(msg) {
-        if (msg.message_type === 'IMAGE')
-            return true;
-        const mime = this.getPrimaryAttachment(msg)?.mime_type || '';
+        return this.getRenderableAttachments(msg).some((att) => this.isImageAttachmentItem(att));
+    }
+    isImageAttachmentItem(att) {
+        const mime = att.mime_type || '';
         if (mime.startsWith('image/'))
             return true;
-        const name = this.getFilenameLike(msg);
+        const name = (att.filename || '').toLowerCase();
         return /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)$/i.test(name);
     }
     /** Returns the cached data URL for a message's media, or null and triggers background load. */
     getMediaUrl(msg) {
         const att = this.getPrimaryAttachment(msg);
-        const fileId = att?.file_id?.trim();
-        const directUrl = att?.url ||
-            msg.media_url ||
+        return att ? this.getAttachmentMediaUrl(att, msg) : null;
+    }
+    getAttachmentMediaUrl(att, msg) {
+        const fileId = att.file_id?.trim();
+        const directUrl = att.url ||
+            msg?.media_url ||
             msg?.url ||
             msg?.file_url;
         if (directUrl &&
             (directUrl.startsWith('http://') ||
                 directUrl.startsWith('https://') ||
-                directUrl.startsWith('data:'))) {
+                directUrl.startsWith('data:') ||
+                directUrl.startsWith('blob:'))) {
             return directUrl;
         }
         if (!fileId) {
@@ -2604,16 +2724,37 @@ class ChatThreadComponent {
         this.fetchMedia(fileId);
         return null;
     }
+    trackByMessage(_index, msg) {
+        return String(msg.message_id || `${msg.sender_id}-${msg.created_at}`);
+    }
+    trackByAttachment(index, att) {
+        return `${att.file_id || ''}|${att.filename || ''}|${index}`;
+    }
+    downloadAttachment(event, url, filename) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!url)
+            return;
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename || 'attachment';
+        link.rel = 'noopener';
+        link.target = '_blank';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
     prewarmMedia(messages) {
         for (const msg of messages) {
-            const att = this.getPrimaryAttachment(msg);
-            const fileId = att?.file_id?.trim();
-            if (!fileId || fileId.startsWith('temp-'))
-                continue;
-            if (this.fileService.getCachedDataUrl(fileId))
-                continue;
-            // Preload images and videos eagerly; queue other files so download links appear.
-            this.fetchMedia(fileId);
+            for (const att of this.getRenderableAttachments(msg)) {
+                const fileId = att.file_id?.trim();
+                if (!fileId || fileId.startsWith('temp-'))
+                    continue;
+                if (this.fileService.getCachedDataUrl(fileId))
+                    continue;
+                // Preload every attachment so each item gets its own URL/download state.
+                this.fetchMedia(fileId);
+            }
         }
     }
     fetchMedia(fileId) {
@@ -2639,29 +2780,64 @@ class ChatThreadComponent {
             return false;
         return this.mediaLoading.has(fileId) && !this.mediaFailed.has(fileId);
     }
+    shouldShowAttachmentSpinner(att) {
+        const fileId = att.file_id;
+        if (!fileId || fileId.startsWith('temp-'))
+            return false;
+        return this.mediaLoading.has(fileId) && !this.mediaFailed.has(fileId);
+    }
     isVideoAttachment(msg) {
-        const mime = this.getPrimaryAttachment(msg)?.mime_type || '';
+        return this.getRenderableAttachments(msg).some((att) => this.isVideoAttachmentItem(att));
+    }
+    isVideoAttachmentItem(att) {
+        const mime = att.mime_type || '';
         if (mime.startsWith('video/'))
             return true;
-        const name = this.getFilenameLike(msg);
+        const name = (att.filename || '').toLowerCase();
         return /\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(name);
     }
-    getAttachmentMimeType(msg) {
-        return this.getPrimaryAttachment(msg)?.mime_type || 'application/octet-stream';
+    getAttachmentMimeType(attOrMsg) {
+        if ('file_id' in attOrMsg) {
+            return attOrMsg.mime_type || 'application/octet-stream';
+        }
+        return this.getPrimaryAttachment(attOrMsg)?.mime_type || 'application/octet-stream';
     }
     getAttachmentName(msg) {
         return this.getPrimaryAttachment(msg)?.filename || msg.content || 'File';
     }
+    getAttachmentDisplayName(att, msg) {
+        return att.filename || msg?.content || 'File';
+    }
     hasFileAttachment(msg) {
-        return msg.message_type === 'FILE' || !!this.getPrimaryAttachment(msg);
+        return msg.message_type === 'FILE' || this.getRenderableAttachments(msg).length > 0;
     }
     hasMediaFailed(msg) {
         const fileId = this.getPrimaryAttachment(msg)?.file_id;
         return !!fileId && this.mediaFailed.has(fileId);
     }
+    hasAttachmentFailed(att) {
+        return !!att.file_id && this.mediaFailed.has(att.file_id);
+    }
     getFileIcon(msg) {
         const mime = this.getAttachmentMimeType(msg);
         const name = this.getAttachmentName(msg).toLowerCase();
+        if (mime.startsWith('video/') || /\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(name))
+            return 'videocam';
+        if (mime.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|flac)$/i.test(name))
+            return 'audiotrack';
+        if (mime.includes('pdf') || name.endsWith('.pdf'))
+            return 'picture_as_pdf';
+        if (mime.includes('spreadsheet') || mime.includes('excel') || /\.(xls|xlsx|csv)$/i.test(name))
+            return 'table_chart';
+        if (mime.includes('document') || mime.includes('word') || /\.(doc|docx|txt|rtf)$/i.test(name))
+            return 'description';
+        if (mime.includes('zip') || /\.(zip|rar|7z|tar|gz)$/i.test(name))
+            return 'folder_zip';
+        return 'insert_drive_file';
+    }
+    getAttachmentIcon(att, msg) {
+        const mime = this.getAttachmentMimeType(att);
+        const name = this.getAttachmentDisplayName(att, msg).toLowerCase();
         if (mime.startsWith('video/') || /\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(name))
             return 'videocam';
         if (mime.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|flac)$/i.test(name))
@@ -2745,7 +2921,7 @@ class ChatThreadComponent {
         </button>
 
         <div class="messages-list">
-          <ng-container *ngFor="let msg of messages; let i = index">
+          <ng-container *ngFor="let msg of messages; let i = index; trackBy: trackByMessage">
             <div
               *ngIf="shouldShowDateSeparator(i)"
               class="date-separator"
@@ -2762,76 +2938,88 @@ class ChatThreadComponent {
                 {{ getSenderName(msg) }}
               </div>
               <div class="message-bubble" [class.own-bubble]="isOwnMessage(msg)" (mouseenter)="hoveredMessageId = msg.message_id" (mouseleave)="hoveredMessageId = null">
-                <!-- IMAGE ─────────────────────────────────────── -->
-                <div *ngIf="isImageAttachment(msg)" class="image-message">
-                  <ng-container *ngIf="getMediaUrl(msg) as dataUrl; else imgFallback">
-                    <img [src]="dataUrl" alt="Image" class="media-img" (click)="openLightbox(dataUrl)" />
-                  </ng-container>
-                  <ng-template #imgFallback>
-                    <div *ngIf="shouldShowMediaSpinner(msg); else imgAsFile" class="media-placeholder">
-                      <mat-spinner diameter="22"></mat-spinner>
-                    </div>
-                    <ng-template #imgAsFile>
-                      <div class="file-message">
-                        <mat-icon class="file-msg-icon">image</mat-icon>
-                        <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
+                <!-- Attachments ───────────────────────────────── -->
+                <div *ngIf="getRenderableAttachments(msg).length > 0" class="attachments-list">
+                  <div *ngFor="let att of getRenderableAttachments(msg); trackBy: trackByAttachment" class="attachment-item">
+                    <ng-container *ngIf="isImageAttachmentItem(att); else nonImageAttachment">
+                      <div class="image-message">
+                        <ng-container *ngIf="getAttachmentMediaUrl(att, msg) as dataUrl; else imgFallback">
+                          <img [src]="dataUrl" alt="Image" class="media-img" (click)="$event.stopPropagation(); openLightbox(dataUrl)" />
+                        </ng-container>
+                        <ng-template #imgFallback>
+                          <div *ngIf="shouldShowAttachmentSpinner(att); else imgAsFile" class="media-placeholder">
+                            <mat-spinner diameter="22"></mat-spinner>
+                          </div>
+                          <ng-template #imgAsFile>
+                            <div class="file-message">
+                              <mat-icon class="file-msg-icon">image</mat-icon>
+                              <span class="file-msg-name">{{ getAttachmentDisplayName(att, msg) }}</span>
+                              <span *ngIf="hasAttachmentFailed(att)" class="media-load-label">Unavailable</span>
+                            </div>
+                          </ng-template>
+                        </ng-template>
                       </div>
-                    </ng-template>
-                  </ng-template>
-                </div>
+                    </ng-container>
 
-                <!-- FILE / VIDEO ─────────────────────────────── -->
-                <div *ngIf="hasFileAttachment(msg) && !isImageAttachment(msg)" class="file-message">
-                  <ng-container *ngIf="isVideoAttachment(msg); else regularFile">
-                    <ng-container *ngIf="getMediaUrl(msg) as videoUrl; else videoLoading">
-                      <div class="video-message">
-                        <video controls class="media-video" preload="metadata">
-                          <source [src]="videoUrl" [type]="getAttachmentMimeType(msg)" />
-                          Your browser does not support video.
-                        </video>
+                    <ng-template #nonImageAttachment>
+                      <ng-container *ngIf="isVideoAttachmentItem(att); else regularFile">
+                        <ng-container *ngIf="getAttachmentMediaUrl(att, msg) as videoUrl; else videoLoading">
+                          <div class="video-message">
+                            <video controls class="media-video" preload="metadata">
+                              <source [src]="videoUrl" [type]="getAttachmentMimeType(att)" />
+                              Your browser does not support video.
+                            </video>
+                            <a
+                              class="video-download"
+                              [href]="videoUrl"
+                              [attr.download]="getAttachmentDisplayName(att, msg)"
+                              target="_blank"
+                              rel="noopener"
+                              (click)="downloadAttachment($event, videoUrl, getAttachmentDisplayName(att, msg))"
+                            >
+                              Download {{ getAttachmentDisplayName(att, msg) }}
+                            </a>
+                          </div>
+                        </ng-container>
+                        <ng-template #videoLoading>
+                          <div class="media-placeholder">
+                            <mat-spinner *ngIf="shouldShowAttachmentSpinner(att)" diameter="22"></mat-spinner>
+                            <span class="media-load-label">
+                              {{ hasAttachmentFailed(att) ? 'Unavailable' : 'Loading video...' }}
+                            </span>
+                          </div>
+                        </ng-template>
+                      </ng-container>
+                    </ng-template>
+
+                    <ng-template #regularFile>
+                      <ng-container *ngIf="getAttachmentMediaUrl(att, msg) as fileUrl; else fileLoading">
                         <a
-                          class="video-download"
-                          [href]="videoUrl"
-                          [attr.download]="getAttachmentName(msg)"
+                          class="file-download"
+                          [href]="fileUrl"
+                          [attr.download]="getAttachmentDisplayName(att, msg)"
                           target="_blank"
                           rel="noopener"
+                          (click)="downloadAttachment($event, fileUrl, getAttachmentDisplayName(att, msg))"
                         >
-                          Download {{ getAttachmentName(msg) }}
+                          <mat-icon class="file-msg-icon">{{ getAttachmentIcon(att, msg) }}</mat-icon>
+                          <span class="file-msg-name">{{ getAttachmentDisplayName(att, msg) }}</span>
+                          <mat-icon class="file-download-icon">download</mat-icon>
                         </a>
-                      </div>
-                    </ng-container>
-                    <ng-template #videoLoading>
-                      <div class="media-placeholder">
-                        <mat-spinner diameter="22"></mat-spinner>
-                        <span class="media-load-label">Loading video…</span>
-                      </div>
+                      </ng-container>
+                      <ng-template #fileLoading>
+                        <div class="file-message">
+                          <mat-icon class="file-msg-icon">{{ getAttachmentIcon(att, msg) }}</mat-icon>
+                          <span class="file-msg-name">{{ getAttachmentDisplayName(att, msg) }}</span>
+                          <mat-spinner *ngIf="shouldShowAttachmentSpinner(att)" diameter="18"></mat-spinner>
+                          <span *ngIf="hasAttachmentFailed(att)" class="media-load-label">Unavailable</span>
+                        </div>
+                      </ng-template>
                     </ng-template>
-                  </ng-container>
-                  <ng-template #regularFile>
-                    <ng-container *ngIf="getMediaUrl(msg) as fileUrl; else fileLoading">
-                      <a
-                        class="file-download"
-                        [href]="fileUrl"
-                        [attr.download]="getAttachmentName(msg)"
-                        target="_blank"
-                        rel="noopener"
-                        (click)="$event.stopPropagation()"
-                      >
-                        <mat-icon class="file-msg-icon">{{ getFileIcon(msg) }}</mat-icon>
-                        <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
-                        <mat-icon class="file-download-icon">download</mat-icon>
-                      </a>
-                    </ng-container>
-                    <ng-template #fileLoading>
-                      <mat-icon class="file-msg-icon">{{ getFileIcon(msg) }}</mat-icon>
-                      <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
-                      <mat-spinner *ngIf="shouldShowMediaSpinner(msg)" diameter="18"></mat-spinner>
-                      <span *ngIf="hasMediaFailed(msg)" class="media-load-label">Unavailable</span>
-                    </ng-template>
-                  </ng-template>
+                  </div>
                 </div>
                 <div
-                  *ngIf="msg.message_type === 'TEXT' && !isImageAttachment(msg) && !hasFileAttachment(msg)"
+                  *ngIf="msg.message_type === 'TEXT' && getRenderableAttachments(msg).length === 0"
                   class="text-content"
                 >
                   {{ msg.content }}
@@ -2880,7 +3068,7 @@ class ChatThreadComponent {
       ></app-message-input>
     </div>
 
-  `, isInline: true, styles: [".chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;gap:0}.header-actions button{width:32px;height:32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.image-message{line-height:0}.media-img{max-width:220px;max-height:280px;border-radius:10px;display:block;cursor:zoom-in;object-fit:cover;transition:opacity .15s}.media-img:hover{opacity:.88}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;gap:8px;min-width:80px;min-height:44px;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px}.file-msg-icon{font-size:20px;width:20px;height:20px;color:#fffc}.file-msg-name{font-size:13px;color:#fff;word-break:break-all}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.unread{opacity:.4}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions{left:0;right:auto}.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:1px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i7$1.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "component", type: MessageInputComponent, selector: "app-message-input", outputs: ["messageSent", "messageWithFiles"] }] });
+  `, isInline: true, styles: [".chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;gap:0}.header-actions button{width:32px;height:32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.image-message{line-height:0}.attachments-list{display:flex;flex-direction:column;gap:8px}.attachment-item{max-width:260px}.media-img{max-width:220px;max-height:280px;border-radius:10px;display:block;cursor:zoom-in;object-fit:cover;transition:opacity .15s}.media-img:hover{opacity:.88}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;gap:8px;min-width:80px;min-height:44px;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px;padding:4px 0}.file-msg-icon{font-size:20px;width:20px;height:20px;color:#fffc}.file-msg-name{font-size:13px;color:#fff;word-break:break-all}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.unread{opacity:.4}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions{left:0;right:auto}.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:1px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i7$1.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "component", type: MessageInputComponent, selector: "app-message-input", outputs: ["messageSent", "messageWithFiles"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: ChatThreadComponent, decorators: [{
             type: Component,
@@ -2931,7 +3119,7 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
         </button>
 
         <div class="messages-list">
-          <ng-container *ngFor="let msg of messages; let i = index">
+          <ng-container *ngFor="let msg of messages; let i = index; trackBy: trackByMessage">
             <div
               *ngIf="shouldShowDateSeparator(i)"
               class="date-separator"
@@ -2948,76 +3136,88 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
                 {{ getSenderName(msg) }}
               </div>
               <div class="message-bubble" [class.own-bubble]="isOwnMessage(msg)" (mouseenter)="hoveredMessageId = msg.message_id" (mouseleave)="hoveredMessageId = null">
-                <!-- IMAGE ─────────────────────────────────────── -->
-                <div *ngIf="isImageAttachment(msg)" class="image-message">
-                  <ng-container *ngIf="getMediaUrl(msg) as dataUrl; else imgFallback">
-                    <img [src]="dataUrl" alt="Image" class="media-img" (click)="openLightbox(dataUrl)" />
-                  </ng-container>
-                  <ng-template #imgFallback>
-                    <div *ngIf="shouldShowMediaSpinner(msg); else imgAsFile" class="media-placeholder">
-                      <mat-spinner diameter="22"></mat-spinner>
-                    </div>
-                    <ng-template #imgAsFile>
-                      <div class="file-message">
-                        <mat-icon class="file-msg-icon">image</mat-icon>
-                        <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
+                <!-- Attachments ───────────────────────────────── -->
+                <div *ngIf="getRenderableAttachments(msg).length > 0" class="attachments-list">
+                  <div *ngFor="let att of getRenderableAttachments(msg); trackBy: trackByAttachment" class="attachment-item">
+                    <ng-container *ngIf="isImageAttachmentItem(att); else nonImageAttachment">
+                      <div class="image-message">
+                        <ng-container *ngIf="getAttachmentMediaUrl(att, msg) as dataUrl; else imgFallback">
+                          <img [src]="dataUrl" alt="Image" class="media-img" (click)="$event.stopPropagation(); openLightbox(dataUrl)" />
+                        </ng-container>
+                        <ng-template #imgFallback>
+                          <div *ngIf="shouldShowAttachmentSpinner(att); else imgAsFile" class="media-placeholder">
+                            <mat-spinner diameter="22"></mat-spinner>
+                          </div>
+                          <ng-template #imgAsFile>
+                            <div class="file-message">
+                              <mat-icon class="file-msg-icon">image</mat-icon>
+                              <span class="file-msg-name">{{ getAttachmentDisplayName(att, msg) }}</span>
+                              <span *ngIf="hasAttachmentFailed(att)" class="media-load-label">Unavailable</span>
+                            </div>
+                          </ng-template>
+                        </ng-template>
                       </div>
-                    </ng-template>
-                  </ng-template>
-                </div>
+                    </ng-container>
 
-                <!-- FILE / VIDEO ─────────────────────────────── -->
-                <div *ngIf="hasFileAttachment(msg) && !isImageAttachment(msg)" class="file-message">
-                  <ng-container *ngIf="isVideoAttachment(msg); else regularFile">
-                    <ng-container *ngIf="getMediaUrl(msg) as videoUrl; else videoLoading">
-                      <div class="video-message">
-                        <video controls class="media-video" preload="metadata">
-                          <source [src]="videoUrl" [type]="getAttachmentMimeType(msg)" />
-                          Your browser does not support video.
-                        </video>
+                    <ng-template #nonImageAttachment>
+                      <ng-container *ngIf="isVideoAttachmentItem(att); else regularFile">
+                        <ng-container *ngIf="getAttachmentMediaUrl(att, msg) as videoUrl; else videoLoading">
+                          <div class="video-message">
+                            <video controls class="media-video" preload="metadata">
+                              <source [src]="videoUrl" [type]="getAttachmentMimeType(att)" />
+                              Your browser does not support video.
+                            </video>
+                            <a
+                              class="video-download"
+                              [href]="videoUrl"
+                              [attr.download]="getAttachmentDisplayName(att, msg)"
+                              target="_blank"
+                              rel="noopener"
+                              (click)="downloadAttachment($event, videoUrl, getAttachmentDisplayName(att, msg))"
+                            >
+                              Download {{ getAttachmentDisplayName(att, msg) }}
+                            </a>
+                          </div>
+                        </ng-container>
+                        <ng-template #videoLoading>
+                          <div class="media-placeholder">
+                            <mat-spinner *ngIf="shouldShowAttachmentSpinner(att)" diameter="22"></mat-spinner>
+                            <span class="media-load-label">
+                              {{ hasAttachmentFailed(att) ? 'Unavailable' : 'Loading video...' }}
+                            </span>
+                          </div>
+                        </ng-template>
+                      </ng-container>
+                    </ng-template>
+
+                    <ng-template #regularFile>
+                      <ng-container *ngIf="getAttachmentMediaUrl(att, msg) as fileUrl; else fileLoading">
                         <a
-                          class="video-download"
-                          [href]="videoUrl"
-                          [attr.download]="getAttachmentName(msg)"
+                          class="file-download"
+                          [href]="fileUrl"
+                          [attr.download]="getAttachmentDisplayName(att, msg)"
                           target="_blank"
                           rel="noopener"
+                          (click)="downloadAttachment($event, fileUrl, getAttachmentDisplayName(att, msg))"
                         >
-                          Download {{ getAttachmentName(msg) }}
+                          <mat-icon class="file-msg-icon">{{ getAttachmentIcon(att, msg) }}</mat-icon>
+                          <span class="file-msg-name">{{ getAttachmentDisplayName(att, msg) }}</span>
+                          <mat-icon class="file-download-icon">download</mat-icon>
                         </a>
-                      </div>
-                    </ng-container>
-                    <ng-template #videoLoading>
-                      <div class="media-placeholder">
-                        <mat-spinner diameter="22"></mat-spinner>
-                        <span class="media-load-label">Loading video…</span>
-                      </div>
+                      </ng-container>
+                      <ng-template #fileLoading>
+                        <div class="file-message">
+                          <mat-icon class="file-msg-icon">{{ getAttachmentIcon(att, msg) }}</mat-icon>
+                          <span class="file-msg-name">{{ getAttachmentDisplayName(att, msg) }}</span>
+                          <mat-spinner *ngIf="shouldShowAttachmentSpinner(att)" diameter="18"></mat-spinner>
+                          <span *ngIf="hasAttachmentFailed(att)" class="media-load-label">Unavailable</span>
+                        </div>
+                      </ng-template>
                     </ng-template>
-                  </ng-container>
-                  <ng-template #regularFile>
-                    <ng-container *ngIf="getMediaUrl(msg) as fileUrl; else fileLoading">
-                      <a
-                        class="file-download"
-                        [href]="fileUrl"
-                        [attr.download]="getAttachmentName(msg)"
-                        target="_blank"
-                        rel="noopener"
-                        (click)="$event.stopPropagation()"
-                      >
-                        <mat-icon class="file-msg-icon">{{ getFileIcon(msg) }}</mat-icon>
-                        <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
-                        <mat-icon class="file-download-icon">download</mat-icon>
-                      </a>
-                    </ng-container>
-                    <ng-template #fileLoading>
-                      <mat-icon class="file-msg-icon">{{ getFileIcon(msg) }}</mat-icon>
-                      <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
-                      <mat-spinner *ngIf="shouldShowMediaSpinner(msg)" diameter="18"></mat-spinner>
-                      <span *ngIf="hasMediaFailed(msg)" class="media-load-label">Unavailable</span>
-                    </ng-template>
-                  </ng-template>
+                  </div>
                 </div>
                 <div
-                  *ngIf="msg.message_type === 'TEXT' && !isImageAttachment(msg) && !hasFileAttachment(msg)"
+                  *ngIf="msg.message_type === 'TEXT' && getRenderableAttachments(msg).length === 0"
                   class="text-content"
                 >
                   {{ msg.content }}
@@ -3066,7 +3266,7 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
       ></app-message-input>
     </div>
 
-  `, styles: [".chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;gap:0}.header-actions button{width:32px;height:32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.image-message{line-height:0}.media-img{max-width:220px;max-height:280px;border-radius:10px;display:block;cursor:zoom-in;object-fit:cover;transition:opacity .15s}.media-img:hover{opacity:.88}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;gap:8px;min-width:80px;min-height:44px;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px}.file-msg-icon{font-size:20px;width:20px;height:20px;color:#fffc}.file-msg-name{font-size:13px;color:#fff;word-break:break-all}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.unread{opacity:.4}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions{left:0;right:auto}.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:1px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"] }]
+  `, styles: [".chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;gap:0}.header-actions button{width:32px;height:32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.image-message{line-height:0}.attachments-list{display:flex;flex-direction:column;gap:8px}.attachment-item{max-width:260px}.media-img{max-width:220px;max-height:280px;border-radius:10px;display:block;cursor:zoom-in;object-fit:cover;transition:opacity .15s}.media-img:hover{opacity:.88}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;gap:8px;min-width:80px;min-height:44px;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px;padding:4px 0}.file-msg-icon{font-size:20px;width:20px;height:20px;color:#fffc}.file-msg-name{font-size:13px;color:#fff;word-break:break-all}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.unread{opacity:.4}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions{left:0;right:auto}.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:1px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"] }]
         }], ctorParameters: () => [{ type: MessagingStoreService }, { type: AuthService }, { type: MessagingFileService }, { type: i0.ChangeDetectorRef }], propDecorators: { scrollContainer: [{
                 type: ViewChild,
                 args: ['scrollContainer']

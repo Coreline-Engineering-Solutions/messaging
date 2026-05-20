@@ -109,7 +109,13 @@ export declare class MessagingStoreService implements OnDestroy {
     private messageLooksLikeMedia;
     /** Same logical message_id can appear twice when WS beats HTTP temp replacement — keep first row. */
     private dedupeMessagesByIdKeepFirst;
+    private findPriorMessageForFresh;
     private incrementUnread;
+    /**
+     * Merge fresh API attachments with prior cached ones, preserving any url/blob
+     * that the optimistic message or previous load already resolved.
+     */
+    private mergeAttachments;
     /**
      * Normalize backend message shapes so UI can reliably render attachments/media.
      * Supports legacy and current field names returned by API/WS payloads.

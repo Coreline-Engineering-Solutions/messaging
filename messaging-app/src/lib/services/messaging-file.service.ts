@@ -105,6 +105,12 @@ export class MessagingFileService {
     return this.mediaCache.get(fileId) ?? null;
   }
 
+  /** Cache a URL returned by upload so later WS / REST refreshes do not fall back to spinners. */
+  rememberFileUrl(fileId: string, url: string | null | undefined): void {
+    if (isTempId(fileId) || !url) return;
+    this.mediaCache.set(fileId, url);
+  }
+
   /** Pre-warm cache for a list of file IDs (fire-and-forget, skips temp/cached). */
   prewarmCache(fileIds: string[]): void {
     for (const id of fileIds) {

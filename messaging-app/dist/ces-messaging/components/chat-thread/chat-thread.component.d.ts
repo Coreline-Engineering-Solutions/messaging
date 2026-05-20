@@ -2,7 +2,7 @@ import { OnInit, OnDestroy, ElementRef, AfterViewChecked, ChangeDetectorRef, Eve
 import { MessagingStoreService } from '../../services/messaging-store.service';
 import { MessagingFileService } from '../../services/messaging-file.service';
 import { AuthService } from '../../services/auth.service';
-import { Contact, Message } from '../../models/messaging.models';
+import { Contact, Message, Attachment } from '../../models/messaging.models';
 import { MessageInputComponent, MessagePayload } from '../message-input/message-input.component';
 import * as i0 from "@angular/core";
 export declare class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -60,18 +60,29 @@ export declare class ChatThreadComponent implements OnInit, OnDestroy, AfterView
     private getFilenameLike;
     /** Returns the primary attachment for a message, if any. */
     private getPrimaryAttachment;
+    getRenderableAttachments(msg: Message): Attachment[];
     isImageAttachment(msg: Message): boolean;
+    isImageAttachmentItem(att: Attachment): boolean;
     /** Returns the cached data URL for a message's media, or null and triggers background load. */
     getMediaUrl(msg: Message): string | null;
+    getAttachmentMediaUrl(att: Attachment, msg?: Message): string | null;
+    trackByMessage(_index: number, msg: Message): string;
+    trackByAttachment(index: number, att: Attachment): string;
+    downloadAttachment(event: Event, url: string | null, filename: string): void;
     private prewarmMedia;
     private fetchMedia;
     shouldShowMediaSpinner(msg: Message): boolean;
+    shouldShowAttachmentSpinner(att: Attachment): boolean;
     isVideoAttachment(msg: Message): boolean;
-    getAttachmentMimeType(msg: Message): string;
+    isVideoAttachmentItem(att: Attachment): boolean;
+    getAttachmentMimeType(attOrMsg: Attachment | Message): string;
     getAttachmentName(msg: Message): string;
+    getAttachmentDisplayName(att: Attachment, msg?: Message): string;
     hasFileAttachment(msg: Message): boolean;
     hasMediaFailed(msg: Message): boolean;
+    hasAttachmentFailed(att: Attachment): boolean;
     getFileIcon(msg: Message): string;
+    getAttachmentIcon(att: Attachment, msg?: Message): string;
     openLightbox(dataUrl: string): void;
     onEmojiSelected(emoji: string, messageId: string): void;
     toggleReaction(emoji: string, messageId: string): void;

@@ -295,16 +295,20 @@ export class MessagingStoreService implements OnDestroy {
           // Prepend older messages, preserving existing reactions
           const merged = [...sorted, ...existing];
           map.set(conversationId, merged);
-        } else if (skipReactionHydration) {
-          // Silent refresh — merge new messages but preserve existing reaction state
-          const existingById = new Map(existing.map(m => [String(m.message_id), m]));
+        } else {
+          // Merge new messages with existing: preserve attachment urls and reactions
+          // so optimistic previews/blob URLs don't disappear when the server refresh arrives.
           const merged = sorted.map(m => {
-            const cached = existingById.get(String(m.message_id));
-            return cached ? { ...m, reactions: cached.reactions } : m;
+            const prior = this.findPriorMessageForFresh(m, existing);
+            if (!prior) return m;
+            const mergedAttachments = this.mergeAttachments(m.attachments, prior.attachments);
+            return {
+              ...m,
+              reactions: prior.reactions ?? m.reactions,
+              attachments: mergedAttachments,
+            };
           });
           map.set(conversationId, merged);
-        } else {
-          map.set(conversationId, sorted);
         }
 
         this.messagesMap$.next(map);
@@ -699,6 +703,7 @@ export class MessagingStoreService implements OnDestroy {
           conversation_id: convId,
           content: this.coalesceMessageText(data, existing[tempIdx].content),
         });
+        merged.attachments = this.mergeAttachments(merged.attachments, existing[tempIdx].attachments);
         const map = new Map(this.messagesMap$.value);
         const msgs = this.dedupeMessagesByIdKeepFirst([...existing]);
         msgs[tempIdx] = merged;
@@ -791,7 +796,7 @@ export class MessagingStoreService implements OnDestroy {
     const t = m.message_type;
     if (t && t !== 'TEXT') return true;
     const u = String(m.media_url ?? '').trim();
-    if (u && (u.startsWith('http://') || u.startsWith('https://') || u.startsWith('data:'))) {
+    if (u && (u.startsWith('http://') || u.startsWith('https://') || u.startsWith('data:') || u.startsWith('blob:'))) {
       return true;
     }
     return Array.isArray(m.attachments) && m.attachments.length > 0;
@@ -809,6 +814,41 @@ export class MessagingStoreService implements OnDestroy {
     });
   }
 
+  private findPriorMessageForFresh(fresh: Message, existing: Message[]): Message | undefined {
+    const byId = existing.find(m => String(m.message_id) === String(fresh.message_id));
+    if (byId) return byId;
+
+    const freshAttachments = fresh.attachments || [];
+    if (!freshAttachments.length) return undefined;
+    const freshNames = new Set(
+      freshAttachments
+        .map(a => String(a.filename || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+    if (!freshNames.size) return undefined;
+
+    const freshTime = new Date(fresh.created_at).getTime();
+    return existing.find(prior => {
+      const priorAttachments = prior.attachments || [];
+      if (!priorAttachments.length) return false;
+      if (String(prior.conversation_id) !== String(fresh.conversation_id)) return false;
+      if (String(prior.sender_id) !== String(fresh.sender_id)) return false;
+
+      const priorTime = new Date(prior.created_at).getTime();
+      if (
+        Number.isFinite(freshTime) &&
+        Number.isFinite(priorTime) &&
+        Math.abs(freshTime - priorTime) > 300_000
+      ) {
+        return false;
+      }
+
+      return priorAttachments.some(att =>
+        freshNames.has(String(att.filename || '').trim().toLowerCase())
+      );
+    });
+  }
+
   private incrementUnread(conversationId: string): void {
     const items = this.inbox$.value.map((item) =>
       item.conversation_id === conversationId
@@ -817,6 +857,41 @@ export class MessagingStoreService implements OnDestroy {
     );
     this.inbox$.next(items);
     this.recalcUnread(items);
+  }
+
+  /**
+   * Merge fresh API attachments with prior cached ones, preserving any url/blob
+   * that the optimistic message or previous load already resolved.
+   */
+  private mergeAttachments(
+    fresh: Attachment[] | undefined,
+    prior: Attachment[] | undefined,
+  ): Attachment[] | undefined {
+    if (!fresh?.length) return prior?.length ? prior : fresh;
+    if (!prior?.length) return fresh;
+    const merged = fresh.map((f, idx) => {
+      const match = prior.find(p =>
+        (p.file_id && p.file_id === f.file_id) ||
+        (p.filename && p.filename === f.filename)
+      ) ?? prior[idx];
+      if (!match) return f;
+      return {
+        ...f,
+        url: f.url ?? match.url,
+        mime_type: f.mime_type ?? match.mime_type,
+        filename: f.filename || match.filename,
+      };
+    });
+    const seen = new Set(
+      merged.map(a => `${a.file_id || ''}|${a.filename || ''}`)
+    );
+    for (const p of prior) {
+      const key = `${p.file_id || ''}|${p.filename || ''}`;
+      if (!seen.has(key)) {
+        merged.push(p);
+      }
+    }
+    return merged;
   }
 
   /**
@@ -889,13 +964,34 @@ export class MessagingStoreService implements OnDestroy {
     pushId(raw?.storage_file_id);
     pushId(raw?.blob_id);
 
+    // Newer API versions may encode multiple attachments in media_url JSON.
+    const mediaValue = String(base.media_url || '').trim();
+    if (mediaValue.startsWith('{') || mediaValue.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(mediaValue);
+        const items = Array.isArray(parsed) ? parsed : parsed?.attachments;
+        if (Array.isArray(items)) {
+          const mapped = items.map((a: any, idx: number) => ({
+            file_id: String(a?.file_id ?? a?.fileId ?? a?.id ?? '').trim(),
+            filename: String(a?.filename ?? a?.file_name ?? `Attachment ${idx + 1}`),
+            mime_type: a?.mime_type ?? a?.mimeType,
+            url: a?.url ?? a?.file_url ?? a?.download_url,
+          })).filter((a: Attachment) => !!a.file_id && !a.file_id.startsWith('temp-'));
+          if (mapped.length > 0) {
+            return { ...base, media_url: undefined, attachments: mapped };
+          }
+        }
+      } catch { /* fall back to legacy media_url handling */ }
+    }
+
     // Backend stores first attachment id in messaging.message.media_url (UUID), not a public URL.
     const mediaAsId = String(base.media_url || '').trim();
     if (
       mediaAsId &&
       !mediaAsId.startsWith('http://') &&
       !mediaAsId.startsWith('https://') &&
-      !mediaAsId.startsWith('data:')
+      !mediaAsId.startsWith('data:') &&
+      !mediaAsId.startsWith('blob:')
     ) {
       pushId(mediaAsId);
     }
@@ -925,13 +1021,16 @@ export class MessagingStoreService implements OnDestroy {
 
     if (attachmentIds.length > 0 || filenames.length > 0) {
       const fallbackMime = raw?.mime_type ?? raw?.attachment_mime_type;
+      const mimeTypes = Array.isArray(raw?.mime_types)
+        ? raw.mime_types.map((x: any) => x == null ? undefined : String(x))
+        : [];
       const urlFallback = raw?.file_url ?? raw?.url ?? raw?.media_url ?? raw?.mediaUrl;
       const ids = attachmentIds.length > 0 ? attachmentIds : [];
       const built: Attachment[] = ids.map((id, idx) => ({
         file_id: id,
         filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
-        mime_type: fallbackMime,
-        url: urlFallback,
+        mime_type: mimeTypes[idx] || fallbackMime,
+        url: String(urlFallback || '').startsWith('{') ? undefined : urlFallback,
       }));
 
       // Filename only + direct URL (no storage id): still renderable as <img src>.

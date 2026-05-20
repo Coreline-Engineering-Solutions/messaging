@@ -39,6 +39,8 @@ export declare class MessagingFileService {
     getFileDataUrl(fileId: string): Observable<string>;
     /** Synchronous cache lookup — null if not loaded yet. */
     getCachedDataUrl(fileId: string): string | null;
+    /** Cache a URL returned by upload so later WS / REST refreshes do not fall back to spinners. */
+    rememberFileUrl(fileId: string, url: string | null | undefined): void;
     /** Pre-warm cache for a list of file IDs (fire-and-forget, skips temp/cached). */
     prewarmCache(fileIds: string[]): void;
     deleteFile(fileId: string): Observable<any>;
