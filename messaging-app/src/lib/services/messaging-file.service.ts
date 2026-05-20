@@ -1,7 +1,7 @@
 import { Injectable, Inject } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
-import { Observable, throwError, forkJoin, of } from 'rxjs';
-import { catchError, map, tap } from 'rxjs/operators';
+import { Observable, throwError, from, of } from 'rxjs';
+import { catchError, concatMap, map, tap, toArray } from 'rxjs/operators';
 import { MESSAGING_CONFIG, MessagingConfig } from '../messaging.config';
 import { AuthService } from './auth.service';
 
@@ -26,6 +26,11 @@ function isTempId(id: string | null | undefined): boolean {
   return !id || id.startsWith(TEMP_PREFIX);
 }
 
+function isStructuredId(id: string | null | undefined): boolean {
+  const value = String(id || '').trim();
+  return value.startsWith('{') || value.startsWith('[');
+}
+
 @Injectable({ providedIn: 'root' })
 export class MessagingFileService {
   /** Base URL, e.g. https://ces-ticketing-system-db.onrender.com/api */
@@ -38,6 +43,7 @@ export class MessagingFileService {
 
   /** In-session cache: file_id → data URL. Cleared on page reload. */
   private readonly mediaCache = new Map<string, string>();
+  private readonly mediaFailures = new Set<string>();
 
   constructor(
     private http: HttpClient,
@@ -46,9 +52,9 @@ export class MessagingFileService {
   ) {
     this.base = this.config.apiBaseUrl.replace(/\/+$/, '');
 
-    this.uploadEndpoints   = [`${this.base}/storage/upload`,   `${this.base}/messaging/storage/upload`,   `${this.base}/messaging/files/upload`];
-    this.retrieveEndpoints = [`${this.base}/storage/retrieve`, `${this.base}/messaging/storage/retrieve`, `${this.base}/messaging/files/retrieve`];
-    this.deleteEndpoints   = [`${this.base}/storage/delete`,   `${this.base}/messaging/storage/delete`,   `${this.base}/messaging/files/delete`];
+    this.uploadEndpoints   = [`${this.base}/storage/upload`,   `${this.base}/files/upload`,   `${this.base}/messaging/storage/upload`,   `${this.base}/messaging/files/upload`];
+    this.retrieveEndpoints = [`${this.base}/storage/retrieve`, `${this.base}/files/retrieve`, `${this.base}/messaging/storage/retrieve`, `${this.base}/messaging/files/retrieve`];
+    this.deleteEndpoints   = [`${this.base}/storage/delete`,   `${this.base}/files/delete`,   `${this.base}/messaging/storage/delete`,   `${this.base}/messaging/files/delete`];
   }
 
   // ── Upload ───────────────────────────────────────────────────────────────
@@ -65,7 +71,10 @@ export class MessagingFileService {
 
   uploadFiles(files: File[]): Observable<FileUploadResponse[]> {
     if (files.length === 0) return of([]);
-    return forkJoin(files.map((f) => this.uploadFile(f)));
+    return from(files).pipe(
+      concatMap((file) => this.uploadFile(file)),
+      toArray()
+    );
   }
 
   // ── Retrieve ─────────────────────────────────────────────────────────────
@@ -74,12 +83,23 @@ export class MessagingFileService {
     if (isTempId(fileId)) {
       return throwError(() => new Error('Cannot retrieve file: upload not complete yet.'));
     }
+    if (isStructuredId(fileId)) {
+      return throwError(() => new Error('Cannot retrieve file: invalid structured attachment id.'));
+    }
+    if (this.mediaFailures.has(fileId)) {
+      return throwError(() => new Error('Cannot retrieve file: previous retrieve failed.'));
+    }
     const makeBody = () => {
       const fd = new FormData();
       fd.append('file_id', fileId);
       return fd;
     };
-    return this.tryEndpoints<FileRetrieveResponse>(this.retrieveEndpoints, makeBody);
+    return this.tryEndpoints<FileRetrieveResponse>(this.retrieveEndpoints, makeBody, false).pipe(
+      catchError((err) => {
+        this.mediaFailures.add(fileId);
+        return throwError(() => err);
+      })
+    );
   }
 
   /**
@@ -89,6 +109,12 @@ export class MessagingFileService {
   getFileDataUrl(fileId: string): Observable<string> {
     if (isTempId(fileId)) {
       return throwError(() => new Error('Cannot retrieve file: upload not complete yet.'));
+    }
+    if (isStructuredId(fileId)) {
+      return throwError(() => new Error('Cannot retrieve file: invalid structured attachment id.'));
+    }
+    if (this.mediaFailures.has(fileId)) {
+      return throwError(() => new Error('Cannot retrieve file: previous retrieve failed.'));
     }
     const cached = this.mediaCache.get(fileId);
     if (cached) return of(cached);
@@ -101,14 +127,14 @@ export class MessagingFileService {
 
   /** Synchronous cache lookup — null if not loaded yet. */
   getCachedDataUrl(fileId: string): string | null {
-    if (isTempId(fileId)) return null;
+    if (isTempId(fileId) || isStructuredId(fileId) || this.mediaFailures.has(fileId)) return null;
     return this.mediaCache.get(fileId) ?? null;
   }
 
   /** Pre-warm cache for a list of file IDs (fire-and-forget, skips temp/cached). */
   prewarmCache(fileIds: string[]): void {
     for (const id of fileIds) {
-      if (!isTempId(id) && !this.mediaCache.has(id)) {
+      if (!isTempId(id) && !isStructuredId(id) && !this.mediaFailures.has(id) && !this.mediaCache.has(id)) {
         this.getFileDataUrl(id).subscribe({ error: () => {} });
       }
     }
@@ -117,7 +143,7 @@ export class MessagingFileService {
   // ── Delete ────────────────────────────────────────────────────────────────
 
   deleteFile(fileId: string): Observable<any> {
-    if (isTempId(fileId)) {
+    if (isTempId(fileId) || isStructuredId(fileId)) {
       return of(null);
     }
     this.mediaCache.delete(fileId);
@@ -126,7 +152,7 @@ export class MessagingFileService {
       fd.append('file_id', fileId);
       return fd;
     };
-    return this.tryEndpoints(this.deleteEndpoints, makeBody);
+    return this.tryEndpoints(this.deleteEndpoints, makeBody, false);
   }
 
   // ── Send message with attachments ────────────────────────────────────────
@@ -161,7 +187,7 @@ export class MessagingFileService {
    * Falls back to the next URL only on 404 or network error (status 0).
    * Logs every attempt with its result.
    */
-  private tryEndpoints<T>(urls: string[], bodyFn: () => FormData): Observable<T> {
+  private tryEndpoints<T>(urls: string[], bodyFn: () => FormData, fallbackOnNetwork = true): Observable<T> {
     if (urls.length === 0) {
       return throwError(() => new Error('All storage endpoints exhausted.'));
     }
@@ -170,8 +196,8 @@ export class MessagingFileService {
     return this.http.post<T>(url, bodyFn()).pipe(
       catchError((err: HttpErrorResponse) => {
         // Only fall through on not-found or network issues
-        if ((err.status === 404 || err.status === 0) && rest.length > 0) {
-          return this.tryEndpoints<T>(rest, bodyFn);
+        if ((err.status === 404 || (fallbackOnNetwork && err.status === 0)) && rest.length > 0) {
+          return this.tryEndpoints<T>(rest, bodyFn, fallbackOnNetwork);
         }
 
         // Translate to a friendly error

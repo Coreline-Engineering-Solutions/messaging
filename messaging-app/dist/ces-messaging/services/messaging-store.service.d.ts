@@ -103,6 +103,8 @@ export declare class MessagingStoreService implements OnDestroy {
     /** Public — lets components add an optimistic message without a round-trip. */
     appendOptimisticMessage(message: Message): void;
     private appendMessage;
+    private mergeMessageAttachments;
+    private normalizeAttachmentList;
     private updateInboxPreview;
     /** First non-empty text field from API / WS objects (POST bodies often omit `content`). */
     private coalesceMessageText;

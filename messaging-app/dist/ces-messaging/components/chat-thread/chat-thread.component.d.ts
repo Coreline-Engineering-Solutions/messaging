@@ -2,7 +2,7 @@ import { OnInit, OnDestroy, ElementRef, AfterViewChecked, ChangeDetectorRef, Eve
 import { MessagingStoreService } from '../../services/messaging-store.service';
 import { MessagingFileService } from '../../services/messaging-file.service';
 import { AuthService } from '../../services/auth.service';
-import { Contact, Message } from '../../models/messaging.models';
+import { Contact, Message, Attachment } from '../../models/messaging.models';
 import { MessageInputComponent, MessagePayload } from '../message-input/message-input.component';
 import * as i0 from "@angular/core";
 export declare class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -32,6 +32,9 @@ export declare class ChatThreadComponent implements OnInit, OnDestroy, AfterView
     private mediaLoading;
     /** Tracks file IDs where retrieval failed so UI doesn't spin forever. */
     private mediaFailed;
+    private mediaQueue;
+    private activeMediaRequests;
+    private readonly maxMediaRequests;
     constructor(store: MessagingStoreService, auth: AuthService, fileService: MessagingFileService, cdr: ChangeDetectorRef);
     ngOnInit(): void;
     ngAfterViewChecked(): void;
@@ -58,21 +61,31 @@ export declare class ChatThreadComponent implements OnInit, OnDestroy, AfterView
     formatDate(dateStr: string): string;
     private scrollToBottom;
     private getFilenameLike;
+    getRenderableAttachments(msg: Message): Attachment[];
+    trackByAttachment(index: number, attachment: Attachment): string;
+    private getAllAttachments;
+    private toArray;
     /** Returns the primary attachment for a message, if any. */
     private getPrimaryAttachment;
-    isImageAttachment(msg: Message): boolean;
+    isImageAttachment(msg: Message, attachment?: Attachment): boolean;
     /** Returns the cached data URL for a message's media, or null and triggers background load. */
-    getMediaUrl(msg: Message): string | null;
+    getMediaUrl(msg: Message, attachment?: Attachment): string | null;
     private prewarmMedia;
     private fetchMedia;
-    shouldShowMediaSpinner(msg: Message): boolean;
-    isVideoAttachment(msg: Message): boolean;
-    getAttachmentMimeType(msg: Message): string;
-    getAttachmentName(msg: Message): string;
+    private pumpMediaQueue;
+    private finishMediaRequest;
+    private resetMediaQueue;
+    shouldShowMediaSpinner(target: Message | Attachment): boolean;
+    isVideoAttachment(msg: Message, attachment?: Attachment): boolean;
+    getAttachmentMimeType(msg: Message, attachment?: Attachment): string;
+    getAttachmentName(msg: Message, attachment?: Attachment): string;
     hasFileAttachment(msg: Message): boolean;
-    hasMediaFailed(msg: Message): boolean;
-    getFileIcon(msg: Message): string;
-    openLightbox(dataUrl: string): void;
+    hasMediaFailed(target: Message | Attachment): boolean;
+    private getAttachmentFileId;
+    getFileIcon(msg: Message, attachment?: Attachment): string;
+    openLightbox(dataUrl: string, event?: Event): void;
+    downloadAttachment(msg: Message, attachment: Attachment, event?: Event): void;
+    private triggerDownload;
     onEmojiSelected(emoji: string, messageId: string): void;
     toggleReaction(emoji: string, messageId: string): void;
     getReactorTooltip(reaction: any): string;

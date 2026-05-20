@@ -82,76 +82,72 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
                 {{ getSenderName(msg) }}
               </div>
               <div class="message-bubble" [class.own-bubble]="isOwnMessage(msg)" (mouseenter)="hoveredMessageId = msg.message_id" (mouseleave)="hoveredMessageId = null">
-                <!-- IMAGE ─────────────────────────────────────── -->
-                <div *ngIf="isImageAttachment(msg)" class="image-message">
-                  <ng-container *ngIf="getMediaUrl(msg) as dataUrl; else imgFallback">
-                    <img [src]="dataUrl" alt="Image" class="media-img" (click)="openLightbox(dataUrl)" />
-                  </ng-container>
-                  <ng-template #imgFallback>
-                    <div *ngIf="shouldShowMediaSpinner(msg); else imgAsFile" class="media-placeholder">
-                      <mat-spinner diameter="22"></mat-spinner>
-                    </div>
-                    <ng-template #imgAsFile>
-                      <div class="file-message">
-                        <mat-icon class="file-msg-icon">image</mat-icon>
-                        <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
+                <!-- ATTACHMENTS ───────────────────────────────── -->
+                <div *ngIf="hasFileAttachment(msg)" class="attachments-list">
+                  <div *ngFor="let attachment of getRenderableAttachments(msg); trackBy: trackByAttachment" class="attachment-item">
+                    <ng-container *ngIf="isImageAttachment(msg, attachment); else nonImageAttachment">
+                      <div class="image-message">
+                        <ng-container *ngIf="getMediaUrl(msg, attachment) as dataUrl; else imgFallback">
+                          <div class="media-wrapper">
+                            <img
+                              [src]="dataUrl"
+                              alt="Image"
+                              class="media-img"
+                              (mousedown)="$event.stopPropagation()"
+                              (click)="openLightbox(dataUrl, $event)"
+                            />
+                            <div class="attachment-actions">
+                              <button
+                                type="button"
+                                class="attachment-action-btn"
+                                (click)="openLightbox(dataUrl, $event)"
+                                title="Open image"
+                              >
+                                <mat-icon>open_in_full</mat-icon>
+                              </button>
+                              <button
+                                type="button"
+                                class="attachment-action-btn"
+                                (click)="downloadAttachment(msg, attachment, $event)"
+                                title="Download image"
+                              >
+                                <mat-icon>download</mat-icon>
+                              </button>
+                            </div>
+                          </div>
+                        </ng-container>
+                        <ng-template #imgFallback>
+                          <div *ngIf="shouldShowMediaSpinner(attachment); else imgAsFile" class="media-placeholder">
+                            <mat-spinner diameter="22"></mat-spinner>
+                          </div>
+                          <ng-template #imgAsFile>
+                            <div class="file-message">
+                              <mat-icon class="file-msg-icon">image</mat-icon>
+                              <span class="file-msg-name">{{ getAttachmentName(msg, attachment) }}</span>
+                            </div>
+                          </ng-template>
+                        </ng-template>
                       </div>
-                    </ng-template>
-                  </ng-template>
-                </div>
+                    </ng-container>
 
-                <!-- FILE / VIDEO ─────────────────────────────── -->
-                <div *ngIf="hasFileAttachment(msg) && !isImageAttachment(msg)" class="file-message">
-                  <ng-container *ngIf="isVideoAttachment(msg); else regularFile">
-                    <ng-container *ngIf="getMediaUrl(msg) as videoUrl; else videoLoading">
-                      <div class="video-message">
-                        <video controls class="media-video" preload="metadata">
-                          <source [src]="videoUrl" [type]="getAttachmentMimeType(msg)" />
-                          Your browser does not support video.
-                        </video>
-                        <a
-                          class="video-download"
-                          [href]="videoUrl"
-                          [attr.download]="getAttachmentName(msg)"
-                          target="_blank"
-                          rel="noopener"
+                    <ng-template #nonImageAttachment>
+                      <div class="file-message">
+                        <mat-icon class="file-msg-icon">{{ getFileIcon(msg, attachment) }}</mat-icon>
+                        <span class="file-msg-name">{{ getAttachmentName(msg, attachment) }}</span>
+                        <button
+                          type="button"
+                          class="file-download-btn"
+                          (click)="downloadAttachment(msg, attachment, $event)"
+                          title="Download file"
                         >
-                          Download {{ getAttachmentName(msg) }}
-                        </a>
-                      </div>
-                    </ng-container>
-                    <ng-template #videoLoading>
-                      <div class="media-placeholder">
-                        <mat-spinner diameter="22"></mat-spinner>
-                        <span class="media-load-label">Loading video…</span>
+                          <mat-icon class="file-download-icon">download</mat-icon>
+                        </button>
                       </div>
                     </ng-template>
-                  </ng-container>
-                  <ng-template #regularFile>
-                    <ng-container *ngIf="getMediaUrl(msg) as fileUrl; else fileLoading">
-                      <a
-                        class="file-download"
-                        [href]="fileUrl"
-                        [attr.download]="getAttachmentName(msg)"
-                        target="_blank"
-                        rel="noopener"
-                        (click)="$event.stopPropagation()"
-                      >
-                        <mat-icon class="file-msg-icon">{{ getFileIcon(msg) }}</mat-icon>
-                        <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
-                        <mat-icon class="file-download-icon">download</mat-icon>
-                      </a>
-                    </ng-container>
-                    <ng-template #fileLoading>
-                      <mat-icon class="file-msg-icon">{{ getFileIcon(msg) }}</mat-icon>
-                      <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
-                      <mat-spinner *ngIf="shouldShowMediaSpinner(msg)" diameter="18"></mat-spinner>
-                      <span *ngIf="hasMediaFailed(msg)" class="media-load-label">Unavailable</span>
-                    </ng-template>
-                  </ng-template>
+                  </div>
                 </div>
                 <div
-                  *ngIf="msg.message_type === 'TEXT' && !isImageAttachment(msg) && !hasFileAttachment(msg)"
+                  *ngIf="msg.message_type === 'TEXT' && !hasFileAttachment(msg)"
                   class="text-content"
                 >
                   {{ msg.content }}
@@ -387,6 +383,12 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       line-height: 0;
     }
 
+    .media-wrapper {
+      position: relative;
+      display: inline-block;
+      line-height: 0;
+    }
+
     .media-img {
       max-width: 220px;
       max-height: 280px;
@@ -397,8 +399,44 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       transition: opacity 0.15s;
     }
 
-    .media-img:hover {
-      opacity: 0.88;
+    .attachment-actions {
+      position: absolute;
+      right: 6px;
+      top: 6px;
+      display: flex;
+      gap: 4px;
+      opacity: 0;
+      transition: opacity 0.12s ease;
+      pointer-events: none;
+    }
+
+    .media-wrapper:hover .attachment-actions {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .attachment-action-btn,
+    .file-download-btn {
+      border: none;
+      border-radius: 999px;
+      background: rgba(7, 29, 48, 0.82);
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+    }
+
+    .attachment-action-btn {
+      width: 28px;
+      height: 28px;
+    }
+
+    .attachment-action-btn mat-icon {
+      font-size: 17px;
+      width: 17px;
+      height: 17px;
     }
 
     .media-video {
@@ -437,6 +475,17 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       color: rgba(255,255,255,0.6);
     }
 
+    .attachments-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-width: 100%;
+    }
+
+    .attachment-item {
+      max-width: 100%;
+    }
+
     .file-message {
       display: flex;
       align-items: center;
@@ -472,6 +521,13 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       height: 18px;
       color: rgba(255, 255, 255, 0.7);
       flex-shrink: 0;
+    }
+
+    .file-download-btn {
+      width: 24px;
+      height: 24px;
+      flex-shrink: 0;
+      margin-left: auto;
     }
 
     .message-meta {
@@ -627,6 +683,9 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   private mediaLoading = new Set<string>();
   /** Tracks file IDs where retrieval failed so UI doesn't spin forever. */
   private mediaFailed = new Set<string>();
+  private mediaQueue: string[] = [];
+  private activeMediaRequests = 0;
+  private readonly maxMediaRequests = 2;
 
   constructor(
     private store: MessagingStoreService,
@@ -652,6 +711,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
 
       if (convId && convId !== this.conversationId) {
         this.conversationId = convId;
+        this.resetMediaQueue();
         this.shouldScrollToBottom = true;
         const chat = chats.find((c) => c.conversationId === convId);
         this.conversationName = chat?.name || 'Chat';
@@ -903,9 +963,10 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
 
   // ── Media helpers ────────────────────────────────────────────────────────
 
-  private getFilenameLike(msg: Message): string {
+  private getFilenameLike(msg: Message, attachment?: Attachment): string {
     const anyMsg = msg as any;
     return String(
+      attachment?.filename ||
       this.getPrimaryAttachment(msg)?.filename ||
       anyMsg?.filename ||
       anyMsg?.file_name ||
@@ -914,20 +975,147 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
     ).toLowerCase();
   }
 
+  getRenderableAttachments(msg: Message): Attachment[] {
+    const attachments = this.getAllAttachments(msg);
+    if (attachments.length > 0) return attachments;
+    const primary = this.getPrimaryAttachment(msg);
+    return primary ? [primary] : [];
+  }
+
+  trackByAttachment(index: number, attachment: Attachment): string {
+    return attachment.file_id || attachment.url || `${attachment.filename}-${index}`;
+  }
+
+  private getAllAttachments(msg: Message): Attachment[] {
+    const anyMsg = msg as any;
+    const attachments: Attachment[] = [];
+    const add = (attachment: Partial<Attachment> | string | null | undefined): void => {
+      const raw = attachment as any;
+      const fileId = String(
+        typeof attachment === 'string' ? attachment :
+        raw?.file_id ??
+        raw?.fileId ??
+        raw?.id ??
+        raw?.attachment_id ??
+        raw?.storage_file_id ??
+        ''
+      ).trim();
+      if (fileId.startsWith('{') || fileId.startsWith('[')) {
+        const ids = this.toArray(fileId);
+        const filenames = this.toArray(raw?.filenames ?? raw?.filename ?? raw?.file_name);
+        const mimeTypes = this.toArray(raw?.mime_types ?? raw?.mimeTypes ?? raw?.mime_type);
+        ids.forEach((id, idx) => {
+          add({
+            file_id: id,
+            filename: filenames[idx] || filenames[0] || raw?.filename || raw?.file_name || `Attachment ${idx + 1}`,
+            mime_type: mimeTypes[idx] || raw?.mime_type || raw?.mimeType,
+          });
+        });
+        return;
+      }
+      const url = String(raw?.url ?? raw?.file_url ?? raw?.download_url ?? '').trim();
+      if (!fileId && !url) return;
+      if (fileId && attachments.some((a) => a.file_id === fileId)) return;
+      if (!fileId && url && attachments.some((a) => a.url === url)) return;
+      attachments.push({
+        file_id: fileId,
+        filename: String(
+          raw?.filename ??
+          raw?.file_name ??
+          raw?.name ??
+          'File'
+        ),
+        mime_type: raw?.mime_type ?? raw?.mimeType,
+        size_bytes: raw?.size_bytes ?? raw?.sizeBytes,
+        url: url || undefined,
+      });
+    };
+
+    if (Array.isArray(msg.attachments)) {
+      msg.attachments.forEach(add);
+    }
+
+    const mediaValue = String(msg.media_url || '').trim();
+    if (mediaValue.startsWith('{') || mediaValue.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(mediaValue);
+        const mediaAttachments = Array.isArray(parsed) ? parsed : parsed?.attachments;
+        if (Array.isArray(mediaAttachments)) {
+          mediaAttachments.forEach(add);
+        }
+        if (!Array.isArray(parsed)) {
+          const ids = this.toArray(parsed?.ids ?? parsed?.file_ids ?? parsed?.attachment_ids);
+          const filenames = this.toArray(parsed?.filenames);
+          const mimeTypes = this.toArray(parsed?.mime_types ?? parsed?.mimeTypes);
+          ids.forEach((id, idx) => {
+            add({
+              file_id: id,
+              filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
+              mime_type: mimeTypes[idx],
+            });
+          });
+        }
+      } catch {
+        // Non-JSON media_url values are handled by getPrimaryAttachment().
+      }
+    }
+
+    const ids = this.toArray(anyMsg?.attachment_ids ?? anyMsg?.file_ids);
+    const filenames = this.toArray(anyMsg?.filenames);
+    const mimeTypes = this.toArray(anyMsg?.mime_types ?? anyMsg?.mimeTypes);
+    ids.forEach((id, idx) => {
+      add({
+        file_id: id,
+        filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
+        mime_type: mimeTypes[idx] || anyMsg?.mime_type || anyMsg?.attachment_mime_type,
+      });
+    });
+
+    return attachments;
+  }
+
+  private toArray(value: unknown): string[] {
+    if (Array.isArray(value)) {
+      return value
+        .map((x: any) => (typeof x === 'string' ? x : x?.file_id ?? x?.id ?? ''))
+        .map((x) => String(x).trim())
+        .filter(Boolean);
+    }
+    if (typeof value === 'string' && value.trim()) {
+      const trimmed = value.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (Array.isArray(parsed)) return this.toArray(parsed);
+          return this.toArray(parsed?.ids ?? parsed?.file_ids ?? parsed?.attachment_ids ?? parsed?.attachments);
+        } catch {
+          return [];
+        }
+      }
+      return value
+        .split(/[,\s]+/)
+        .map((x) => x.trim())
+        .filter(Boolean);
+    }
+    return [];
+  }
+
   /** Returns the primary attachment for a message, if any. */
   private getPrimaryAttachment(msg: Message): Attachment | null {
-    if (msg.attachments && msg.attachments.length > 0) return msg.attachments[0];
+    const attachments = this.getAllAttachments(msg);
+    if (attachments.length > 0) return attachments[0];
 
     // Some API responses provide file metadata in alternate fields.
     const anyMsg = msg as any;
     const mu = String(msg.media_url || '').trim();
     const mediaIsDirectUrl =
       mu.startsWith('http://') || mu.startsWith('https://') || mu.startsWith('data:');
+    const mediaIsStructured = mu.startsWith('{') || mu.startsWith('[');
     const fileId =
       anyMsg?.file_id ||
       anyMsg?.attachment_id ||
       anyMsg?.attachment_ids?.[0] ||
-      (!mediaIsDirectUrl && mu ? mu : undefined);
+      (!mediaIsDirectUrl && !mediaIsStructured && mu ? mu : undefined);
     const mime = anyMsg?.mime_type || anyMsg?.attachment_mime_type;
     const explicitFilename = anyMsg?.filename || anyMsg?.file_name;
     const filename =
@@ -944,24 +1132,24 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
     return null;
   }
 
-  isImageAttachment(msg: Message): boolean {
-    if (msg.message_type === 'IMAGE') return true;
-    const mime = this.getPrimaryAttachment(msg)?.mime_type || '';
+  isImageAttachment(msg: Message, attachment?: Attachment): boolean {
+    const mime = attachment?.mime_type || this.getPrimaryAttachment(msg)?.mime_type || '';
     if (mime.startsWith('image/')) return true;
-    const name = this.getFilenameLike(msg);
-    return /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)$/i.test(name);
+    const name = this.getFilenameLike(msg, attachment);
+    if (/\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)$/i.test(name)) return true;
+    return !attachment && msg.message_type === 'IMAGE';
   }
 
   /** Returns the cached data URL for a message's media, or null and triggers background load. */
-  getMediaUrl(msg: Message): string | null {
-    const att = this.getPrimaryAttachment(msg);
+  getMediaUrl(msg: Message, attachment?: Attachment): string | null {
+    const att = attachment || this.getPrimaryAttachment(msg);
     const fileId = att?.file_id?.trim();
 
     const directUrl =
       att?.url ||
-      msg.media_url ||
-      (msg as any)?.url ||
-      (msg as any)?.file_url;
+      (!attachment ? msg.media_url : undefined) ||
+      (!attachment ? (msg as any)?.url : undefined) ||
+      (!attachment ? (msg as any)?.file_url : undefined);
     if (
       directUrl &&
       (directUrl.startsWith('http://') ||
@@ -977,6 +1165,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
 
     const cached = this.fileService.getCachedDataUrl(fileId);
     if (cached) return cached;
+    if (this.mediaFailed.has(fileId)) return null;
 
     // Not yet cached — kick off a background fetch
     this.fetchMedia(fileId);
@@ -985,23 +1174,134 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
 
   private prewarmMedia(messages: Message[]): void {
     for (const msg of messages) {
-      const att = this.getPrimaryAttachment(msg);
-      const fileId = att?.file_id?.trim();
-      if (!fileId || fileId.startsWith('temp-')) continue;
-      if (this.fileService.getCachedDataUrl(fileId)) continue;
-      // Preload images and videos eagerly; queue other files so download links appear.
-      this.fetchMedia(fileId);
+      for (const att of this.getRenderableAttachments(msg)) {
+        if (!this.isImageAttachment(msg, att)) continue;
+        const fileId = att.file_id?.trim();
+        if (!fileId || fileId.startsWith('temp-')) continue;
+        if (this.mediaFailed.has(fileId)) continue;
+        if (this.fileService.getCachedDataUrl(fileId)) continue;
+        // Queue all files so download links appear once retrieval completes.
+        this.fetchMedia(fileId);
+      }
     }
   }
 
   private fetchMedia(fileId: string): void {
-    if (!fileId || fileId.startsWith('temp-') || this.mediaLoading.has(fileId)) return;
-    this.mediaFailed.delete(fileId);
+    if (!fileId || fileId.startsWith('temp-') || this.mediaLoading.has(fileId) || this.mediaFailed.has(fileId)) return;
     this.mediaLoading.add(fileId);
+    this.mediaQueue.push(fileId);
+    this.pumpMediaQueue();
+  }
 
+  private pumpMediaQueue(): void {
+    while (this.activeMediaRequests < this.maxMediaRequests && this.mediaQueue.length > 0) {
+      const fileId = this.mediaQueue.shift();
+      if (!fileId) continue;
+      this.activeMediaRequests += 1;
+
+      this.fileService.getFileDataUrl(fileId).subscribe({
+        next: () => {
+          this.finishMediaRequest(fileId);
+        },
+        error: () => {
+          this.mediaFailed.add(fileId);
+          this.finishMediaRequest(fileId);
+        },
+      });
+    }
+  }
+
+  private finishMediaRequest(fileId: string): void {
+    this.activeMediaRequests = Math.max(0, this.activeMediaRequests - 1);
+    this.mediaLoading.delete(fileId);
+    this.cdr.markForCheck();
+    this.pumpMediaQueue();
+  }
+
+  private resetMediaQueue(): void {
+    this.mediaQueue = [];
+    this.mediaLoading.clear();
+    this.activeMediaRequests = 0;
+  }
+
+  shouldShowMediaSpinner(target: Message | Attachment): boolean {
+    const fileId = this.getAttachmentFileId(target);
+    if (!fileId || fileId.startsWith('temp-')) return false;
+    return this.mediaLoading.has(fileId) && !this.mediaFailed.has(fileId);
+  }
+
+  isVideoAttachment(msg: Message, attachment?: Attachment): boolean {
+    const mime = attachment?.mime_type || this.getPrimaryAttachment(msg)?.mime_type || '';
+    if (mime.startsWith('video/')) return true;
+    const name = this.getFilenameLike(msg, attachment);
+    return /\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(name);
+  }
+
+  getAttachmentMimeType(msg: Message, attachment?: Attachment): string {
+    return attachment?.mime_type || this.getPrimaryAttachment(msg)?.mime_type || 'application/octet-stream';
+  }
+
+  getAttachmentName(msg: Message, attachment?: Attachment): string {
+    return attachment?.filename || this.getPrimaryAttachment(msg)?.filename || msg.content || 'File';
+  }
+
+  hasFileAttachment(msg: Message): boolean {
+    return msg.message_type === 'FILE' || this.getRenderableAttachments(msg).length > 0;
+  }
+
+  hasMediaFailed(target: Message | Attachment): boolean {
+    const fileId = this.getAttachmentFileId(target);
+    return !!fileId && this.mediaFailed.has(fileId);
+  }
+
+  private getAttachmentFileId(target: Message | Attachment): string | undefined {
+    if ('file_id' in target) return target.file_id;
+    return this.getPrimaryAttachment(target)?.file_id;
+  }
+
+  getFileIcon(msg: Message, attachment?: Attachment): string {
+    const mime = this.getAttachmentMimeType(msg, attachment);
+    const name = this.getAttachmentName(msg, attachment).toLowerCase();
+    if (mime.startsWith('video/') || /\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(name)) return 'videocam';
+    if (mime.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|flac)$/i.test(name)) return 'audiotrack';
+    if (mime.includes('pdf') || name.endsWith('.pdf')) return 'picture_as_pdf';
+    if (mime.includes('spreadsheet') || mime.includes('excel') || /\.(xls|xlsx|csv)$/i.test(name)) return 'table_chart';
+    if (mime.includes('document') || mime.includes('word') || /\.(doc|docx|txt|rtf)$/i.test(name)) return 'description';
+    if (mime.includes('zip') || /\.(zip|rar|7z|tar|gz)$/i.test(name)) return 'folder_zip';
+    return 'insert_drive_file';
+  }
+
+  openLightbox(dataUrl: string, event?: Event): void {
+    event?.stopPropagation();
+    this.lightboxOpen.emit(dataUrl);
+  }
+
+  downloadAttachment(msg: Message, attachment: Attachment, event?: Event): void {
+    event?.preventDefault();
+    event?.stopPropagation();
+
+    const directUrl = attachment.url;
+    if (directUrl && /^(https?:|data:)/i.test(directUrl)) {
+      this.triggerDownload(directUrl, this.getAttachmentName(msg, attachment));
+      return;
+    }
+
+    const fileId = attachment.file_id?.trim();
+    if (!fileId || fileId.startsWith('temp-') || fileId.startsWith('{') || fileId.startsWith('[')) {
+      return;
+    }
+
+    const cached = this.fileService.getCachedDataUrl(fileId);
+    if (cached) {
+      this.triggerDownload(cached, this.getAttachmentName(msg, attachment));
+      return;
+    }
+
+    this.mediaLoading.add(fileId);
     this.fileService.getFileDataUrl(fileId).subscribe({
-      next: () => {
+      next: (dataUrl) => {
         this.mediaLoading.delete(fileId);
+        this.triggerDownload(dataUrl, this.getAttachmentName(msg, attachment));
         this.cdr.markForCheck();
       },
       error: () => {
@@ -1012,50 +1312,15 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
     });
   }
 
-  shouldShowMediaSpinner(msg: Message): boolean {
-    const fileId = this.getPrimaryAttachment(msg)?.file_id;
-    if (!fileId || fileId.startsWith('temp-')) return false;
-    return this.mediaLoading.has(fileId) && !this.mediaFailed.has(fileId);
-  }
-
-  isVideoAttachment(msg: Message): boolean {
-    const mime = this.getPrimaryAttachment(msg)?.mime_type || '';
-    if (mime.startsWith('video/')) return true;
-    const name = this.getFilenameLike(msg);
-    return /\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(name);
-  }
-
-  getAttachmentMimeType(msg: Message): string {
-    return this.getPrimaryAttachment(msg)?.mime_type || 'application/octet-stream';
-  }
-
-  getAttachmentName(msg: Message): string {
-    return this.getPrimaryAttachment(msg)?.filename || msg.content || 'File';
-  }
-
-  hasFileAttachment(msg: Message): boolean {
-    return msg.message_type === 'FILE' || !!this.getPrimaryAttachment(msg);
-  }
-
-  hasMediaFailed(msg: Message): boolean {
-    const fileId = this.getPrimaryAttachment(msg)?.file_id;
-    return !!fileId && this.mediaFailed.has(fileId);
-  }
-
-  getFileIcon(msg: Message): string {
-    const mime = this.getAttachmentMimeType(msg);
-    const name = this.getAttachmentName(msg).toLowerCase();
-    if (mime.startsWith('video/') || /\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(name)) return 'videocam';
-    if (mime.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|flac)$/i.test(name)) return 'audiotrack';
-    if (mime.includes('pdf') || name.endsWith('.pdf')) return 'picture_as_pdf';
-    if (mime.includes('spreadsheet') || mime.includes('excel') || /\.(xls|xlsx|csv)$/i.test(name)) return 'table_chart';
-    if (mime.includes('document') || mime.includes('word') || /\.(doc|docx|txt|rtf)$/i.test(name)) return 'description';
-    if (mime.includes('zip') || /\.(zip|rar|7z|tar|gz)$/i.test(name)) return 'folder_zip';
-    return 'insert_drive_file';
-  }
-
-  openLightbox(dataUrl: string): void {
-    this.lightboxOpen.emit(dataUrl);
+  private triggerDownload(url: string, filename: string): void {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename || 'attachment';
+    link.target = '_blank';
+    link.rel = 'noopener';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   }
 
   // ── Reactions ────────────────────────────────────────────────────────────

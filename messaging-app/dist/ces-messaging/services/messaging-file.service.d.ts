@@ -28,6 +28,7 @@ export declare class MessagingFileService {
     private readonly deleteEndpoints;
     /** In-session cache: file_id → data URL. Cleared on page reload. */
     private readonly mediaCache;
+    private readonly mediaFailures;
     constructor(http: HttpClient, auth: AuthService, config: MessagingConfig);
     uploadFile(file: File, category?: string): Observable<FileUploadResponse>;
     uploadFiles(files: File[]): Observable<FileUploadResponse[]>;

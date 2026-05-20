@@ -291,20 +291,21 @@ export class MessagingStoreService implements OnDestroy {
           new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
         );
 
+        const existingById = new Map(existing.map(m => [String(m.message_id), m]));
+
         if (beforeMessageId) {
           // Prepend older messages, preserving existing reactions
           const merged = [...sorted, ...existing];
           map.set(conversationId, merged);
-        } else if (skipReactionHydration) {
-          // Silent refresh — merge new messages but preserve existing reaction state
-          const existingById = new Map(existing.map(m => [String(m.message_id), m]));
+        } else {
+          // Replace with server data but keep the richer of existing vs server attachments
+          // (the optimistic path may have more attachment metadata than the server echoes back).
           const merged = sorted.map(m => {
             const cached = existingById.get(String(m.message_id));
-            return cached ? { ...m, reactions: cached.reactions } : m;
+            if (!cached) return m;
+            return this.mergeMessageAttachments(cached, m);
           });
           map.set(conversationId, merged);
-        } else {
-          map.set(conversationId, sorted);
         }
 
         this.messagesMap$.next(map);
@@ -692,13 +693,13 @@ export class MessagingStoreService implements OnDestroy {
         return a === b || !b;
       });
       if (tempIdx >= 0) {
-        const merged: Message = this.normalizeMessageShape({
+        const merged: Message = this.mergeMessageAttachments(existing[tempIdx], this.normalizeMessageShape({
           ...existing[tempIdx],
           ...data,
           message_id: message.message_id,
           conversation_id: convId,
           content: this.coalesceMessageText(data, existing[tempIdx].content),
-        });
+        }));
         const map = new Map(this.messagesMap$.value);
         const msgs = this.dedupeMessagesByIdKeepFirst([...existing]);
         msgs[tempIdx] = merged;
@@ -716,13 +717,14 @@ export class MessagingStoreService implements OnDestroy {
 
     const isFromOther = String(message.sender_id) !== myContactId;
 
-    const isDuplicate = existing.some(
+    const duplicateIdx = existing.findIndex(
       (m) =>
         String(m.message_id) === String(message.message_id) ||
         (String(m.sender_id) === String(message.sender_id) &&
           String(m.content ?? '') === String(message.content ?? '') &&
           Math.abs(new Date(m.created_at).getTime() - new Date(message.created_at).getTime()) < 2000)
     );
+    const isDuplicate = duplicateIdx >= 0;
 
     if (!isDuplicate) {
       this.appendMessage(message);
@@ -731,6 +733,12 @@ export class MessagingStoreService implements OnDestroy {
         this.playNotificationSound();
       }
       this.updateInboxPreview(message);
+    } else {
+      const map = new Map(this.messagesMap$.value);
+      const msgs = [...existing];
+      msgs[duplicateIdx] = this.mergeMessageAttachments(existing[duplicateIdx], message);
+      map.set(convId, msgs);
+      this.messagesMap$.next(map);
     }
 
     if (this.activeConversationId$.value !== message.conversation_id) {
@@ -749,10 +757,49 @@ export class MessagingStoreService implements OnDestroy {
 
   private appendMessage(message: Message): void {
     const map = new Map(this.messagesMap$.value);
-    const msgs = [...(map.get(message.conversation_id) || []), message];
+    const current = map.get(message.conversation_id) || [];
+    const sameIdIdx = current.findIndex((m) => String(m.message_id) === String(message.message_id));
+    if (sameIdIdx >= 0) {
+      const msgs = [...current];
+      msgs[sameIdIdx] = this.mergeMessageAttachments(current[sameIdIdx], message);
+      map.set(message.conversation_id, msgs);
+      this.messagesMap$.next(map);
+      this.refreshMessageReactions(message.message_id);
+      return;
+    }
+
+    const msgs = [...current, message];
     map.set(message.conversation_id, msgs);
     this.messagesMap$.next(map);
     this.refreshMessageReactions(message.message_id);
+  }
+
+  private mergeMessageAttachments(existing: Message, incoming: Message): Message {
+    const existingAttachments = this.normalizeAttachmentList(existing.attachments || []);
+    const incomingAttachments = this.normalizeAttachmentList(incoming.attachments || []);
+    const attachments =
+      incomingAttachments.length >= existingAttachments.length ? incomingAttachments : existingAttachments;
+
+    return {
+      ...existing,
+      ...incoming,
+      reactions: incoming.reactions || existing.reactions,
+      attachments: attachments.length > 0 ? attachments : incoming.attachments || existing.attachments,
+    };
+  }
+
+  private normalizeAttachmentList(attachments: Attachment[]): Attachment[] {
+    const byId = new Map<string, Attachment>();
+    for (const attachment of attachments) {
+      const fileId = String(attachment?.file_id || '').trim();
+      if (!fileId || fileId.startsWith('temp-')) continue;
+      byId.set(fileId, {
+        ...attachment,
+        file_id: fileId,
+        filename: attachment.filename || 'File',
+      });
+    }
+    return Array.from(byId.values());
   }
 
   private updateInboxPreview(message: Message): void {
@@ -848,35 +895,101 @@ export class MessagingStoreService implements OnDestroy {
     const uuidRe =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+    const toStringArray = (value: any): string[] => {
+      if (Array.isArray(value)) {
+        return value
+          .map((x: any) => (typeof x === 'string' ? x : x?.file_id ?? x?.id ?? ''))
+          .map((x: any) => String(x).trim())
+          .filter(Boolean);
+      }
+      if (typeof value === 'string' && value.trim()) {
+        const trimmed = value.trim();
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed)) return toStringArray(parsed);
+            return toStringArray(parsed?.ids ?? parsed?.file_ids ?? parsed?.attachment_ids ?? parsed?.attachments);
+          } catch {
+            return [];
+          }
+        }
+        return trimmed.split(/[,\s]+/).map((s: string) => s.trim()).filter(Boolean);
+      }
+      return [];
+    };
+
+    const normalizeAttachment = (a: any): Attachment | null => {
+      const fileId = String(
+        typeof a === 'string' ? a :
+        a?.file_id ?? a?.fileId ?? a?.id ?? a?.attachment_id ?? a?.storage_file_id ?? ''
+      ).trim();
+      if (!fileId || fileId.startsWith('temp-')) return null;
+      return {
+        file_id: fileId,
+        filename: String(a?.filename ?? a?.file_name ?? a?.name ?? a?.original_filename ?? 'File'),
+        mime_type: a?.mime_type ?? a?.mimeType,
+        size_bytes: a?.size_bytes ?? a?.sizeBytes,
+        url: a?.url ?? a?.file_url ?? a?.download_url,
+      };
+    };
+
+    let normalizedAttachments: Attachment[] = [];
+    const addAttachment = (attachment: Attachment | null): void => {
+      if (!attachment) return;
+      const fileId = String(attachment.file_id || '').trim();
+      const url = String(attachment.url || '').trim();
+      if (fileId.startsWith('{') || fileId.startsWith('[')) {
+        const ids = toStringArray(fileId);
+        ids.forEach((id, idx) => {
+          addAttachment({
+            ...attachment,
+            file_id: id,
+            filename: attachment.filename || `Attachment ${idx + 1}`,
+          });
+        });
+        return;
+      }
+      if (fileId && normalizedAttachments.some((a) => a.file_id === fileId)) return;
+      if (!fileId && url && normalizedAttachments.some((a) => a.url === url)) return;
+      normalizedAttachments.push(attachment);
+    };
+
     // Normalize attachment objects (API may use fileId / id instead of file_id).
     if (Array.isArray(base.attachments) && base.attachments.length > 0) {
-      const mapped: Attachment[] = (base.attachments as any[]).map((a) => ({
-        file_id: String(
-          a?.file_id ?? a?.fileId ?? a?.id ?? a?.attachment_id ?? a?.storage_file_id ?? ''
-        ).trim(),
-        filename: String(a?.filename ?? a?.file_name ?? a?.name ?? a?.original_filename ?? ''),
-        mime_type: a?.mime_type ?? a?.mimeType,
-        url: a?.url ?? a?.file_url ?? a?.download_url,
-      })).filter((a) => !!a.file_id && !a.file_id.startsWith('temp-'));
+      (base.attachments as any[]).forEach((a) => addAttachment(normalizeAttachment(a)));
+    }
 
-      if (mapped.length > 0) {
-        return { ...base, attachments: mapped };
+    const mediaValue = String(base.media_url || '').trim();
+    if (mediaValue.startsWith('{') || mediaValue.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(mediaValue);
+        const rawAttachments = Array.isArray(parsed) ? parsed : parsed?.attachments;
+        if (Array.isArray(rawAttachments)) {
+          rawAttachments.forEach((a) => addAttachment(normalizeAttachment(a)));
+        }
+        if (!Array.isArray(parsed)) {
+          const mediaIds = toStringArray(parsed?.ids ?? parsed?.file_ids ?? parsed?.attachment_ids);
+          const mediaFilenames = toStringArray(parsed?.filenames);
+          const mediaMimeTypes = toStringArray(parsed?.mime_types ?? parsed?.mimeTypes);
+          mediaIds.forEach((id, idx) => {
+            addAttachment({
+              file_id: id,
+              filename: mediaFilenames[idx] || mediaFilenames[0] || `Attachment ${idx + 1}`,
+              mime_type: mediaMimeTypes[idx],
+            });
+          });
+        }
+      } catch {
+        // Fall through to legacy attachment reconstruction below.
       }
     }
 
     // Reconstruct attachments from alternate API fields.
     let attachmentIds: string[] = [];
-    if (Array.isArray(raw?.attachment_ids)) {
-      attachmentIds = raw.attachment_ids.map((x: any) => String(x).trim()).filter(Boolean);
-    } else if (typeof raw?.attachment_ids === 'string' && raw.attachment_ids.trim()) {
-      attachmentIds = raw.attachment_ids
-        .split(/[,\s]+/)
-        .map((s: string) => s.trim())
-        .filter(Boolean);
-    }
+    attachmentIds = toStringArray(raw?.attachment_ids);
 
-    if (attachmentIds.length === 0 && Array.isArray(raw?.file_ids)) {
-      attachmentIds = raw.file_ids.map((x: any) => String(x).trim()).filter(Boolean);
+    if (attachmentIds.length === 0) {
+      attachmentIds = toStringArray(raw?.file_ids);
     }
 
     const pushId = (v: any) => {
@@ -893,6 +1006,8 @@ export class MessagingStoreService implements OnDestroy {
     const mediaAsId = String(base.media_url || '').trim();
     if (
       mediaAsId &&
+      !mediaAsId.startsWith('{') &&
+      !mediaAsId.startsWith('[') &&
       !mediaAsId.startsWith('http://') &&
       !mediaAsId.startsWith('https://') &&
       !mediaAsId.startsWith('data:')
@@ -913,8 +1028,8 @@ export class MessagingStoreService implements OnDestroy {
       attachmentIds.push(contentTrim);
     }
 
-    const filenames: string[] = Array.isArray(raw?.filenames)
-      ? raw.filenames.map((x: any) => String(x))
+    const filenames: string[] = toStringArray(raw?.filenames).length
+      ? toStringArray(raw?.filenames)
       : raw?.filename
       ? [String(raw.filename)]
       : raw?.file_name
@@ -923,6 +1038,10 @@ export class MessagingStoreService implements OnDestroy {
       ? [String(base.content)]
       : [];
 
+    const mimeTypes: string[] = toStringArray(raw?.mime_types).length
+      ? toStringArray(raw?.mime_types)
+      : toStringArray(raw?.mimeTypes);
+
     if (attachmentIds.length > 0 || filenames.length > 0) {
       const fallbackMime = raw?.mime_type ?? raw?.attachment_mime_type;
       const urlFallback = raw?.file_url ?? raw?.url ?? raw?.media_url ?? raw?.mediaUrl;
@@ -930,7 +1049,7 @@ export class MessagingStoreService implements OnDestroy {
       const built: Attachment[] = ids.map((id, idx) => ({
         file_id: id,
         filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
-        mime_type: fallbackMime,
+        mime_type: mimeTypes[idx] || fallbackMime,
         url: urlFallback,
       }));
 
@@ -949,9 +1068,11 @@ export class MessagingStoreService implements OnDestroy {
         });
       }
 
-      if (built.length > 0) {
-        return { ...base, attachments: built };
-      }
+      built.forEach((attachment) => addAttachment(attachment));
+    }
+
+    if (normalizedAttachments.length > 0) {
+      return { ...base, attachments: normalizedAttachments };
     }
 
     return base;

@@ -1,7 +1,7 @@
 import * as i0 from '@angular/core';
 import { InjectionToken, Inject, Injectable, Component, EventEmitter, ViewChild, Output, ViewEncapsulation, Input } from '@angular/core';
-import { BehaviorSubject, Subject, of, forkJoin, throwError, Observable, combineLatest, debounceTime } from 'rxjs';
-import { tap, map, catchError } from 'rxjs/operators';
+import { BehaviorSubject, Subject, of, from, throwError, Observable, forkJoin, combineLatest, debounceTime } from 'rxjs';
+import { tap, concatMap, toArray, catchError, map } from 'rxjs/operators';
 import * as i1 from '@angular/common/http';
 import { HttpParams } from '@angular/common/http';
 import * as i1$1 from '@angular/common';
@@ -588,6 +588,10 @@ const TEMP_PREFIX = 'temp-';
 function isTempId(id) {
     return !id || id.startsWith(TEMP_PREFIX);
 }
+function isStructuredId(id) {
+    const value = String(id || '').trim();
+    return value.startsWith('{') || value.startsWith('[');
+}
 class MessagingFileService {
     http;
     auth;
@@ -600,14 +604,15 @@ class MessagingFileService {
     deleteEndpoints;
     /** In-session cache: file_id → data URL. Cleared on page reload. */
     mediaCache = new Map();
+    mediaFailures = new Set();
     constructor(http, auth, config) {
         this.http = http;
         this.auth = auth;
         this.config = config;
         this.base = this.config.apiBaseUrl.replace(/\/+$/, '');
-        this.uploadEndpoints = [`${this.base}/storage/upload`, `${this.base}/messaging/storage/upload`, `${this.base}/messaging/files/upload`];
-        this.retrieveEndpoints = [`${this.base}/storage/retrieve`, `${this.base}/messaging/storage/retrieve`, `${this.base}/messaging/files/retrieve`];
-        this.deleteEndpoints = [`${this.base}/storage/delete`, `${this.base}/messaging/storage/delete`, `${this.base}/messaging/files/delete`];
+        this.uploadEndpoints = [`${this.base}/storage/upload`, `${this.base}/files/upload`, `${this.base}/messaging/storage/upload`, `${this.base}/messaging/files/upload`];
+        this.retrieveEndpoints = [`${this.base}/storage/retrieve`, `${this.base}/files/retrieve`, `${this.base}/messaging/storage/retrieve`, `${this.base}/messaging/files/retrieve`];
+        this.deleteEndpoints = [`${this.base}/storage/delete`, `${this.base}/files/delete`, `${this.base}/messaging/storage/delete`, `${this.base}/messaging/files/delete`];
     }
     // ── Upload ───────────────────────────────────────────────────────────────
     uploadFile(file, category = 'messaging_attachments') {
@@ -622,19 +627,28 @@ class MessagingFileService {
     uploadFiles(files) {
         if (files.length === 0)
             return of([]);
-        return forkJoin(files.map((f) => this.uploadFile(f)));
+        return from(files).pipe(concatMap((file) => this.uploadFile(file)), toArray());
     }
     // ── Retrieve ─────────────────────────────────────────────────────────────
     retrieveFile(fileId) {
         if (isTempId(fileId)) {
             return throwError(() => new Error('Cannot retrieve file: upload not complete yet.'));
         }
+        if (isStructuredId(fileId)) {
+            return throwError(() => new Error('Cannot retrieve file: invalid structured attachment id.'));
+        }
+        if (this.mediaFailures.has(fileId)) {
+            return throwError(() => new Error('Cannot retrieve file: previous retrieve failed.'));
+        }
         const makeBody = () => {
             const fd = new FormData();
             fd.append('file_id', fileId);
             return fd;
         };
-        return this.tryEndpoints(this.retrieveEndpoints, makeBody);
+        return this.tryEndpoints(this.retrieveEndpoints, makeBody, false).pipe(catchError((err) => {
+            this.mediaFailures.add(fileId);
+            return throwError(() => err);
+        }));
     }
     /**
      * Returns a data URL for the given file_id.
@@ -644,6 +658,12 @@ class MessagingFileService {
         if (isTempId(fileId)) {
             return throwError(() => new Error('Cannot retrieve file: upload not complete yet.'));
         }
+        if (isStructuredId(fileId)) {
+            return throwError(() => new Error('Cannot retrieve file: invalid structured attachment id.'));
+        }
+        if (this.mediaFailures.has(fileId)) {
+            return throwError(() => new Error('Cannot retrieve file: previous retrieve failed.'));
+        }
         const cached = this.mediaCache.get(fileId);
         if (cached)
             return of(cached);
@@ -651,21 +671,21 @@ class MessagingFileService {
     }
     /** Synchronous cache lookup — null if not loaded yet. */
     getCachedDataUrl(fileId) {
-        if (isTempId(fileId))
+        if (isTempId(fileId) || isStructuredId(fileId) || this.mediaFailures.has(fileId))
             return null;
         return this.mediaCache.get(fileId) ?? null;
     }
     /** Pre-warm cache for a list of file IDs (fire-and-forget, skips temp/cached). */
     prewarmCache(fileIds) {
         for (const id of fileIds) {
-            if (!isTempId(id) && !this.mediaCache.has(id)) {
+            if (!isTempId(id) && !isStructuredId(id) && !this.mediaFailures.has(id) && !this.mediaCache.has(id)) {
                 this.getFileDataUrl(id).subscribe({ error: () => { } });
             }
         }
     }
     // ── Delete ────────────────────────────────────────────────────────────────
     deleteFile(fileId) {
-        if (isTempId(fileId)) {
+        if (isTempId(fileId) || isStructuredId(fileId)) {
             return of(null);
         }
         this.mediaCache.delete(fileId);
@@ -674,7 +694,7 @@ class MessagingFileService {
             fd.append('file_id', fileId);
             return fd;
         };
-        return this.tryEndpoints(this.deleteEndpoints, makeBody);
+        return this.tryEndpoints(this.deleteEndpoints, makeBody, false);
     }
     // ── Send message with attachments ────────────────────────────────────────
     sendMessageWithAttachments(conversationId, senderContactId, content, fileIds, filenames, mimeTypes = []) {
@@ -698,15 +718,15 @@ class MessagingFileService {
      * Falls back to the next URL only on 404 or network error (status 0).
      * Logs every attempt with its result.
      */
-    tryEndpoints(urls, bodyFn) {
+    tryEndpoints(urls, bodyFn, fallbackOnNetwork = true) {
         if (urls.length === 0) {
             return throwError(() => new Error('All storage endpoints exhausted.'));
         }
         const [url, ...rest] = urls;
         return this.http.post(url, bodyFn()).pipe(catchError((err) => {
             // Only fall through on not-found or network issues
-            if ((err.status === 404 || err.status === 0) && rest.length > 0) {
-                return this.tryEndpoints(rest, bodyFn);
+            if ((err.status === 404 || (fallbackOnNetwork && err.status === 0)) && rest.length > 0) {
+                return this.tryEndpoints(rest, bodyFn, fallbackOnNetwork);
             }
             // Translate to a friendly error
             return throwError(() => this.toFriendlyError(err, url));
@@ -1040,22 +1060,22 @@ class MessagingStoreService {
                 const existing = map.get(conversationId) || [];
                 const normalized = messages.map((m) => this.normalizeMessageShape(m));
                 const sorted = [...normalized].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+                const existingById = new Map(existing.map(m => [String(m.message_id), m]));
                 if (beforeMessageId) {
                     // Prepend older messages, preserving existing reactions
                     const merged = [...sorted, ...existing];
                     map.set(conversationId, merged);
                 }
-                else if (skipReactionHydration) {
-                    // Silent refresh — merge new messages but preserve existing reaction state
-                    const existingById = new Map(existing.map(m => [String(m.message_id), m]));
+                else {
+                    // Replace with server data but keep the richer of existing vs server attachments
+                    // (the optimistic path may have more attachment metadata than the server echoes back).
                     const merged = sorted.map(m => {
                         const cached = existingById.get(String(m.message_id));
-                        return cached ? { ...m, reactions: cached.reactions } : m;
+                        if (!cached)
+                            return m;
+                        return this.mergeMessageAttachments(cached, m);
                     });
                     map.set(conversationId, merged);
-                }
-                else {
-                    map.set(conversationId, sorted);
                 }
                 this.messagesMap$.next(map);
                 if (!skipReactionHydration) {
@@ -1400,13 +1420,13 @@ class MessagingStoreService {
                 return a === b || !b;
             });
             if (tempIdx >= 0) {
-                const merged = this.normalizeMessageShape({
+                const merged = this.mergeMessageAttachments(existing[tempIdx], this.normalizeMessageShape({
                     ...existing[tempIdx],
                     ...data,
                     message_id: message.message_id,
                     conversation_id: convId,
                     content: this.coalesceMessageText(data, existing[tempIdx].content),
-                });
+                }));
                 const map = new Map(this.messagesMap$.value);
                 const msgs = this.dedupeMessagesByIdKeepFirst([...existing]);
                 msgs[tempIdx] = merged;
@@ -1422,16 +1442,24 @@ class MessagingStoreService {
             }
         }
         const isFromOther = String(message.sender_id) !== myContactId;
-        const isDuplicate = existing.some((m) => String(m.message_id) === String(message.message_id) ||
+        const duplicateIdx = existing.findIndex((m) => String(m.message_id) === String(message.message_id) ||
             (String(m.sender_id) === String(message.sender_id) &&
                 String(m.content ?? '') === String(message.content ?? '') &&
                 Math.abs(new Date(m.created_at).getTime() - new Date(message.created_at).getTime()) < 2000));
+        const isDuplicate = duplicateIdx >= 0;
         if (!isDuplicate) {
             this.appendMessage(message);
             if (isFromOther) {
                 this.playNotificationSound();
             }
             this.updateInboxPreview(message);
+        }
+        else {
+            const map = new Map(this.messagesMap$.value);
+            const msgs = [...existing];
+            msgs[duplicateIdx] = this.mergeMessageAttachments(existing[duplicateIdx], message);
+            map.set(convId, msgs);
+            this.messagesMap$.next(map);
         }
         if (this.activeConversationId$.value !== message.conversation_id) {
             if (isFromOther && !isDuplicate) {
@@ -1448,10 +1476,45 @@ class MessagingStoreService {
     }
     appendMessage(message) {
         const map = new Map(this.messagesMap$.value);
-        const msgs = [...(map.get(message.conversation_id) || []), message];
+        const current = map.get(message.conversation_id) || [];
+        const sameIdIdx = current.findIndex((m) => String(m.message_id) === String(message.message_id));
+        if (sameIdIdx >= 0) {
+            const msgs = [...current];
+            msgs[sameIdIdx] = this.mergeMessageAttachments(current[sameIdIdx], message);
+            map.set(message.conversation_id, msgs);
+            this.messagesMap$.next(map);
+            this.refreshMessageReactions(message.message_id);
+            return;
+        }
+        const msgs = [...current, message];
         map.set(message.conversation_id, msgs);
         this.messagesMap$.next(map);
         this.refreshMessageReactions(message.message_id);
+    }
+    mergeMessageAttachments(existing, incoming) {
+        const existingAttachments = this.normalizeAttachmentList(existing.attachments || []);
+        const incomingAttachments = this.normalizeAttachmentList(incoming.attachments || []);
+        const attachments = incomingAttachments.length >= existingAttachments.length ? incomingAttachments : existingAttachments;
+        return {
+            ...existing,
+            ...incoming,
+            reactions: incoming.reactions || existing.reactions,
+            attachments: attachments.length > 0 ? attachments : incoming.attachments || existing.attachments,
+        };
+    }
+    normalizeAttachmentList(attachments) {
+        const byId = new Map();
+        for (const attachment of attachments) {
+            const fileId = String(attachment?.file_id || '').trim();
+            if (!fileId || fileId.startsWith('temp-'))
+                continue;
+            byId.set(fileId, {
+                ...attachment,
+                file_id: fileId,
+                filename: attachment.filename || 'File',
+            });
+        }
+        return Array.from(byId.values());
     }
     updateInboxPreview(message) {
         const text = String(message.content ?? '').trim();
@@ -1540,31 +1603,100 @@ class MessagingStoreService {
             pinned_by: raw?.pinned_by,
         };
         const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        const toStringArray = (value) => {
+            if (Array.isArray(value)) {
+                return value
+                    .map((x) => (typeof x === 'string' ? x : x?.file_id ?? x?.id ?? ''))
+                    .map((x) => String(x).trim())
+                    .filter(Boolean);
+            }
+            if (typeof value === 'string' && value.trim()) {
+                const trimmed = value.trim();
+                if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                    try {
+                        const parsed = JSON.parse(trimmed);
+                        if (Array.isArray(parsed))
+                            return toStringArray(parsed);
+                        return toStringArray(parsed?.ids ?? parsed?.file_ids ?? parsed?.attachment_ids ?? parsed?.attachments);
+                    }
+                    catch {
+                        return [];
+                    }
+                }
+                return trimmed.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+            }
+            return [];
+        };
+        const normalizeAttachment = (a) => {
+            const fileId = String(typeof a === 'string' ? a :
+                a?.file_id ?? a?.fileId ?? a?.id ?? a?.attachment_id ?? a?.storage_file_id ?? '').trim();
+            if (!fileId || fileId.startsWith('temp-'))
+                return null;
+            return {
+                file_id: fileId,
+                filename: String(a?.filename ?? a?.file_name ?? a?.name ?? a?.original_filename ?? 'File'),
+                mime_type: a?.mime_type ?? a?.mimeType,
+                size_bytes: a?.size_bytes ?? a?.sizeBytes,
+                url: a?.url ?? a?.file_url ?? a?.download_url,
+            };
+        };
+        let normalizedAttachments = [];
+        const addAttachment = (attachment) => {
+            if (!attachment)
+                return;
+            const fileId = String(attachment.file_id || '').trim();
+            const url = String(attachment.url || '').trim();
+            if (fileId.startsWith('{') || fileId.startsWith('[')) {
+                const ids = toStringArray(fileId);
+                ids.forEach((id, idx) => {
+                    addAttachment({
+                        ...attachment,
+                        file_id: id,
+                        filename: attachment.filename || `Attachment ${idx + 1}`,
+                    });
+                });
+                return;
+            }
+            if (fileId && normalizedAttachments.some((a) => a.file_id === fileId))
+                return;
+            if (!fileId && url && normalizedAttachments.some((a) => a.url === url))
+                return;
+            normalizedAttachments.push(attachment);
+        };
         // Normalize attachment objects (API may use fileId / id instead of file_id).
         if (Array.isArray(base.attachments) && base.attachments.length > 0) {
-            const mapped = base.attachments.map((a) => ({
-                file_id: String(a?.file_id ?? a?.fileId ?? a?.id ?? a?.attachment_id ?? a?.storage_file_id ?? '').trim(),
-                filename: String(a?.filename ?? a?.file_name ?? a?.name ?? a?.original_filename ?? ''),
-                mime_type: a?.mime_type ?? a?.mimeType,
-                url: a?.url ?? a?.file_url ?? a?.download_url,
-            })).filter((a) => !!a.file_id && !a.file_id.startsWith('temp-'));
-            if (mapped.length > 0) {
-                return { ...base, attachments: mapped };
+            base.attachments.forEach((a) => addAttachment(normalizeAttachment(a)));
+        }
+        const mediaValue = String(base.media_url || '').trim();
+        if (mediaValue.startsWith('{') || mediaValue.startsWith('[')) {
+            try {
+                const parsed = JSON.parse(mediaValue);
+                const rawAttachments = Array.isArray(parsed) ? parsed : parsed?.attachments;
+                if (Array.isArray(rawAttachments)) {
+                    rawAttachments.forEach((a) => addAttachment(normalizeAttachment(a)));
+                }
+                if (!Array.isArray(parsed)) {
+                    const mediaIds = toStringArray(parsed?.ids ?? parsed?.file_ids ?? parsed?.attachment_ids);
+                    const mediaFilenames = toStringArray(parsed?.filenames);
+                    const mediaMimeTypes = toStringArray(parsed?.mime_types ?? parsed?.mimeTypes);
+                    mediaIds.forEach((id, idx) => {
+                        addAttachment({
+                            file_id: id,
+                            filename: mediaFilenames[idx] || mediaFilenames[0] || `Attachment ${idx + 1}`,
+                            mime_type: mediaMimeTypes[idx],
+                        });
+                    });
+                }
+            }
+            catch {
+                // Fall through to legacy attachment reconstruction below.
             }
         }
         // Reconstruct attachments from alternate API fields.
         let attachmentIds = [];
-        if (Array.isArray(raw?.attachment_ids)) {
-            attachmentIds = raw.attachment_ids.map((x) => String(x).trim()).filter(Boolean);
-        }
-        else if (typeof raw?.attachment_ids === 'string' && raw.attachment_ids.trim()) {
-            attachmentIds = raw.attachment_ids
-                .split(/[,\s]+/)
-                .map((s) => s.trim())
-                .filter(Boolean);
-        }
-        if (attachmentIds.length === 0 && Array.isArray(raw?.file_ids)) {
-            attachmentIds = raw.file_ids.map((x) => String(x).trim()).filter(Boolean);
+        attachmentIds = toStringArray(raw?.attachment_ids);
+        if (attachmentIds.length === 0) {
+            attachmentIds = toStringArray(raw?.file_ids);
         }
         const pushId = (v) => {
             const s = v != null && v !== '' ? String(v).trim() : '';
@@ -1578,6 +1710,8 @@ class MessagingStoreService {
         // Backend stores first attachment id in messaging.message.media_url (UUID), not a public URL.
         const mediaAsId = String(base.media_url || '').trim();
         if (mediaAsId &&
+            !mediaAsId.startsWith('{') &&
+            !mediaAsId.startsWith('[') &&
             !mediaAsId.startsWith('http://') &&
             !mediaAsId.startsWith('https://') &&
             !mediaAsId.startsWith('data:')) {
@@ -1593,8 +1727,8 @@ class MessagingStoreService {
             (base.message_type === 'FILE' || base.message_type === 'IMAGE')) {
             attachmentIds.push(contentTrim);
         }
-        const filenames = Array.isArray(raw?.filenames)
-            ? raw.filenames.map((x) => String(x))
+        const filenames = toStringArray(raw?.filenames).length
+            ? toStringArray(raw?.filenames)
             : raw?.filename
                 ? [String(raw.filename)]
                 : raw?.file_name
@@ -1602,6 +1736,9 @@ class MessagingStoreService {
                     : base.content && !uuidRe.test(contentTrim)
                         ? [String(base.content)]
                         : [];
+        const mimeTypes = toStringArray(raw?.mime_types).length
+            ? toStringArray(raw?.mime_types)
+            : toStringArray(raw?.mimeTypes);
         if (attachmentIds.length > 0 || filenames.length > 0) {
             const fallbackMime = raw?.mime_type ?? raw?.attachment_mime_type;
             const urlFallback = raw?.file_url ?? raw?.url ?? raw?.media_url ?? raw?.mediaUrl;
@@ -1609,7 +1746,7 @@ class MessagingStoreService {
             const built = ids.map((id, idx) => ({
                 file_id: id,
                 filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
-                mime_type: fallbackMime,
+                mime_type: mimeTypes[idx] || fallbackMime,
                 url: urlFallback,
             }));
             // Filename only + direct URL (no storage id): still renderable as <img src>.
@@ -1624,9 +1761,10 @@ class MessagingStoreService {
                     url: String(urlFallback),
                 });
             }
-            if (built.length > 0) {
-                return { ...base, attachments: built };
-            }
+            built.forEach((attachment) => addAttachment(attachment));
+        }
+        if (normalizedAttachments.length > 0) {
+            return { ...base, attachments: normalizedAttachments };
         }
         return base;
     }
@@ -2298,6 +2436,9 @@ class ChatThreadComponent {
     mediaLoading = new Set();
     /** Tracks file IDs where retrieval failed so UI doesn't spin forever. */
     mediaFailed = new Set();
+    mediaQueue = [];
+    activeMediaRequests = 0;
+    maxMediaRequests = 2;
     constructor(store, auth, fileService, cdr) {
         this.store = store;
         this.auth = auth;
@@ -2319,6 +2460,7 @@ class ChatThreadComponent {
             this.visibleContacts = contacts || [];
             if (convId && convId !== this.conversationId) {
                 this.conversationId = convId;
+                this.resetMediaQueue();
                 this.shouldScrollToBottom = true;
                 const chat = chats.find((c) => c.conversationId === convId);
                 this.conversationName = chat?.name || 'Chat';
@@ -2537,26 +2679,149 @@ class ChatThreadComponent {
         catch { /* ignore */ }
     }
     // ── Media helpers ────────────────────────────────────────────────────────
-    getFilenameLike(msg) {
+    getFilenameLike(msg, attachment) {
         const anyMsg = msg;
-        return String(this.getPrimaryAttachment(msg)?.filename ||
+        return String(attachment?.filename ||
+            this.getPrimaryAttachment(msg)?.filename ||
             anyMsg?.filename ||
             anyMsg?.file_name ||
             msg.content ||
             '').toLowerCase();
     }
+    getRenderableAttachments(msg) {
+        const attachments = this.getAllAttachments(msg);
+        if (attachments.length > 0)
+            return attachments;
+        const primary = this.getPrimaryAttachment(msg);
+        return primary ? [primary] : [];
+    }
+    trackByAttachment(index, attachment) {
+        return attachment.file_id || attachment.url || `${attachment.filename}-${index}`;
+    }
+    getAllAttachments(msg) {
+        const anyMsg = msg;
+        const attachments = [];
+        const add = (attachment) => {
+            const raw = attachment;
+            const fileId = String(typeof attachment === 'string' ? attachment :
+                raw?.file_id ??
+                    raw?.fileId ??
+                    raw?.id ??
+                    raw?.attachment_id ??
+                    raw?.storage_file_id ??
+                    '').trim();
+            if (fileId.startsWith('{') || fileId.startsWith('[')) {
+                const ids = this.toArray(fileId);
+                const filenames = this.toArray(raw?.filenames ?? raw?.filename ?? raw?.file_name);
+                const mimeTypes = this.toArray(raw?.mime_types ?? raw?.mimeTypes ?? raw?.mime_type);
+                ids.forEach((id, idx) => {
+                    add({
+                        file_id: id,
+                        filename: filenames[idx] || filenames[0] || raw?.filename || raw?.file_name || `Attachment ${idx + 1}`,
+                        mime_type: mimeTypes[idx] || raw?.mime_type || raw?.mimeType,
+                    });
+                });
+                return;
+            }
+            const url = String(raw?.url ?? raw?.file_url ?? raw?.download_url ?? '').trim();
+            if (!fileId && !url)
+                return;
+            if (fileId && attachments.some((a) => a.file_id === fileId))
+                return;
+            if (!fileId && url && attachments.some((a) => a.url === url))
+                return;
+            attachments.push({
+                file_id: fileId,
+                filename: String(raw?.filename ??
+                    raw?.file_name ??
+                    raw?.name ??
+                    'File'),
+                mime_type: raw?.mime_type ?? raw?.mimeType,
+                size_bytes: raw?.size_bytes ?? raw?.sizeBytes,
+                url: url || undefined,
+            });
+        };
+        if (Array.isArray(msg.attachments)) {
+            msg.attachments.forEach(add);
+        }
+        const mediaValue = String(msg.media_url || '').trim();
+        if (mediaValue.startsWith('{') || mediaValue.startsWith('[')) {
+            try {
+                const parsed = JSON.parse(mediaValue);
+                const mediaAttachments = Array.isArray(parsed) ? parsed : parsed?.attachments;
+                if (Array.isArray(mediaAttachments)) {
+                    mediaAttachments.forEach(add);
+                }
+                if (!Array.isArray(parsed)) {
+                    const ids = this.toArray(parsed?.ids ?? parsed?.file_ids ?? parsed?.attachment_ids);
+                    const filenames = this.toArray(parsed?.filenames);
+                    const mimeTypes = this.toArray(parsed?.mime_types ?? parsed?.mimeTypes);
+                    ids.forEach((id, idx) => {
+                        add({
+                            file_id: id,
+                            filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
+                            mime_type: mimeTypes[idx],
+                        });
+                    });
+                }
+            }
+            catch {
+                // Non-JSON media_url values are handled by getPrimaryAttachment().
+            }
+        }
+        const ids = this.toArray(anyMsg?.attachment_ids ?? anyMsg?.file_ids);
+        const filenames = this.toArray(anyMsg?.filenames);
+        const mimeTypes = this.toArray(anyMsg?.mime_types ?? anyMsg?.mimeTypes);
+        ids.forEach((id, idx) => {
+            add({
+                file_id: id,
+                filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
+                mime_type: mimeTypes[idx] || anyMsg?.mime_type || anyMsg?.attachment_mime_type,
+            });
+        });
+        return attachments;
+    }
+    toArray(value) {
+        if (Array.isArray(value)) {
+            return value
+                .map((x) => (typeof x === 'string' ? x : x?.file_id ?? x?.id ?? ''))
+                .map((x) => String(x).trim())
+                .filter(Boolean);
+        }
+        if (typeof value === 'string' && value.trim()) {
+            const trimmed = value.trim();
+            if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                try {
+                    const parsed = JSON.parse(trimmed);
+                    if (Array.isArray(parsed))
+                        return this.toArray(parsed);
+                    return this.toArray(parsed?.ids ?? parsed?.file_ids ?? parsed?.attachment_ids ?? parsed?.attachments);
+                }
+                catch {
+                    return [];
+                }
+            }
+            return value
+                .split(/[,\s]+/)
+                .map((x) => x.trim())
+                .filter(Boolean);
+        }
+        return [];
+    }
     /** Returns the primary attachment for a message, if any. */
     getPrimaryAttachment(msg) {
-        if (msg.attachments && msg.attachments.length > 0)
-            return msg.attachments[0];
+        const attachments = this.getAllAttachments(msg);
+        if (attachments.length > 0)
+            return attachments[0];
         // Some API responses provide file metadata in alternate fields.
         const anyMsg = msg;
         const mu = String(msg.media_url || '').trim();
         const mediaIsDirectUrl = mu.startsWith('http://') || mu.startsWith('https://') || mu.startsWith('data:');
+        const mediaIsStructured = mu.startsWith('{') || mu.startsWith('[');
         const fileId = anyMsg?.file_id ||
             anyMsg?.attachment_id ||
             anyMsg?.attachment_ids?.[0] ||
-            (!mediaIsDirectUrl && mu ? mu : undefined);
+            (!mediaIsDirectUrl && !mediaIsStructured && mu ? mu : undefined);
         const mime = anyMsg?.mime_type || anyMsg?.attachment_mime_type;
         const explicitFilename = anyMsg?.filename || anyMsg?.file_name;
         const filename = explicitFilename ||
@@ -2571,23 +2836,23 @@ class ChatThreadComponent {
         }
         return null;
     }
-    isImageAttachment(msg) {
-        if (msg.message_type === 'IMAGE')
-            return true;
-        const mime = this.getPrimaryAttachment(msg)?.mime_type || '';
+    isImageAttachment(msg, attachment) {
+        const mime = attachment?.mime_type || this.getPrimaryAttachment(msg)?.mime_type || '';
         if (mime.startsWith('image/'))
             return true;
-        const name = this.getFilenameLike(msg);
-        return /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)$/i.test(name);
+        const name = this.getFilenameLike(msg, attachment);
+        if (/\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)$/i.test(name))
+            return true;
+        return !attachment && msg.message_type === 'IMAGE';
     }
     /** Returns the cached data URL for a message's media, or null and triggers background load. */
-    getMediaUrl(msg) {
-        const att = this.getPrimaryAttachment(msg);
+    getMediaUrl(msg, attachment) {
+        const att = attachment || this.getPrimaryAttachment(msg);
         const fileId = att?.file_id?.trim();
         const directUrl = att?.url ||
-            msg.media_url ||
-            msg?.url ||
-            msg?.file_url;
+            (!attachment ? msg.media_url : undefined) ||
+            (!attachment ? msg?.url : undefined) ||
+            (!attachment ? msg?.file_url : undefined);
         if (directUrl &&
             (directUrl.startsWith('http://') ||
                 directUrl.startsWith('https://') ||
@@ -2600,68 +2865,98 @@ class ChatThreadComponent {
         const cached = this.fileService.getCachedDataUrl(fileId);
         if (cached)
             return cached;
+        if (this.mediaFailed.has(fileId))
+            return null;
         // Not yet cached — kick off a background fetch
         this.fetchMedia(fileId);
         return null;
     }
     prewarmMedia(messages) {
         for (const msg of messages) {
-            const att = this.getPrimaryAttachment(msg);
-            const fileId = att?.file_id?.trim();
-            if (!fileId || fileId.startsWith('temp-'))
-                continue;
-            if (this.fileService.getCachedDataUrl(fileId))
-                continue;
-            // Preload images and videos eagerly; queue other files so download links appear.
-            this.fetchMedia(fileId);
+            for (const att of this.getRenderableAttachments(msg)) {
+                if (!this.isImageAttachment(msg, att))
+                    continue;
+                const fileId = att.file_id?.trim();
+                if (!fileId || fileId.startsWith('temp-'))
+                    continue;
+                if (this.mediaFailed.has(fileId))
+                    continue;
+                if (this.fileService.getCachedDataUrl(fileId))
+                    continue;
+                // Queue all files so download links appear once retrieval completes.
+                this.fetchMedia(fileId);
+            }
         }
     }
     fetchMedia(fileId) {
-        if (!fileId || fileId.startsWith('temp-') || this.mediaLoading.has(fileId))
+        if (!fileId || fileId.startsWith('temp-') || this.mediaLoading.has(fileId) || this.mediaFailed.has(fileId))
             return;
-        this.mediaFailed.delete(fileId);
         this.mediaLoading.add(fileId);
-        this.fileService.getFileDataUrl(fileId).subscribe({
-            next: () => {
-                this.mediaLoading.delete(fileId);
-                this.cdr.markForCheck();
-            },
-            error: () => {
-                this.mediaLoading.delete(fileId);
-                this.mediaFailed.add(fileId);
-                this.cdr.markForCheck();
-            },
-        });
+        this.mediaQueue.push(fileId);
+        this.pumpMediaQueue();
     }
-    shouldShowMediaSpinner(msg) {
-        const fileId = this.getPrimaryAttachment(msg)?.file_id;
+    pumpMediaQueue() {
+        while (this.activeMediaRequests < this.maxMediaRequests && this.mediaQueue.length > 0) {
+            const fileId = this.mediaQueue.shift();
+            if (!fileId)
+                continue;
+            this.activeMediaRequests += 1;
+            this.fileService.getFileDataUrl(fileId).subscribe({
+                next: () => {
+                    this.finishMediaRequest(fileId);
+                },
+                error: () => {
+                    this.mediaFailed.add(fileId);
+                    this.finishMediaRequest(fileId);
+                },
+            });
+        }
+    }
+    finishMediaRequest(fileId) {
+        this.activeMediaRequests = Math.max(0, this.activeMediaRequests - 1);
+        this.mediaLoading.delete(fileId);
+        this.cdr.markForCheck();
+        this.pumpMediaQueue();
+    }
+    resetMediaQueue() {
+        this.mediaQueue = [];
+        this.mediaLoading.clear();
+        this.activeMediaRequests = 0;
+    }
+    shouldShowMediaSpinner(target) {
+        const fileId = this.getAttachmentFileId(target);
         if (!fileId || fileId.startsWith('temp-'))
             return false;
         return this.mediaLoading.has(fileId) && !this.mediaFailed.has(fileId);
     }
-    isVideoAttachment(msg) {
-        const mime = this.getPrimaryAttachment(msg)?.mime_type || '';
+    isVideoAttachment(msg, attachment) {
+        const mime = attachment?.mime_type || this.getPrimaryAttachment(msg)?.mime_type || '';
         if (mime.startsWith('video/'))
             return true;
-        const name = this.getFilenameLike(msg);
+        const name = this.getFilenameLike(msg, attachment);
         return /\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(name);
     }
-    getAttachmentMimeType(msg) {
-        return this.getPrimaryAttachment(msg)?.mime_type || 'application/octet-stream';
+    getAttachmentMimeType(msg, attachment) {
+        return attachment?.mime_type || this.getPrimaryAttachment(msg)?.mime_type || 'application/octet-stream';
     }
-    getAttachmentName(msg) {
-        return this.getPrimaryAttachment(msg)?.filename || msg.content || 'File';
+    getAttachmentName(msg, attachment) {
+        return attachment?.filename || this.getPrimaryAttachment(msg)?.filename || msg.content || 'File';
     }
     hasFileAttachment(msg) {
-        return msg.message_type === 'FILE' || !!this.getPrimaryAttachment(msg);
+        return msg.message_type === 'FILE' || this.getRenderableAttachments(msg).length > 0;
     }
-    hasMediaFailed(msg) {
-        const fileId = this.getPrimaryAttachment(msg)?.file_id;
+    hasMediaFailed(target) {
+        const fileId = this.getAttachmentFileId(target);
         return !!fileId && this.mediaFailed.has(fileId);
     }
-    getFileIcon(msg) {
-        const mime = this.getAttachmentMimeType(msg);
-        const name = this.getAttachmentName(msg).toLowerCase();
+    getAttachmentFileId(target) {
+        if ('file_id' in target)
+            return target.file_id;
+        return this.getPrimaryAttachment(target)?.file_id;
+    }
+    getFileIcon(msg, attachment) {
+        const mime = this.getAttachmentMimeType(msg, attachment);
+        const name = this.getAttachmentName(msg, attachment).toLowerCase();
         if (mime.startsWith('video/') || /\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(name))
             return 'videocam';
         if (mime.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|flac)$/i.test(name))
@@ -2676,8 +2971,50 @@ class ChatThreadComponent {
             return 'folder_zip';
         return 'insert_drive_file';
     }
-    openLightbox(dataUrl) {
+    openLightbox(dataUrl, event) {
+        event?.stopPropagation();
         this.lightboxOpen.emit(dataUrl);
+    }
+    downloadAttachment(msg, attachment, event) {
+        event?.preventDefault();
+        event?.stopPropagation();
+        const directUrl = attachment.url;
+        if (directUrl && /^(https?:|data:)/i.test(directUrl)) {
+            this.triggerDownload(directUrl, this.getAttachmentName(msg, attachment));
+            return;
+        }
+        const fileId = attachment.file_id?.trim();
+        if (!fileId || fileId.startsWith('temp-') || fileId.startsWith('{') || fileId.startsWith('[')) {
+            return;
+        }
+        const cached = this.fileService.getCachedDataUrl(fileId);
+        if (cached) {
+            this.triggerDownload(cached, this.getAttachmentName(msg, attachment));
+            return;
+        }
+        this.mediaLoading.add(fileId);
+        this.fileService.getFileDataUrl(fileId).subscribe({
+            next: (dataUrl) => {
+                this.mediaLoading.delete(fileId);
+                this.triggerDownload(dataUrl, this.getAttachmentName(msg, attachment));
+                this.cdr.markForCheck();
+            },
+            error: () => {
+                this.mediaLoading.delete(fileId);
+                this.mediaFailed.add(fileId);
+                this.cdr.markForCheck();
+            },
+        });
+    }
+    triggerDownload(url, filename) {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename || 'attachment';
+        link.target = '_blank';
+        link.rel = 'noopener';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
     }
     // ── Reactions ────────────────────────────────────────────────────────────
     onEmojiSelected(emoji, messageId) {
@@ -2762,76 +3099,72 @@ class ChatThreadComponent {
                 {{ getSenderName(msg) }}
               </div>
               <div class="message-bubble" [class.own-bubble]="isOwnMessage(msg)" (mouseenter)="hoveredMessageId = msg.message_id" (mouseleave)="hoveredMessageId = null">
-                <!-- IMAGE ─────────────────────────────────────── -->
-                <div *ngIf="isImageAttachment(msg)" class="image-message">
-                  <ng-container *ngIf="getMediaUrl(msg) as dataUrl; else imgFallback">
-                    <img [src]="dataUrl" alt="Image" class="media-img" (click)="openLightbox(dataUrl)" />
-                  </ng-container>
-                  <ng-template #imgFallback>
-                    <div *ngIf="shouldShowMediaSpinner(msg); else imgAsFile" class="media-placeholder">
-                      <mat-spinner diameter="22"></mat-spinner>
-                    </div>
-                    <ng-template #imgAsFile>
-                      <div class="file-message">
-                        <mat-icon class="file-msg-icon">image</mat-icon>
-                        <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
+                <!-- ATTACHMENTS ───────────────────────────────── -->
+                <div *ngIf="hasFileAttachment(msg)" class="attachments-list">
+                  <div *ngFor="let attachment of getRenderableAttachments(msg); trackBy: trackByAttachment" class="attachment-item">
+                    <ng-container *ngIf="isImageAttachment(msg, attachment); else nonImageAttachment">
+                      <div class="image-message">
+                        <ng-container *ngIf="getMediaUrl(msg, attachment) as dataUrl; else imgFallback">
+                          <div class="media-wrapper">
+                            <img
+                              [src]="dataUrl"
+                              alt="Image"
+                              class="media-img"
+                              (mousedown)="$event.stopPropagation()"
+                              (click)="openLightbox(dataUrl, $event)"
+                            />
+                            <div class="attachment-actions">
+                              <button
+                                type="button"
+                                class="attachment-action-btn"
+                                (click)="openLightbox(dataUrl, $event)"
+                                title="Open image"
+                              >
+                                <mat-icon>open_in_full</mat-icon>
+                              </button>
+                              <button
+                                type="button"
+                                class="attachment-action-btn"
+                                (click)="downloadAttachment(msg, attachment, $event)"
+                                title="Download image"
+                              >
+                                <mat-icon>download</mat-icon>
+                              </button>
+                            </div>
+                          </div>
+                        </ng-container>
+                        <ng-template #imgFallback>
+                          <div *ngIf="shouldShowMediaSpinner(attachment); else imgAsFile" class="media-placeholder">
+                            <mat-spinner diameter="22"></mat-spinner>
+                          </div>
+                          <ng-template #imgAsFile>
+                            <div class="file-message">
+                              <mat-icon class="file-msg-icon">image</mat-icon>
+                              <span class="file-msg-name">{{ getAttachmentName(msg, attachment) }}</span>
+                            </div>
+                          </ng-template>
+                        </ng-template>
                       </div>
-                    </ng-template>
-                  </ng-template>
-                </div>
+                    </ng-container>
 
-                <!-- FILE / VIDEO ─────────────────────────────── -->
-                <div *ngIf="hasFileAttachment(msg) && !isImageAttachment(msg)" class="file-message">
-                  <ng-container *ngIf="isVideoAttachment(msg); else regularFile">
-                    <ng-container *ngIf="getMediaUrl(msg) as videoUrl; else videoLoading">
-                      <div class="video-message">
-                        <video controls class="media-video" preload="metadata">
-                          <source [src]="videoUrl" [type]="getAttachmentMimeType(msg)" />
-                          Your browser does not support video.
-                        </video>
-                        <a
-                          class="video-download"
-                          [href]="videoUrl"
-                          [attr.download]="getAttachmentName(msg)"
-                          target="_blank"
-                          rel="noopener"
+                    <ng-template #nonImageAttachment>
+                      <div class="file-message">
+                        <mat-icon class="file-msg-icon">{{ getFileIcon(msg, attachment) }}</mat-icon>
+                        <span class="file-msg-name">{{ getAttachmentName(msg, attachment) }}</span>
+                        <button
+                          type="button"
+                          class="file-download-btn"
+                          (click)="downloadAttachment(msg, attachment, $event)"
+                          title="Download file"
                         >
-                          Download {{ getAttachmentName(msg) }}
-                        </a>
-                      </div>
-                    </ng-container>
-                    <ng-template #videoLoading>
-                      <div class="media-placeholder">
-                        <mat-spinner diameter="22"></mat-spinner>
-                        <span class="media-load-label">Loading video…</span>
+                          <mat-icon class="file-download-icon">download</mat-icon>
+                        </button>
                       </div>
                     </ng-template>
-                  </ng-container>
-                  <ng-template #regularFile>
-                    <ng-container *ngIf="getMediaUrl(msg) as fileUrl; else fileLoading">
-                      <a
-                        class="file-download"
-                        [href]="fileUrl"
-                        [attr.download]="getAttachmentName(msg)"
-                        target="_blank"
-                        rel="noopener"
-                        (click)="$event.stopPropagation()"
-                      >
-                        <mat-icon class="file-msg-icon">{{ getFileIcon(msg) }}</mat-icon>
-                        <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
-                        <mat-icon class="file-download-icon">download</mat-icon>
-                      </a>
-                    </ng-container>
-                    <ng-template #fileLoading>
-                      <mat-icon class="file-msg-icon">{{ getFileIcon(msg) }}</mat-icon>
-                      <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
-                      <mat-spinner *ngIf="shouldShowMediaSpinner(msg)" diameter="18"></mat-spinner>
-                      <span *ngIf="hasMediaFailed(msg)" class="media-load-label">Unavailable</span>
-                    </ng-template>
-                  </ng-template>
+                  </div>
                 </div>
                 <div
-                  *ngIf="msg.message_type === 'TEXT' && !isImageAttachment(msg) && !hasFileAttachment(msg)"
+                  *ngIf="msg.message_type === 'TEXT' && !hasFileAttachment(msg)"
                   class="text-content"
                 >
                   {{ msg.content }}
@@ -2880,7 +3213,7 @@ class ChatThreadComponent {
       ></app-message-input>
     </div>
 
-  `, isInline: true, styles: [".chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;gap:0}.header-actions button{width:32px;height:32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.image-message{line-height:0}.media-img{max-width:220px;max-height:280px;border-radius:10px;display:block;cursor:zoom-in;object-fit:cover;transition:opacity .15s}.media-img:hover{opacity:.88}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;gap:8px;min-width:80px;min-height:44px;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px}.file-msg-icon{font-size:20px;width:20px;height:20px;color:#fffc}.file-msg-name{font-size:13px;color:#fff;word-break:break-all}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.unread{opacity:.4}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions{left:0;right:auto}.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:1px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i7$1.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "component", type: MessageInputComponent, selector: "app-message-input", outputs: ["messageSent", "messageWithFiles"] }] });
+  `, isInline: true, styles: [".chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;gap:0}.header-actions button{width:32px;height:32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.image-message{line-height:0}.media-wrapper{position:relative;display:inline-block;line-height:0}.media-img{max-width:220px;max-height:280px;border-radius:10px;display:block;cursor:zoom-in;object-fit:cover;transition:opacity .15s}.attachment-actions{position:absolute;right:6px;top:6px;display:flex;gap:4px;opacity:0;transition:opacity .12s ease;pointer-events:none}.media-wrapper:hover .attachment-actions{opacity:1;pointer-events:auto}.attachment-action-btn,.file-download-btn{border:none;border-radius:999px;background:#071d30d1;color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}.attachment-action-btn{width:28px;height:28px}.attachment-action-btn mat-icon{font-size:17px;width:17px;height:17px}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;gap:8px;min-width:80px;min-height:44px;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.attachments-list{display:flex;flex-direction:column;gap:8px;max-width:100%}.attachment-item{max-width:100%}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px}.file-msg-icon{font-size:20px;width:20px;height:20px;color:#fffc}.file-msg-name{font-size:13px;color:#fff;word-break:break-all}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.file-download-btn{width:24px;height:24px;flex-shrink:0;margin-left:auto}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.unread{opacity:.4}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions{left:0;right:auto}.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:1px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i7$1.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "component", type: MessageInputComponent, selector: "app-message-input", outputs: ["messageSent", "messageWithFiles"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: ChatThreadComponent, decorators: [{
             type: Component,
@@ -2948,76 +3281,72 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
                 {{ getSenderName(msg) }}
               </div>
               <div class="message-bubble" [class.own-bubble]="isOwnMessage(msg)" (mouseenter)="hoveredMessageId = msg.message_id" (mouseleave)="hoveredMessageId = null">
-                <!-- IMAGE ─────────────────────────────────────── -->
-                <div *ngIf="isImageAttachment(msg)" class="image-message">
-                  <ng-container *ngIf="getMediaUrl(msg) as dataUrl; else imgFallback">
-                    <img [src]="dataUrl" alt="Image" class="media-img" (click)="openLightbox(dataUrl)" />
-                  </ng-container>
-                  <ng-template #imgFallback>
-                    <div *ngIf="shouldShowMediaSpinner(msg); else imgAsFile" class="media-placeholder">
-                      <mat-spinner diameter="22"></mat-spinner>
-                    </div>
-                    <ng-template #imgAsFile>
-                      <div class="file-message">
-                        <mat-icon class="file-msg-icon">image</mat-icon>
-                        <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
+                <!-- ATTACHMENTS ───────────────────────────────── -->
+                <div *ngIf="hasFileAttachment(msg)" class="attachments-list">
+                  <div *ngFor="let attachment of getRenderableAttachments(msg); trackBy: trackByAttachment" class="attachment-item">
+                    <ng-container *ngIf="isImageAttachment(msg, attachment); else nonImageAttachment">
+                      <div class="image-message">
+                        <ng-container *ngIf="getMediaUrl(msg, attachment) as dataUrl; else imgFallback">
+                          <div class="media-wrapper">
+                            <img
+                              [src]="dataUrl"
+                              alt="Image"
+                              class="media-img"
+                              (mousedown)="$event.stopPropagation()"
+                              (click)="openLightbox(dataUrl, $event)"
+                            />
+                            <div class="attachment-actions">
+                              <button
+                                type="button"
+                                class="attachment-action-btn"
+                                (click)="openLightbox(dataUrl, $event)"
+                                title="Open image"
+                              >
+                                <mat-icon>open_in_full</mat-icon>
+                              </button>
+                              <button
+                                type="button"
+                                class="attachment-action-btn"
+                                (click)="downloadAttachment(msg, attachment, $event)"
+                                title="Download image"
+                              >
+                                <mat-icon>download</mat-icon>
+                              </button>
+                            </div>
+                          </div>
+                        </ng-container>
+                        <ng-template #imgFallback>
+                          <div *ngIf="shouldShowMediaSpinner(attachment); else imgAsFile" class="media-placeholder">
+                            <mat-spinner diameter="22"></mat-spinner>
+                          </div>
+                          <ng-template #imgAsFile>
+                            <div class="file-message">
+                              <mat-icon class="file-msg-icon">image</mat-icon>
+                              <span class="file-msg-name">{{ getAttachmentName(msg, attachment) }}</span>
+                            </div>
+                          </ng-template>
+                        </ng-template>
                       </div>
-                    </ng-template>
-                  </ng-template>
-                </div>
+                    </ng-container>
 
-                <!-- FILE / VIDEO ─────────────────────────────── -->
-                <div *ngIf="hasFileAttachment(msg) && !isImageAttachment(msg)" class="file-message">
-                  <ng-container *ngIf="isVideoAttachment(msg); else regularFile">
-                    <ng-container *ngIf="getMediaUrl(msg) as videoUrl; else videoLoading">
-                      <div class="video-message">
-                        <video controls class="media-video" preload="metadata">
-                          <source [src]="videoUrl" [type]="getAttachmentMimeType(msg)" />
-                          Your browser does not support video.
-                        </video>
-                        <a
-                          class="video-download"
-                          [href]="videoUrl"
-                          [attr.download]="getAttachmentName(msg)"
-                          target="_blank"
-                          rel="noopener"
+                    <ng-template #nonImageAttachment>
+                      <div class="file-message">
+                        <mat-icon class="file-msg-icon">{{ getFileIcon(msg, attachment) }}</mat-icon>
+                        <span class="file-msg-name">{{ getAttachmentName(msg, attachment) }}</span>
+                        <button
+                          type="button"
+                          class="file-download-btn"
+                          (click)="downloadAttachment(msg, attachment, $event)"
+                          title="Download file"
                         >
-                          Download {{ getAttachmentName(msg) }}
-                        </a>
-                      </div>
-                    </ng-container>
-                    <ng-template #videoLoading>
-                      <div class="media-placeholder">
-                        <mat-spinner diameter="22"></mat-spinner>
-                        <span class="media-load-label">Loading video…</span>
+                          <mat-icon class="file-download-icon">download</mat-icon>
+                        </button>
                       </div>
                     </ng-template>
-                  </ng-container>
-                  <ng-template #regularFile>
-                    <ng-container *ngIf="getMediaUrl(msg) as fileUrl; else fileLoading">
-                      <a
-                        class="file-download"
-                        [href]="fileUrl"
-                        [attr.download]="getAttachmentName(msg)"
-                        target="_blank"
-                        rel="noopener"
-                        (click)="$event.stopPropagation()"
-                      >
-                        <mat-icon class="file-msg-icon">{{ getFileIcon(msg) }}</mat-icon>
-                        <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
-                        <mat-icon class="file-download-icon">download</mat-icon>
-                      </a>
-                    </ng-container>
-                    <ng-template #fileLoading>
-                      <mat-icon class="file-msg-icon">{{ getFileIcon(msg) }}</mat-icon>
-                      <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
-                      <mat-spinner *ngIf="shouldShowMediaSpinner(msg)" diameter="18"></mat-spinner>
-                      <span *ngIf="hasMediaFailed(msg)" class="media-load-label">Unavailable</span>
-                    </ng-template>
-                  </ng-template>
+                  </div>
                 </div>
                 <div
-                  *ngIf="msg.message_type === 'TEXT' && !isImageAttachment(msg) && !hasFileAttachment(msg)"
+                  *ngIf="msg.message_type === 'TEXT' && !hasFileAttachment(msg)"
                   class="text-content"
                 >
                   {{ msg.content }}
@@ -3066,7 +3395,7 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
       ></app-message-input>
     </div>
 
-  `, styles: [".chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;gap:0}.header-actions button{width:32px;height:32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.image-message{line-height:0}.media-img{max-width:220px;max-height:280px;border-radius:10px;display:block;cursor:zoom-in;object-fit:cover;transition:opacity .15s}.media-img:hover{opacity:.88}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;gap:8px;min-width:80px;min-height:44px;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px}.file-msg-icon{font-size:20px;width:20px;height:20px;color:#fffc}.file-msg-name{font-size:13px;color:#fff;word-break:break-all}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.unread{opacity:.4}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions{left:0;right:auto}.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:1px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"] }]
+  `, styles: [".chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;gap:0}.header-actions button{width:32px;height:32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.image-message{line-height:0}.media-wrapper{position:relative;display:inline-block;line-height:0}.media-img{max-width:220px;max-height:280px;border-radius:10px;display:block;cursor:zoom-in;object-fit:cover;transition:opacity .15s}.attachment-actions{position:absolute;right:6px;top:6px;display:flex;gap:4px;opacity:0;transition:opacity .12s ease;pointer-events:none}.media-wrapper:hover .attachment-actions{opacity:1;pointer-events:auto}.attachment-action-btn,.file-download-btn{border:none;border-radius:999px;background:#071d30d1;color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}.attachment-action-btn{width:28px;height:28px}.attachment-action-btn mat-icon{font-size:17px;width:17px;height:17px}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;gap:8px;min-width:80px;min-height:44px;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.attachments-list{display:flex;flex-direction:column;gap:8px;max-width:100%}.attachment-item{max-width:100%}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px}.file-msg-icon{font-size:20px;width:20px;height:20px;color:#fffc}.file-msg-name{font-size:13px;color:#fff;word-break:break-all}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.file-download-btn{width:24px;height:24px;flex-shrink:0;margin-left:auto}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.unread{opacity:.4}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions{left:0;right:auto}.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:1px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"] }]
         }], ctorParameters: () => [{ type: MessagingStoreService }, { type: AuthService }, { type: MessagingFileService }, { type: i0.ChangeDetectorRef }], propDecorators: { scrollContainer: [{
                 type: ViewChild,
                 args: ['scrollContainer']
