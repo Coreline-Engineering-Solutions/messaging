@@ -677,7 +677,7 @@ class MessagingFileService {
         return this.tryEndpoints(this.deleteEndpoints, makeBody);
     }
     // ── Send message with attachments ────────────────────────────────────────
-    sendMessageWithAttachments(conversationId, senderContactId, content, fileIds, filenames) {
+    sendMessageWithAttachments(conversationId, senderContactId, content, fileIds, filenames, mimeTypes = []) {
         // Guard: never send temp file IDs to the backend
         const realIds = fileIds.filter(id => !isTempId(id));
         if (realIds.length !== fileIds.length) {
@@ -689,6 +689,7 @@ class MessagingFileService {
             content: content || '',
             attachment_ids: realIds,
             filenames,
+            mime_types: mimeTypes,
         });
     }
     // ── Fallback engine ───────────────────────────────────────────────────────
@@ -2102,7 +2103,6 @@ class MessageInputComponent {
     fileInput;
     messageText = '';
     selectedFiles = [];
-    isDragOver = false;
     get canSend() {
         return this.messageText.trim().length > 0 || this.selectedFiles.length > 0;
     }
@@ -2131,30 +2131,17 @@ class MessageInputComponent {
     onFilesSelected(event) {
         const input = event.target;
         if (input.files) {
-            this.selectedFiles = [...this.selectedFiles, ...Array.from(input.files)];
+            this.addFiles(Array.from(input.files));
         }
+    }
+    addFiles(files) {
+        if (!files.length)
+            return;
+        this.selectedFiles = [...this.selectedFiles, ...files];
     }
     removeFile(index) {
         this.selectedFiles.splice(index, 1);
         this.selectedFiles = [...this.selectedFiles];
-    }
-    onDragOver(event) {
-        event.preventDefault();
-        event.stopPropagation();
-        this.isDragOver = true;
-    }
-    onDragLeave(event) {
-        event.preventDefault();
-        event.stopPropagation();
-        this.isDragOver = false;
-    }
-    onDrop(event) {
-        event.preventDefault();
-        event.stopPropagation();
-        this.isDragOver = false;
-        if (event.dataTransfer?.files) {
-            this.selectedFiles = [...this.selectedFiles, ...Array.from(event.dataTransfer.files)];
-        }
     }
     getFileIcon(file) {
         const type = file.type;
@@ -2183,10 +2170,6 @@ class MessageInputComponent {
     static ɵcmp = i0.ɵɵngDeclareComponent({ minVersion: "14.0.0", version: "17.3.12", type: MessageInputComponent, isStandalone: true, selector: "app-message-input", outputs: { messageSent: "messageSent", messageWithFiles: "messageWithFiles" }, viewQueries: [{ propertyName: "fileInput", first: true, predicate: ["fileInput"], descendants: true }], ngImport: i0, template: `
     <div
       class="message-input-container"
-      (dragover)="onDragOver($event)"
-      (dragleave)="onDragLeave($event)"
-      (drop)="onDrop($event)"
-      [class.drag-over]="isDragOver"
     >
       <!-- File previews -->
       <div *ngIf="selectedFiles.length > 0" class="file-previews">
@@ -2228,23 +2211,14 @@ class MessageInputComponent {
         </button>
       </div>
 
-      <!-- Drag overlay -->
-      <div *ngIf="isDragOver" class="drag-overlay">
-        <mat-icon>cloud_upload</mat-icon>
-        <span>Drop files here</span>
-      </div>
     </div>
-  `, isInline: true, styles: [".message-input-container{padding:8px 12px;border-top:1px solid rgba(255,255,255,.15);background:transparent;position:relative}.message-input-container.drag-over{background:#ffffff1a}.file-previews{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:80px;overflow-y:auto}.file-chip{display:flex;align-items:center;gap:4px;background:#ffffff26;border-radius:8px;padding:4px 4px 4px 8px;max-width:200px}.file-icon{font-size:16px;width:16px;height:16px;color:#fffc}.file-name{font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px}.file-size{font-size:10px;color:#ffffff80;flex-shrink:0}.file-remove{width:20px!important;height:20px!important}.file-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fff9}.input-wrapper{display:flex;align-items:center;gap:4px;background:#ffffff1a;border-radius:24px;padding:2px 4px}.attach-btn,.send-btn{flex-shrink:0;width:36px;height:36px;padding:0!important;margin:0;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:0!important}.attach-btn mat-icon,.send-btn mat-icon{color:#ffffffb3;font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}.send-btn mat-icon{color:#ffffffe6}.message-textarea{flex:1;border:none;outline:none;background:transparent;resize:none;font-size:14px;font-family:inherit;line-height:1.5;max-height:100px;padding:6px 0;color:#fff}.message-textarea::placeholder{color:#ffffff80}.send-btn:disabled mat-icon{color:#ffffff4d}:host ::ng-deep .attach-btn .mat-mdc-button-touch-target,:host ::ng-deep .send-btn .mat-mdc-button-touch-target{height:36px!important;width:36px!important}:host ::ng-deep .attach-btn .mdc-icon-button__icon,:host ::ng-deep .send-btn .mdc-icon-button__icon{display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important}.drag-overlay{position:absolute;inset:0;background:#1f4bd84d;border:2px dashed rgba(255,255,255,.5);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:#fff;font-size:13px;z-index:5}.drag-overlay mat-icon{font-size:28px;width:28px;height:28px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }] });
+  `, isInline: true, styles: [".message-input-container{padding:8px 12px;border-top:1px solid rgba(255,255,255,.15);background:transparent;position:relative}.file-previews{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:80px;overflow-y:auto}.file-chip{display:flex;align-items:center;gap:4px;background:#ffffff26;border-radius:8px;padding:4px 4px 4px 8px;max-width:200px}.file-icon{font-size:16px;width:16px;height:16px;color:#fffc}.file-name{font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px}.file-size{font-size:10px;color:#ffffff80;flex-shrink:0}.file-remove{width:20px!important;height:20px!important}.file-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fff9}.input-wrapper{display:flex;align-items:center;gap:4px;background:#ffffff1a;border-radius:24px;padding:2px 4px}.attach-btn,.send-btn{flex-shrink:0;width:36px;height:36px;padding:0!important;margin:0;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:0!important}.attach-btn mat-icon,.send-btn mat-icon{color:#ffffffb3;font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}.send-btn mat-icon{color:#ffffffe6}.message-textarea{flex:1;border:none;outline:none;background:transparent;resize:none;font-size:14px;font-family:inherit;line-height:1.5;max-height:100px;padding:6px 0;color:#fff}.message-textarea::placeholder{color:#ffffff80}.send-btn:disabled mat-icon{color:#ffffff4d}:host ::ng-deep .attach-btn .mat-mdc-button-touch-target,:host ::ng-deep .send-btn .mat-mdc-button-touch-target{height:36px!important;width:36px!important}:host ::ng-deep .attach-btn .mdc-icon-button__icon,:host ::ng-deep .send-btn .mdc-icon-button__icon{display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: MessageInputComponent, decorators: [{
             type: Component,
             args: [{ selector: 'app-message-input', standalone: true, imports: [CommonModule, FormsModule, MatIconModule, MatButtonModule], template: `
     <div
       class="message-input-container"
-      (dragover)="onDragOver($event)"
-      (dragleave)="onDragLeave($event)"
-      (drop)="onDrop($event)"
-      [class.drag-over]="isDragOver"
     >
       <!-- File previews -->
       <div *ngIf="selectedFiles.length > 0" class="file-previews">
@@ -2286,13 +2260,8 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
         </button>
       </div>
 
-      <!-- Drag overlay -->
-      <div *ngIf="isDragOver" class="drag-overlay">
-        <mat-icon>cloud_upload</mat-icon>
-        <span>Drop files here</span>
-      </div>
     </div>
-  `, styles: [".message-input-container{padding:8px 12px;border-top:1px solid rgba(255,255,255,.15);background:transparent;position:relative}.message-input-container.drag-over{background:#ffffff1a}.file-previews{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:80px;overflow-y:auto}.file-chip{display:flex;align-items:center;gap:4px;background:#ffffff26;border-radius:8px;padding:4px 4px 4px 8px;max-width:200px}.file-icon{font-size:16px;width:16px;height:16px;color:#fffc}.file-name{font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px}.file-size{font-size:10px;color:#ffffff80;flex-shrink:0}.file-remove{width:20px!important;height:20px!important}.file-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fff9}.input-wrapper{display:flex;align-items:center;gap:4px;background:#ffffff1a;border-radius:24px;padding:2px 4px}.attach-btn,.send-btn{flex-shrink:0;width:36px;height:36px;padding:0!important;margin:0;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:0!important}.attach-btn mat-icon,.send-btn mat-icon{color:#ffffffb3;font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}.send-btn mat-icon{color:#ffffffe6}.message-textarea{flex:1;border:none;outline:none;background:transparent;resize:none;font-size:14px;font-family:inherit;line-height:1.5;max-height:100px;padding:6px 0;color:#fff}.message-textarea::placeholder{color:#ffffff80}.send-btn:disabled mat-icon{color:#ffffff4d}:host ::ng-deep .attach-btn .mat-mdc-button-touch-target,:host ::ng-deep .send-btn .mat-mdc-button-touch-target{height:36px!important;width:36px!important}:host ::ng-deep .attach-btn .mdc-icon-button__icon,:host ::ng-deep .send-btn .mdc-icon-button__icon{display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important}.drag-overlay{position:absolute;inset:0;background:#1f4bd84d;border:2px dashed rgba(255,255,255,.5);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:#fff;font-size:13px;z-index:5}.drag-overlay mat-icon{font-size:28px;width:28px;height:28px}\n"] }]
+  `, styles: [".message-input-container{padding:8px 12px;border-top:1px solid rgba(255,255,255,.15);background:transparent;position:relative}.file-previews{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:80px;overflow-y:auto}.file-chip{display:flex;align-items:center;gap:4px;background:#ffffff26;border-radius:8px;padding:4px 4px 4px 8px;max-width:200px}.file-icon{font-size:16px;width:16px;height:16px;color:#fffc}.file-name{font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px}.file-size{font-size:10px;color:#ffffff80;flex-shrink:0}.file-remove{width:20px!important;height:20px!important}.file-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fff9}.input-wrapper{display:flex;align-items:center;gap:4px;background:#ffffff1a;border-radius:24px;padding:2px 4px}.attach-btn,.send-btn{flex-shrink:0;width:36px;height:36px;padding:0!important;margin:0;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:0!important}.attach-btn mat-icon,.send-btn mat-icon{color:#ffffffb3;font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}.send-btn mat-icon{color:#ffffffe6}.message-textarea{flex:1;border:none;outline:none;background:transparent;resize:none;font-size:14px;font-family:inherit;line-height:1.5;max-height:100px;padding:6px 0;color:#fff}.message-textarea::placeholder{color:#ffffff80}.send-btn:disabled mat-icon{color:#ffffff4d}:host ::ng-deep .attach-btn .mat-mdc-button-touch-target,:host ::ng-deep .send-btn .mat-mdc-button-touch-target{height:36px!important;width:36px!important}:host ::ng-deep .attach-btn .mdc-icon-button__icon,:host ::ng-deep .send-btn .mdc-icon-button__icon{display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important}\n"] }]
         }], propDecorators: { messageSent: [{
                 type: Output
             }], messageWithFiles: [{
@@ -2308,6 +2277,8 @@ class ChatThreadComponent {
     fileService;
     cdr;
     scrollContainer;
+    messageInput;
+    lightboxOpen = new EventEmitter();
     messages = [];
     visibleContacts = [];
     conversationName = '';
@@ -2320,28 +2291,9 @@ class ChatThreadComponent {
     uploading = false;
     hoveredMessageId = null;
     quickEmojis = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
-    /** Lightbox: currently displayed full-size data URL */
-    lightboxUrl = null;
-    /** When true the lightbox is a draggable floating window instead of full-screen */
-    lightboxDetached = false;
-    lightboxX = 100;
-    lightboxY = 80;
-    lightboxW = 480;
-    lightboxH = 400;
-    // lightbox drag state
-    lbDragging = false;
-    lbDragOffX = 0;
-    lbDragOffY = 0;
-    boundLbMove = this.onLightboxDragMove.bind(this);
-    boundLbEnd = this.onLightboxDragEnd.bind(this);
-    // lightbox resize state
-    lbResizing = false;
-    lbResizeStartX = 0;
-    lbResizeStartY = 0;
-    lbResizeStartW = 0;
-    lbResizeStartH = 0;
-    boundLbResizeMove = this.onLightboxResizeMove.bind(this);
-    boundLbResizeEnd = this.onLightboxResizeEnd.bind(this);
+    threadDragOver = false;
+    threadDragDepth = 0;
+    boundResetThreadDrag = this.resetThreadDrag.bind(this);
     /** Tracks which file IDs are currently being fetched to avoid duplicate requests */
     mediaLoading = new Set();
     /** Tracks file IDs where retrieval failed so UI doesn't spin forever. */
@@ -2354,6 +2306,8 @@ class ChatThreadComponent {
     }
     ngOnInit() {
         this.myContactId = this.auth.contactId;
+        document.addEventListener('drop', this.boundResetThreadDrag, true);
+        document.addEventListener('dragend', this.boundResetThreadDrag, true);
         this.sub = combineLatest([
             this.store.activeConversationId,
             this.store.messagesMap,
@@ -2389,10 +2343,8 @@ class ChatThreadComponent {
     }
     ngOnDestroy() {
         this.sub?.unsubscribe();
-        document.removeEventListener('mousemove', this.boundLbMove);
-        document.removeEventListener('mouseup', this.boundLbEnd);
-        document.removeEventListener('mousemove', this.boundLbResizeMove);
-        document.removeEventListener('mouseup', this.boundLbResizeEnd);
+        document.removeEventListener('drop', this.boundResetThreadDrag, true);
+        document.removeEventListener('dragend', this.boundResetThreadDrag, true);
     }
     goBack() {
         this.store.setView('inbox');
@@ -2426,6 +2378,7 @@ class ChatThreadComponent {
             next: (responses) => {
                 const fileIds = responses.map((r) => r.file_id);
                 const filenames = responses.map((r) => r.filename);
+                const mimeTypes = responses.map((r, idx) => r.mime_type || payload.files[idx]?.type || '');
                 // Guard: ensure all IDs are real (not temp)
                 const hasTemp = fileIds.some(id => id?.startsWith('temp-'));
                 if (hasTemp) {
@@ -2436,7 +2389,7 @@ class ChatThreadComponent {
                 this.fileService.prewarmCache(fileIds);
                 // Step 3: Send the message with the real file_ids.
                 this.fileService
-                    .sendMessageWithAttachments(this.conversationId, this.auth.contactId, payload.text || filenames.join(', '), fileIds, filenames)
+                    .sendMessageWithAttachments(this.conversationId, this.auth.contactId, payload.text || filenames.join(', '), fileIds, filenames, mimeTypes)
                     .subscribe({
                     next: (res) => {
                         this.uploading = false;
@@ -2444,7 +2397,8 @@ class ChatThreadComponent {
                         // Add optimistic message so the image appears instantly —
                         // the WebSocket event may arrive a moment later and dedup it.
                         const firstId = fileIds[0] || '';
-                        const isImg = /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(filenames[0] || '');
+                        const isImg = (mimeTypes[0] || '').startsWith('image/') ||
+                            /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)$/i.test(filenames[0] || '');
                         const optimistic = {
                             message_id: res?.message_id ? String(res.message_id) : 'temp-' + Date.now(),
                             conversation_id: this.conversationId,
@@ -2458,6 +2412,9 @@ class ChatThreadComponent {
                             attachments: fileIds.map((id, idx) => ({
                                 file_id: id,
                                 filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
+                                mime_type: mimeTypes[idx] || undefined,
+                                size_bytes: payload.files[idx]?.size,
+                                url: responses[idx]?.url,
                             })),
                         };
                         this.store.appendOptimisticMessage(optimistic);
@@ -2479,6 +2436,51 @@ class ChatThreadComponent {
         }
     }
     onScroll() { }
+    onThreadDragEnter(event) {
+        if (!this.dragHasFiles(event))
+            return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.threadDragDepth++;
+        this.threadDragOver = true;
+    }
+    onThreadDragOver(event) {
+        if (!this.dragHasFiles(event))
+            return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.dataTransfer) {
+            event.dataTransfer.dropEffect = 'copy';
+        }
+        this.threadDragOver = true;
+    }
+    onThreadDragLeave(event) {
+        if (!this.dragHasFiles(event))
+            return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.threadDragDepth = Math.max(0, this.threadDragDepth - 1);
+        this.threadDragOver = this.threadDragDepth > 0;
+    }
+    onThreadDrop(event) {
+        if (!this.dragHasFiles(event))
+            return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.resetThreadDrag();
+        const files = event.dataTransfer?.files ? Array.from(event.dataTransfer.files) : [];
+        this.messageInput?.addFiles(files);
+    }
+    resetThreadDrag() {
+        this.threadDragDepth = 0;
+        this.threadDragOver = false;
+    }
+    dragHasFiles(event) {
+        const types = event.dataTransfer?.types;
+        if (!types)
+            return false;
+        return Array.from(types).includes('Files');
+    }
     shouldShowDateSeparator(index) {
         if (index === 0)
             return true;
@@ -2555,9 +2557,11 @@ class ChatThreadComponent {
             anyMsg?.attachment_id ||
             anyMsg?.attachment_ids?.[0] ||
             (!mediaIsDirectUrl && mu ? mu : undefined);
-        const filename = anyMsg?.filename || anyMsg?.file_name || msg.content;
         const mime = anyMsg?.mime_type || anyMsg?.attachment_mime_type;
-        if (fileId || filename || mime) {
+        const explicitFilename = anyMsg?.filename || anyMsg?.file_name;
+        const filename = explicitFilename ||
+            (fileId || mime || msg.message_type !== 'TEXT' ? msg.content : '');
+        if (fileId || explicitFilename || mime || msg.message_type === 'FILE' || msg.message_type === 'IMAGE') {
             return {
                 file_id: String(fileId || ''),
                 filename: String(filename || 'File'),
@@ -2602,12 +2606,14 @@ class ChatThreadComponent {
     }
     prewarmMedia(messages) {
         for (const msg of messages) {
-            if (!this.isImageAttachment(msg) && !this.isVideoAttachment(msg))
+            const att = this.getPrimaryAttachment(msg);
+            const fileId = att?.file_id?.trim();
+            if (!fileId || fileId.startsWith('temp-'))
                 continue;
-            const fileId = this.getPrimaryAttachment(msg)?.file_id?.trim();
-            if (fileId && !fileId.startsWith('temp-') && !this.fileService.getCachedDataUrl(fileId)) {
-                this.fetchMedia(fileId);
-            }
+            if (this.fileService.getCachedDataUrl(fileId))
+                continue;
+            // Preload images and videos eagerly; queue other files so download links appear.
+            this.fetchMedia(fileId);
         }
     }
     fetchMedia(fileId) {
@@ -2646,85 +2652,32 @@ class ChatThreadComponent {
     getAttachmentName(msg) {
         return this.getPrimaryAttachment(msg)?.filename || msg.content || 'File';
     }
+    hasFileAttachment(msg) {
+        return msg.message_type === 'FILE' || !!this.getPrimaryAttachment(msg);
+    }
+    hasMediaFailed(msg) {
+        const fileId = this.getPrimaryAttachment(msg)?.file_id;
+        return !!fileId && this.mediaFailed.has(fileId);
+    }
+    getFileIcon(msg) {
+        const mime = this.getAttachmentMimeType(msg);
+        const name = this.getAttachmentName(msg).toLowerCase();
+        if (mime.startsWith('video/') || /\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(name))
+            return 'videocam';
+        if (mime.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|flac)$/i.test(name))
+            return 'audiotrack';
+        if (mime.includes('pdf') || name.endsWith('.pdf'))
+            return 'picture_as_pdf';
+        if (mime.includes('spreadsheet') || mime.includes('excel') || /\.(xls|xlsx|csv)$/i.test(name))
+            return 'table_chart';
+        if (mime.includes('document') || mime.includes('word') || /\.(doc|docx|txt|rtf)$/i.test(name))
+            return 'description';
+        if (mime.includes('zip') || /\.(zip|rar|7z|tar|gz)$/i.test(name))
+            return 'folder_zip';
+        return 'insert_drive_file';
+    }
     openLightbox(dataUrl) {
-        this.lightboxUrl = dataUrl;
-        this.lightboxDetached = false;
-    }
-    /** Fullscreen mode: only close when the dimmed backdrop is clicked, not after toolbar actions. */
-    onLightboxBackdropClick(event) {
-        if (this.lightboxDetached)
-            return;
-        if (event.target !== event.currentTarget)
-            return;
-        this.lightboxUrl = null;
-    }
-    expandLightbox() {
-        this.lightboxDetached = false;
-        this.cdr.markForCheck();
-    }
-    closeLightbox() {
-        this.lightboxUrl = null;
-        this.lightboxDetached = false;
-    }
-    detachLightbox() {
-        this.lightboxDetached = true;
-        this.lightboxX = Math.max(20, Math.round((window.innerWidth - this.lightboxW) / 2));
-        this.lightboxY = Math.max(20, Math.round((window.innerHeight - this.lightboxH) / 2));
-    }
-    onLightboxDragStart(event) {
-        if (event.target.closest('button'))
-            return;
-        event.preventDefault();
-        this.lbDragging = true;
-        this.lbDragOffX = event.clientX - this.lightboxX;
-        this.lbDragOffY = event.clientY - this.lightboxY;
-        document.body.style.userSelect = 'none';
-        document.addEventListener('mousemove', this.boundLbMove);
-        document.addEventListener('mouseup', this.boundLbEnd);
-    }
-    onLightboxDragMove(event) {
-        if (!this.lbDragging)
-            return;
-        this.lightboxX = Math.max(0, Math.min(event.clientX - this.lbDragOffX, window.innerWidth - this.lightboxW));
-        this.lightboxY = Math.max(0, Math.min(event.clientY - this.lbDragOffY, window.innerHeight - 60));
-        this.cdr.markForCheck();
-    }
-    onLightboxDragEnd() {
-        if (!this.lbDragging)
-            return;
-        this.lbDragging = false;
-        document.body.style.userSelect = '';
-        document.removeEventListener('mousemove', this.boundLbMove);
-        document.removeEventListener('mouseup', this.boundLbEnd);
-    }
-    onLightboxResizeStart(event) {
-        event.preventDefault();
-        event.stopPropagation();
-        this.lbResizing = true;
-        this.lbResizeStartX = event.clientX;
-        this.lbResizeStartY = event.clientY;
-        this.lbResizeStartW = this.lightboxW;
-        this.lbResizeStartH = this.lightboxH;
-        document.body.style.cursor = 'se-resize';
-        document.body.style.userSelect = 'none';
-        document.addEventListener('mousemove', this.boundLbResizeMove);
-        document.addEventListener('mouseup', this.boundLbResizeEnd);
-    }
-    onLightboxResizeMove(event) {
-        if (!this.lbResizing)
-            return;
-        this.lightboxW = Math.max(200, this.lbResizeStartW + (event.clientX - this.lbResizeStartX));
-        this.lightboxH = Math.max(180, this.lbResizeStartH + (event.clientY - this.lbResizeStartY));
-        this.cdr.markForCheck();
-    }
-    onLightboxResizeEnd() {
-        if (!this.lbResizing)
-            return;
-        this.lbResizing = false;
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-        document.removeEventListener('mousemove', this.boundLbResizeMove);
-        document.removeEventListener('mouseup', this.boundLbResizeEnd);
+        this.lightboxOpen.emit(dataUrl);
     }
     // ── Reactions ────────────────────────────────────────────────────────────
     onEmojiSelected(emoji, messageId) {
@@ -2748,8 +2701,15 @@ class ChatThreadComponent {
         return reaction.reactors.join(', ');
     }
     static ɵfac = i0.ɵɵngDeclareFactory({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: ChatThreadComponent, deps: [{ token: MessagingStoreService }, { token: AuthService }, { token: MessagingFileService }, { token: i0.ChangeDetectorRef }], target: i0.ɵɵFactoryTarget.Component });
-    static ɵcmp = i0.ɵɵngDeclareComponent({ minVersion: "14.0.0", version: "17.3.12", type: ChatThreadComponent, isStandalone: true, selector: "app-chat-thread", viewQueries: [{ propertyName: "scrollContainer", first: true, predicate: ["scrollContainer"], descendants: true }], ngImport: i0, template: `
-    <div class="chat-thread">
+    static ɵcmp = i0.ɵɵngDeclareComponent({ minVersion: "14.0.0", version: "17.3.12", type: ChatThreadComponent, isStandalone: true, selector: "app-chat-thread", outputs: { lightboxOpen: "lightboxOpen" }, viewQueries: [{ propertyName: "scrollContainer", first: true, predicate: ["scrollContainer"], descendants: true }, { propertyName: "messageInput", first: true, predicate: MessageInputComponent, descendants: true }], ngImport: i0, template: `
+    <div
+      class="chat-thread"
+      [class.drag-over]="threadDragOver"
+      (dragenter)="onThreadDragEnter($event)"
+      (dragover)="onThreadDragOver($event)"
+      (dragleave)="onThreadDragLeave($event)"
+      (drop)="onThreadDrop($event)"
+    >
       <div class="chat-header">
         <button mat-icon-button class="hdr-btn" (click)="goBack()" matTooltip="Back" matTooltipPosition="below">
           <mat-icon>arrow_back</mat-icon>
@@ -2765,6 +2725,11 @@ class ChatThreadComponent {
       </div>
 
       <div class="messages-area" #scrollContainer (scroll)="onScroll()">
+        <div *ngIf="threadDragOver" class="thread-drag-overlay">
+          <mat-icon>cloud_upload</mat-icon>
+          <span>Drop files anywhere in this chat</span>
+        </div>
+
         <div *ngIf="loading" class="loading-indicator">
           <mat-spinner diameter="24"></mat-spinner>
           <span>Loading messages...</span>
@@ -2816,13 +2781,24 @@ class ChatThreadComponent {
                 </div>
 
                 <!-- FILE / VIDEO ─────────────────────────────── -->
-                <div *ngIf="msg.message_type === 'FILE' && !isImageAttachment(msg)" class="file-message">
+                <div *ngIf="hasFileAttachment(msg) && !isImageAttachment(msg)" class="file-message">
                   <ng-container *ngIf="isVideoAttachment(msg); else regularFile">
                     <ng-container *ngIf="getMediaUrl(msg) as videoUrl; else videoLoading">
-                      <video controls class="media-video" preload="metadata">
-                        <source [src]="videoUrl" [type]="getAttachmentMimeType(msg)" />
-                        Your browser does not support video.
-                      </video>
+                      <div class="video-message">
+                        <video controls class="media-video" preload="metadata">
+                          <source [src]="videoUrl" [type]="getAttachmentMimeType(msg)" />
+                          Your browser does not support video.
+                        </video>
+                        <a
+                          class="video-download"
+                          [href]="videoUrl"
+                          [attr.download]="getAttachmentName(msg)"
+                          target="_blank"
+                          rel="noopener"
+                        >
+                          Download {{ getAttachmentName(msg) }}
+                        </a>
+                      </div>
                     </ng-container>
                     <ng-template #videoLoading>
                       <div class="media-placeholder">
@@ -2832,12 +2808,30 @@ class ChatThreadComponent {
                     </ng-template>
                   </ng-container>
                   <ng-template #regularFile>
-                    <mat-icon class="file-msg-icon">insert_drive_file</mat-icon>
-                    <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
+                    <ng-container *ngIf="getMediaUrl(msg) as fileUrl; else fileLoading">
+                      <a
+                        class="file-download"
+                        [href]="fileUrl"
+                        [attr.download]="getAttachmentName(msg)"
+                        target="_blank"
+                        rel="noopener"
+                        (click)="$event.stopPropagation()"
+                      >
+                        <mat-icon class="file-msg-icon">{{ getFileIcon(msg) }}</mat-icon>
+                        <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
+                        <mat-icon class="file-download-icon">download</mat-icon>
+                      </a>
+                    </ng-container>
+                    <ng-template #fileLoading>
+                      <mat-icon class="file-msg-icon">{{ getFileIcon(msg) }}</mat-icon>
+                      <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
+                      <mat-spinner *ngIf="shouldShowMediaSpinner(msg)" diameter="18"></mat-spinner>
+                      <span *ngIf="hasMediaFailed(msg)" class="media-load-label">Unavailable</span>
+                    </ng-template>
                   </ng-template>
                 </div>
                 <div
-                  *ngIf="msg.message_type === 'TEXT' && !isImageAttachment(msg)"
+                  *ngIf="msg.message_type === 'TEXT' && !isImageAttachment(msg) && !hasFileAttachment(msg)"
                   class="text-content"
                 >
                   {{ msg.content }}
@@ -2886,65 +2880,7 @@ class ChatThreadComponent {
       ></app-message-input>
     </div>
 
-    <!-- Image viewer: fullscreen overlay OR detached floating window -->
-    <div
-      *ngIf="lightboxUrl"
-      class="lightbox-overlay"
-      [class.lightbox-detached]="lightboxDetached"
-      [style.left.px]="lightboxDetached ? lightboxX : null"
-      [style.top.px]="lightboxDetached ? lightboxY : null"
-      [style.width.px]="lightboxDetached ? lightboxW : null"
-      [style.height.px]="lightboxDetached ? lightboxH : null"
-      (click)="onLightboxBackdropClick($event)"
-    >
-      <!-- Drag handle bar (visible in detached mode) -->
-      <div
-        *ngIf="lightboxDetached"
-        class="lightbox-drag-bar"
-        (mousedown)="onLightboxDragStart($event)"
-      >
-        <span class="lightbox-drag-title">Image viewer</span>
-        <div class="lightbox-drag-actions">
-          <button
-            type="button"
-            class="lightbox-action-btn"
-            (click)="$event.stopPropagation(); expandLightbox()"
-            title="Expand to fullscreen"
-          >
-            <mat-icon>fullscreen</mat-icon>
-          </button>
-          <button
-            type="button"
-            class="lightbox-action-btn"
-            (click)="$event.stopPropagation(); closeLightbox()"
-            title="Close"
-          >
-            <mat-icon>close</mat-icon>
-          </button>
-        </div>
-      </div>
-
-      <img
-        [src]="lightboxUrl"
-        class="lightbox-img"
-        [class.lightbox-img-detached]="lightboxDetached"
-        (click)="$event.stopPropagation()"
-      />
-
-      <!-- Controls shown in fullscreen mode -->
-      <ng-container *ngIf="!lightboxDetached">
-        <button class="lightbox-close" (click)="lightboxUrl = null">
-          <mat-icon>close</mat-icon>
-        </button>
-        <button class="lightbox-detach-btn" (click)="detachLightbox()" title="Detach to floating window">
-          <mat-icon>picture_in_picture</mat-icon>
-        </button>
-      </ng-container>
-
-      <!-- Resize corner (detached mode) -->
-      <div *ngIf="lightboxDetached" class="lightbox-resize-corner" (mousedown)="onLightboxResizeStart($event)"></div>
-    </div>
-  `, isInline: true, styles: [".chat-thread{display:flex;flex-direction:column;height:100%;background:#041322}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;gap:0}.header-actions button{width:32px;height:32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.image-message{line-height:0}.media-img{max-width:220px;max-height:280px;border-radius:10px;display:block;cursor:zoom-in;object-fit:cover;transition:opacity .15s}.media-img:hover{opacity:.88}.media-video{max-width:240px;border-radius:10px;display:block;background:#000}.media-placeholder{display:flex;align-items:center;gap:8px;min-width:80px;min-height:44px;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.file-msg-icon{font-size:20px;width:20px;height:20px;color:#fffc}.file-msg-name{font-size:13px;color:#fff;word-break:break-all}.lightbox-overlay{position:fixed;inset:0;background:#000000e0;display:flex;align-items:center;justify-content:center;z-index:99999;cursor:pointer}.lightbox-overlay.lightbox-detached{inset:unset;background:#0c1f35;border:1px solid rgba(255,255,255,.18);border-radius:12px;box-shadow:0 12px 48px #000000b3;display:flex;flex-direction:column;overflow:hidden;cursor:default;min-width:200px;min-height:180px}.lightbox-drag-bar{display:flex;align-items:center;justify-content:space-between;padding:6px 8px 6px 12px;background:#041322;border-bottom:1px solid rgba(255,255,255,.12);cursor:grab;flex-shrink:0;-webkit-user-select:none;user-select:none}.lightbox-drag-bar:active{cursor:grabbing}.lightbox-drag-title{font-size:12px;color:#fff9;letter-spacing:.4px}.lightbox-drag-actions{display:flex;gap:2px}.lightbox-action-btn{background:transparent;border:none;border-radius:6px;width:28px;height:28px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#ffffffb3;transition:background .15s}.lightbox-action-btn:hover{background:#ffffff26}.lightbox-action-btn mat-icon{font-size:16px;width:16px;height:16px}.lightbox-img{max-width:92vw;max-height:92vh;border-radius:8px;box-shadow:0 8px 40px #0009;cursor:default}.lightbox-img.lightbox-img-detached{max-width:100%;max-height:100%;border-radius:0;box-shadow:none;object-fit:contain;flex:1}.lightbox-close{position:absolute;top:16px;right:16px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lightbox-close:hover{background:#ffffff4d}.lightbox-detach-btn{position:absolute;top:16px;right:60px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lightbox-detach-btn:hover{background:#ffffff4d}.lightbox-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.2) 50%);border-bottom-right-radius:12px}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.unread{opacity:.4}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:1px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i7$1.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "component", type: MessageInputComponent, selector: "app-message-input", outputs: ["messageSent", "messageWithFiles"] }] });
+  `, isInline: true, styles: [".chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;gap:0}.header-actions button{width:32px;height:32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.image-message{line-height:0}.media-img{max-width:220px;max-height:280px;border-radius:10px;display:block;cursor:zoom-in;object-fit:cover;transition:opacity .15s}.media-img:hover{opacity:.88}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;gap:8px;min-width:80px;min-height:44px;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px}.file-msg-icon{font-size:20px;width:20px;height:20px;color:#fffc}.file-msg-name{font-size:13px;color:#fff;word-break:break-all}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.unread{opacity:.4}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions,.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:1px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i7$1.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "component", type: MessageInputComponent, selector: "app-message-input", outputs: ["messageSent", "messageWithFiles"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: ChatThreadComponent, decorators: [{
             type: Component,
@@ -2952,7 +2888,14 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
                         CommonModule, MatIconModule, MatButtonModule,
                         MatProgressSpinnerModule, MatTooltipModule, MessageInputComponent,
                     ], template: `
-    <div class="chat-thread">
+    <div
+      class="chat-thread"
+      [class.drag-over]="threadDragOver"
+      (dragenter)="onThreadDragEnter($event)"
+      (dragover)="onThreadDragOver($event)"
+      (dragleave)="onThreadDragLeave($event)"
+      (drop)="onThreadDrop($event)"
+    >
       <div class="chat-header">
         <button mat-icon-button class="hdr-btn" (click)="goBack()" matTooltip="Back" matTooltipPosition="below">
           <mat-icon>arrow_back</mat-icon>
@@ -2968,6 +2911,11 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
       </div>
 
       <div class="messages-area" #scrollContainer (scroll)="onScroll()">
+        <div *ngIf="threadDragOver" class="thread-drag-overlay">
+          <mat-icon>cloud_upload</mat-icon>
+          <span>Drop files anywhere in this chat</span>
+        </div>
+
         <div *ngIf="loading" class="loading-indicator">
           <mat-spinner diameter="24"></mat-spinner>
           <span>Loading messages...</span>
@@ -3019,13 +2967,24 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
                 </div>
 
                 <!-- FILE / VIDEO ─────────────────────────────── -->
-                <div *ngIf="msg.message_type === 'FILE' && !isImageAttachment(msg)" class="file-message">
+                <div *ngIf="hasFileAttachment(msg) && !isImageAttachment(msg)" class="file-message">
                   <ng-container *ngIf="isVideoAttachment(msg); else regularFile">
                     <ng-container *ngIf="getMediaUrl(msg) as videoUrl; else videoLoading">
-                      <video controls class="media-video" preload="metadata">
-                        <source [src]="videoUrl" [type]="getAttachmentMimeType(msg)" />
-                        Your browser does not support video.
-                      </video>
+                      <div class="video-message">
+                        <video controls class="media-video" preload="metadata">
+                          <source [src]="videoUrl" [type]="getAttachmentMimeType(msg)" />
+                          Your browser does not support video.
+                        </video>
+                        <a
+                          class="video-download"
+                          [href]="videoUrl"
+                          [attr.download]="getAttachmentName(msg)"
+                          target="_blank"
+                          rel="noopener"
+                        >
+                          Download {{ getAttachmentName(msg) }}
+                        </a>
+                      </div>
                     </ng-container>
                     <ng-template #videoLoading>
                       <div class="media-placeholder">
@@ -3035,12 +2994,30 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
                     </ng-template>
                   </ng-container>
                   <ng-template #regularFile>
-                    <mat-icon class="file-msg-icon">insert_drive_file</mat-icon>
-                    <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
+                    <ng-container *ngIf="getMediaUrl(msg) as fileUrl; else fileLoading">
+                      <a
+                        class="file-download"
+                        [href]="fileUrl"
+                        [attr.download]="getAttachmentName(msg)"
+                        target="_blank"
+                        rel="noopener"
+                        (click)="$event.stopPropagation()"
+                      >
+                        <mat-icon class="file-msg-icon">{{ getFileIcon(msg) }}</mat-icon>
+                        <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
+                        <mat-icon class="file-download-icon">download</mat-icon>
+                      </a>
+                    </ng-container>
+                    <ng-template #fileLoading>
+                      <mat-icon class="file-msg-icon">{{ getFileIcon(msg) }}</mat-icon>
+                      <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
+                      <mat-spinner *ngIf="shouldShowMediaSpinner(msg)" diameter="18"></mat-spinner>
+                      <span *ngIf="hasMediaFailed(msg)" class="media-load-label">Unavailable</span>
+                    </ng-template>
                   </ng-template>
                 </div>
                 <div
-                  *ngIf="msg.message_type === 'TEXT' && !isImageAttachment(msg)"
+                  *ngIf="msg.message_type === 'TEXT' && !isImageAttachment(msg) && !hasFileAttachment(msg)"
                   class="text-content"
                 >
                   {{ msg.content }}
@@ -3089,68 +3066,15 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
       ></app-message-input>
     </div>
 
-    <!-- Image viewer: fullscreen overlay OR detached floating window -->
-    <div
-      *ngIf="lightboxUrl"
-      class="lightbox-overlay"
-      [class.lightbox-detached]="lightboxDetached"
-      [style.left.px]="lightboxDetached ? lightboxX : null"
-      [style.top.px]="lightboxDetached ? lightboxY : null"
-      [style.width.px]="lightboxDetached ? lightboxW : null"
-      [style.height.px]="lightboxDetached ? lightboxH : null"
-      (click)="onLightboxBackdropClick($event)"
-    >
-      <!-- Drag handle bar (visible in detached mode) -->
-      <div
-        *ngIf="lightboxDetached"
-        class="lightbox-drag-bar"
-        (mousedown)="onLightboxDragStart($event)"
-      >
-        <span class="lightbox-drag-title">Image viewer</span>
-        <div class="lightbox-drag-actions">
-          <button
-            type="button"
-            class="lightbox-action-btn"
-            (click)="$event.stopPropagation(); expandLightbox()"
-            title="Expand to fullscreen"
-          >
-            <mat-icon>fullscreen</mat-icon>
-          </button>
-          <button
-            type="button"
-            class="lightbox-action-btn"
-            (click)="$event.stopPropagation(); closeLightbox()"
-            title="Close"
-          >
-            <mat-icon>close</mat-icon>
-          </button>
-        </div>
-      </div>
-
-      <img
-        [src]="lightboxUrl"
-        class="lightbox-img"
-        [class.lightbox-img-detached]="lightboxDetached"
-        (click)="$event.stopPropagation()"
-      />
-
-      <!-- Controls shown in fullscreen mode -->
-      <ng-container *ngIf="!lightboxDetached">
-        <button class="lightbox-close" (click)="lightboxUrl = null">
-          <mat-icon>close</mat-icon>
-        </button>
-        <button class="lightbox-detach-btn" (click)="detachLightbox()" title="Detach to floating window">
-          <mat-icon>picture_in_picture</mat-icon>
-        </button>
-      </ng-container>
-
-      <!-- Resize corner (detached mode) -->
-      <div *ngIf="lightboxDetached" class="lightbox-resize-corner" (mousedown)="onLightboxResizeStart($event)"></div>
-    </div>
-  `, styles: [".chat-thread{display:flex;flex-direction:column;height:100%;background:#041322}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;gap:0}.header-actions button{width:32px;height:32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.image-message{line-height:0}.media-img{max-width:220px;max-height:280px;border-radius:10px;display:block;cursor:zoom-in;object-fit:cover;transition:opacity .15s}.media-img:hover{opacity:.88}.media-video{max-width:240px;border-radius:10px;display:block;background:#000}.media-placeholder{display:flex;align-items:center;gap:8px;min-width:80px;min-height:44px;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.file-msg-icon{font-size:20px;width:20px;height:20px;color:#fffc}.file-msg-name{font-size:13px;color:#fff;word-break:break-all}.lightbox-overlay{position:fixed;inset:0;background:#000000e0;display:flex;align-items:center;justify-content:center;z-index:99999;cursor:pointer}.lightbox-overlay.lightbox-detached{inset:unset;background:#0c1f35;border:1px solid rgba(255,255,255,.18);border-radius:12px;box-shadow:0 12px 48px #000000b3;display:flex;flex-direction:column;overflow:hidden;cursor:default;min-width:200px;min-height:180px}.lightbox-drag-bar{display:flex;align-items:center;justify-content:space-between;padding:6px 8px 6px 12px;background:#041322;border-bottom:1px solid rgba(255,255,255,.12);cursor:grab;flex-shrink:0;-webkit-user-select:none;user-select:none}.lightbox-drag-bar:active{cursor:grabbing}.lightbox-drag-title{font-size:12px;color:#fff9;letter-spacing:.4px}.lightbox-drag-actions{display:flex;gap:2px}.lightbox-action-btn{background:transparent;border:none;border-radius:6px;width:28px;height:28px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#ffffffb3;transition:background .15s}.lightbox-action-btn:hover{background:#ffffff26}.lightbox-action-btn mat-icon{font-size:16px;width:16px;height:16px}.lightbox-img{max-width:92vw;max-height:92vh;border-radius:8px;box-shadow:0 8px 40px #0009;cursor:default}.lightbox-img.lightbox-img-detached{max-width:100%;max-height:100%;border-radius:0;box-shadow:none;object-fit:contain;flex:1}.lightbox-close{position:absolute;top:16px;right:16px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lightbox-close:hover{background:#ffffff4d}.lightbox-detach-btn{position:absolute;top:16px;right:60px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lightbox-detach-btn:hover{background:#ffffff4d}.lightbox-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.2) 50%);border-bottom-right-radius:12px}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.unread{opacity:.4}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:1px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"] }]
+  `, styles: [".chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;gap:0}.header-actions button{width:32px;height:32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.image-message{line-height:0}.media-img{max-width:220px;max-height:280px;border-radius:10px;display:block;cursor:zoom-in;object-fit:cover;transition:opacity .15s}.media-img:hover{opacity:.88}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;gap:8px;min-width:80px;min-height:44px;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px}.file-msg-icon{font-size:20px;width:20px;height:20px;color:#fffc}.file-msg-name{font-size:13px;color:#fff;word-break:break-all}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.unread{opacity:.4}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions,.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:1px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"] }]
         }], ctorParameters: () => [{ type: MessagingStoreService }, { type: AuthService }, { type: MessagingFileService }, { type: i0.ChangeDetectorRef }], propDecorators: { scrollContainer: [{
                 type: ViewChild,
                 args: ['scrollContainer']
+            }], messageInput: [{
+                type: ViewChild,
+                args: [MessageInputComponent]
+            }], lightboxOpen: [{
+                type: Output
             }] } });
 
 class NewConversationComponent {
@@ -3696,6 +3620,25 @@ class ChatPanelComponent {
     boundFloatResizeMove = this.onFloatResizeMove.bind(this);
     boundFloatResizeEnd = this.onFloatResizeEnd.bind(this);
     sub;
+    // ── Lightbox state ──
+    lightboxUrl = null;
+    lightboxDetached = false;
+    lightboxX = 100;
+    lightboxY = 80;
+    lightboxW = 560;
+    lightboxH = 460;
+    lbDragging = false;
+    lbDragOffX = 0;
+    lbDragOffY = 0;
+    lbResizing = false;
+    lbResizeStartX = 0;
+    lbResizeStartY = 0;
+    lbResizeStartW = 0;
+    lbResizeStartH = 0;
+    boundLbMove = this.onLbDragMove.bind(this);
+    boundLbEnd = this.onLbDragEnd.bind(this);
+    boundLbResizeMove = this.onLbResizeMove.bind(this);
+    boundLbResizeEnd = this.onLbResizeEnd.bind(this);
     constructor(store) {
         this.store = store;
     }
@@ -3736,6 +3679,80 @@ class ChatPanelComponent {
         document.removeEventListener('mouseup', this.boundFloatEnd);
         document.removeEventListener('mousemove', this.boundFloatResizeMove);
         document.removeEventListener('mouseup', this.boundFloatResizeEnd);
+        document.removeEventListener('mousemove', this.boundLbMove);
+        document.removeEventListener('mouseup', this.boundLbEnd);
+        document.removeEventListener('mousemove', this.boundLbResizeMove);
+        document.removeEventListener('mouseup', this.boundLbResizeEnd);
+    }
+    // ── Lightbox ──
+    openLightbox(url) {
+        this.lightboxUrl = url;
+        this.lightboxDetached = false;
+    }
+    onLightboxBackdropClick(event) {
+        if (this.lightboxDetached)
+            return;
+        if (event.target !== event.currentTarget)
+            return;
+        this.lightboxUrl = null;
+    }
+    detachLightbox() {
+        this.lightboxDetached = true;
+        this.lightboxX = Math.max(20, Math.round((window.innerWidth - this.lightboxW) / 2));
+        this.lightboxY = Math.max(20, Math.round((window.innerHeight - this.lightboxH) / 2));
+    }
+    onLbDragStart(event) {
+        if (event.target.closest('button'))
+            return;
+        event.preventDefault();
+        this.lbDragging = true;
+        this.lbDragOffX = event.clientX - this.lightboxX;
+        this.lbDragOffY = event.clientY - this.lightboxY;
+        document.body.style.userSelect = 'none';
+        document.addEventListener('mousemove', this.boundLbMove);
+        document.addEventListener('mouseup', this.boundLbEnd);
+    }
+    onLbDragMove(event) {
+        if (!this.lbDragging)
+            return;
+        this.lightboxX = Math.max(0, Math.min(event.clientX - this.lbDragOffX, window.innerWidth - this.lightboxW));
+        this.lightboxY = Math.max(0, Math.min(event.clientY - this.lbDragOffY, window.innerHeight - 60));
+    }
+    onLbDragEnd() {
+        if (!this.lbDragging)
+            return;
+        this.lbDragging = false;
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', this.boundLbMove);
+        document.removeEventListener('mouseup', this.boundLbEnd);
+    }
+    onLbResizeStart(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.lbResizing = true;
+        this.lbResizeStartX = event.clientX;
+        this.lbResizeStartY = event.clientY;
+        this.lbResizeStartW = this.lightboxW;
+        this.lbResizeStartH = this.lightboxH;
+        document.body.style.cursor = 'se-resize';
+        document.body.style.userSelect = 'none';
+        document.addEventListener('mousemove', this.boundLbResizeMove);
+        document.addEventListener('mouseup', this.boundLbResizeEnd);
+    }
+    onLbResizeMove(event) {
+        if (!this.lbResizing)
+            return;
+        this.lightboxW = Math.max(240, this.lbResizeStartW + (event.clientX - this.lbResizeStartX));
+        this.lightboxH = Math.max(200, this.lbResizeStartH + (event.clientY - this.lbResizeStartY));
+    }
+    onLbResizeEnd() {
+        if (!this.lbResizing)
+            return;
+        this.lbResizing = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', this.boundLbResizeMove);
+        document.removeEventListener('mouseup', this.boundLbResizeEnd);
     }
     toggleSide() {
         this.store.toggleSidebarSide();
@@ -3914,7 +3931,10 @@ class ChatPanelComponent {
       <!-- View container -->
       <div class="sidebar-content">
         <app-inbox-list *ngIf="activeView === 'inbox'"></app-inbox-list>
-        <app-chat-thread *ngIf="activeView === 'chat'"></app-chat-thread>
+        <app-chat-thread
+          *ngIf="activeView === 'chat'"
+          (lightboxOpen)="openLightbox($event)"
+        ></app-chat-thread>
         <app-new-conversation *ngIf="activeView === 'new-conversation'"></app-new-conversation>
         <app-group-manager *ngIf="activeView === 'group-manager'"></app-group-manager>
       </div>
@@ -3930,7 +3950,42 @@ class ChatPanelComponent {
       <!-- Resize corner (floating mode only) -->
       <div *ngIf="isFloating" class="float-resize-corner" (mousedown)="onFloatResizeStart($event)"></div>
     </div>
-  `, isInline: true, styles: [".sidebar{position:fixed;top:0;bottom:0;width:400px;background:#041322;z-index:9999;display:flex;flex-direction:column;box-shadow:0 0 40px #0009;transition:transform .3s cubic-bezier(.4,0,.2,1)}.sidebar.side-right{right:0;transform:translate(100%)}.sidebar.side-left{left:0;transform:translate(-100%)}.sidebar.open.side-right,.sidebar.open.side-left{transform:translate(0)}.resize-handle{position:absolute;top:0;bottom:0;width:5px;cursor:ew-resize;z-index:1;transition:background .15s}.resize-handle:hover,.resize-handle:active{background:#ffffff26}.resize-handle.handle-left{left:0}.resize-handle.handle-right{right:0}.sidebar-header{display:flex;align-items:center;justify-content:space-between;padding:12px 12px 12px 16px;border-bottom:1px solid rgba(255,255,255,.15);flex-shrink:0;position:relative;z-index:2}.header-left{display:flex;align-items:center;gap:10px}.ces-logo-sm{width:28px;height:28px}.header-title{font-size:16px;font-weight:700;color:#fff;letter-spacing:.3px}.header-actions{display:flex;align-items:center;gap:0}.btn-spacer{width:12px}.hdr-btn{width:32px;height:32px;min-width:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:6px!important;transition:background .15s,box-shadow .15s;--mdc-icon-button-state-layer-size: 32px}.hdr-btn .mat-mdc-button-touch-target{width:32px;height:32px}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{font-size:20px;color:#ffffffd9}.sidebar-content{flex:1;overflow:hidden}.ws-status{display:flex;align-items:center;gap:6px;padding:6px 16px;font-size:11px;color:#fff9;border-top:1px solid rgba(255,255,255,.1);flex-shrink:0}.status-dot{width:6px;height:6px;border-radius:50%;background:#fff6}.ws-status.connected .status-dot{background:#22c55e}.ws-status.connecting .status-dot{background:#f59e0b;animation:blink 1s infinite}@keyframes blink{50%{opacity:.3}}.sidebar.floating{position:fixed!important;right:unset!important;left:80px;top:80px;transform:none!important;border-radius:12px;overflow:hidden;resize:none;min-width:280px;min-height:320px}.drag-handle{cursor:grab;-webkit-user-select:none;user-select:none}.drag-handle:active{cursor:grabbing}.float-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.25) 50%);border-bottom-right-radius:12px}@media (max-width: 480px){.sidebar{width:100%!important}.resize-handle{display:none}}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "component", type: InboxListComponent, selector: "app-inbox-list" }, { kind: "component", type: ChatThreadComponent, selector: "app-chat-thread" }, { kind: "component", type: NewConversationComponent, selector: "app-new-conversation" }, { kind: "component", type: GroupManagerComponent, selector: "app-group-manager" }] });
+
+    <!-- ── Lightbox: sibling of .sidebar so position:fixed is relative to viewport ── -->
+    <div
+      *ngIf="lightboxUrl"
+      class="lb-overlay"
+      [class.lb-detached]="lightboxDetached"
+      [style.left.px]="lightboxDetached ? lightboxX : null"
+      [style.top.px]="lightboxDetached ? lightboxY : null"
+      [style.width.px]="lightboxDetached ? lightboxW : null"
+      [style.height.px]="lightboxDetached ? lightboxH : null"
+      (click)="onLightboxBackdropClick($event)"
+    >
+      <div *ngIf="lightboxDetached" class="lb-drag-bar" (mousedown)="onLbDragStart($event)">
+        <span class="lb-drag-title">Image viewer</span>
+        <div class="lb-drag-actions">
+          <button type="button" class="lb-action-btn"
+            (click)="$event.stopPropagation(); lightboxDetached = false" title="Fullscreen">
+            <mat-icon>fullscreen</mat-icon>
+          </button>
+          <button type="button" class="lb-action-btn"
+            (click)="$event.stopPropagation(); lightboxUrl = null; lightboxDetached = false" title="Close">
+            <mat-icon>close</mat-icon>
+          </button>
+        </div>
+      </div>
+      <img [src]="lightboxUrl" class="lb-img" [class.lb-img-detached]="lightboxDetached"
+           (click)="$event.stopPropagation()" />
+      <ng-container *ngIf="!lightboxDetached">
+        <button class="lb-close" (click)="lightboxUrl = null"><mat-icon>close</mat-icon></button>
+        <button class="lb-detach-btn" (click)="detachLightbox()" title="Detach to floating window">
+          <mat-icon>picture_in_picture</mat-icon>
+        </button>
+      </ng-container>
+      <div *ngIf="lightboxDetached" class="lb-resize-corner" (mousedown)="onLbResizeStart($event)"></div>
+    </div>
+  `, isInline: true, styles: [".sidebar{position:fixed;top:0;bottom:0;width:400px;background:#041322;z-index:9999;display:flex;flex-direction:column;box-shadow:0 0 40px #0009;transition:transform .3s cubic-bezier(.4,0,.2,1)}.sidebar.side-right{right:0;transform:translate(100%)}.sidebar.side-left{left:0;transform:translate(-100%)}.sidebar.open.side-right,.sidebar.open.side-left{transform:translate(0)}.resize-handle{position:absolute;top:0;bottom:0;width:5px;cursor:ew-resize;z-index:1;transition:background .15s}.resize-handle:hover,.resize-handle:active{background:#ffffff26}.resize-handle.handle-left{left:0}.resize-handle.handle-right{right:0}.sidebar-header{display:flex;align-items:center;justify-content:space-between;padding:12px 12px 12px 16px;border-bottom:1px solid rgba(255,255,255,.15);flex-shrink:0;position:relative;z-index:2}.header-left{display:flex;align-items:center;gap:10px}.ces-logo-sm{width:28px;height:28px}.header-title{font-size:16px;font-weight:700;color:#fff;letter-spacing:.3px}.header-actions{display:flex;align-items:center;gap:0}.btn-spacer{width:12px}.hdr-btn{width:32px;height:32px;min-width:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:6px!important;transition:background .15s,box-shadow .15s;--mdc-icon-button-state-layer-size: 32px}.hdr-btn .mat-mdc-button-touch-target{width:32px;height:32px}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{font-size:20px;color:#ffffffd9}.sidebar-content{flex:1;overflow:hidden}.ws-status{display:flex;align-items:center;gap:6px;padding:6px 16px;font-size:11px;color:#fff9;border-top:1px solid rgba(255,255,255,.1);flex-shrink:0}.status-dot{width:6px;height:6px;border-radius:50%;background:#fff6}.ws-status.connected .status-dot{background:#22c55e}.ws-status.connecting .status-dot{background:#f59e0b;animation:blink 1s infinite}@keyframes blink{50%{opacity:.3}}.sidebar.floating{position:fixed!important;right:unset!important;left:80px;top:80px;transform:none!important;border-radius:12px;overflow:hidden;resize:none;min-width:280px;min-height:320px}.drag-handle{cursor:grab;-webkit-user-select:none;user-select:none}.drag-handle:active{cursor:grabbing}.float-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.25) 50%);border-bottom-right-radius:12px}@media (max-width: 480px){.sidebar{width:100%!important}.resize-handle{display:none}}.lb-overlay{position:fixed;inset:0;background:#000000e0;display:flex;align-items:center;justify-content:center;z-index:99999;cursor:pointer}.lb-overlay.lb-detached{inset:unset;background:#0c1f35;border:1px solid rgba(255,255,255,.18);border-radius:12px;box-shadow:0 12px 48px #000000b3;display:flex;flex-direction:column;overflow:hidden;cursor:default;min-width:240px;min-height:200px}.lb-drag-bar{display:flex;align-items:center;justify-content:space-between;padding:6px 8px 6px 12px;background:#041322;border-bottom:1px solid rgba(255,255,255,.12);cursor:grab;flex-shrink:0;-webkit-user-select:none;user-select:none}.lb-drag-bar:active{cursor:grabbing}.lb-drag-title{font-size:12px;color:#fff9;letter-spacing:.4px}.lb-drag-actions{display:flex;gap:2px}.lb-action-btn{background:transparent;border:none;border-radius:6px;width:28px;height:28px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#ffffffb3;transition:background .15s}.lb-action-btn:hover{background:#ffffff26}.lb-action-btn mat-icon{font-size:16px;width:16px;height:16px}.lb-img{max-width:92vw;max-height:92vh;border-radius:8px;box-shadow:0 8px 40px #0009;cursor:default}.lb-img.lb-img-detached{max-width:100%;max-height:100%;border-radius:0;box-shadow:none;object-fit:contain;flex:1}.lb-close{position:absolute;top:16px;right:16px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lb-close:hover{background:#ffffff4d}.lb-detach-btn{position:absolute;top:16px;right:60px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lb-detach-btn:hover{background:#ffffff4d}.lb-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.2) 50%);border-bottom-right-radius:12px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "component", type: InboxListComponent, selector: "app-inbox-list" }, { kind: "component", type: ChatThreadComponent, selector: "app-chat-thread", outputs: ["lightboxOpen"] }, { kind: "component", type: NewConversationComponent, selector: "app-new-conversation" }, { kind: "component", type: GroupManagerComponent, selector: "app-group-manager" }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: ChatPanelComponent, decorators: [{
             type: Component,
@@ -3999,7 +4054,10 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
       <!-- View container -->
       <div class="sidebar-content">
         <app-inbox-list *ngIf="activeView === 'inbox'"></app-inbox-list>
-        <app-chat-thread *ngIf="activeView === 'chat'"></app-chat-thread>
+        <app-chat-thread
+          *ngIf="activeView === 'chat'"
+          (lightboxOpen)="openLightbox($event)"
+        ></app-chat-thread>
         <app-new-conversation *ngIf="activeView === 'new-conversation'"></app-new-conversation>
         <app-group-manager *ngIf="activeView === 'group-manager'"></app-group-manager>
       </div>
@@ -4015,7 +4073,42 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
       <!-- Resize corner (floating mode only) -->
       <div *ngIf="isFloating" class="float-resize-corner" (mousedown)="onFloatResizeStart($event)"></div>
     </div>
-  `, styles: [".sidebar{position:fixed;top:0;bottom:0;width:400px;background:#041322;z-index:9999;display:flex;flex-direction:column;box-shadow:0 0 40px #0009;transition:transform .3s cubic-bezier(.4,0,.2,1)}.sidebar.side-right{right:0;transform:translate(100%)}.sidebar.side-left{left:0;transform:translate(-100%)}.sidebar.open.side-right,.sidebar.open.side-left{transform:translate(0)}.resize-handle{position:absolute;top:0;bottom:0;width:5px;cursor:ew-resize;z-index:1;transition:background .15s}.resize-handle:hover,.resize-handle:active{background:#ffffff26}.resize-handle.handle-left{left:0}.resize-handle.handle-right{right:0}.sidebar-header{display:flex;align-items:center;justify-content:space-between;padding:12px 12px 12px 16px;border-bottom:1px solid rgba(255,255,255,.15);flex-shrink:0;position:relative;z-index:2}.header-left{display:flex;align-items:center;gap:10px}.ces-logo-sm{width:28px;height:28px}.header-title{font-size:16px;font-weight:700;color:#fff;letter-spacing:.3px}.header-actions{display:flex;align-items:center;gap:0}.btn-spacer{width:12px}.hdr-btn{width:32px;height:32px;min-width:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:6px!important;transition:background .15s,box-shadow .15s;--mdc-icon-button-state-layer-size: 32px}.hdr-btn .mat-mdc-button-touch-target{width:32px;height:32px}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{font-size:20px;color:#ffffffd9}.sidebar-content{flex:1;overflow:hidden}.ws-status{display:flex;align-items:center;gap:6px;padding:6px 16px;font-size:11px;color:#fff9;border-top:1px solid rgba(255,255,255,.1);flex-shrink:0}.status-dot{width:6px;height:6px;border-radius:50%;background:#fff6}.ws-status.connected .status-dot{background:#22c55e}.ws-status.connecting .status-dot{background:#f59e0b;animation:blink 1s infinite}@keyframes blink{50%{opacity:.3}}.sidebar.floating{position:fixed!important;right:unset!important;left:80px;top:80px;transform:none!important;border-radius:12px;overflow:hidden;resize:none;min-width:280px;min-height:320px}.drag-handle{cursor:grab;-webkit-user-select:none;user-select:none}.drag-handle:active{cursor:grabbing}.float-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.25) 50%);border-bottom-right-radius:12px}@media (max-width: 480px){.sidebar{width:100%!important}.resize-handle{display:none}}\n"] }]
+
+    <!-- ── Lightbox: sibling of .sidebar so position:fixed is relative to viewport ── -->
+    <div
+      *ngIf="lightboxUrl"
+      class="lb-overlay"
+      [class.lb-detached]="lightboxDetached"
+      [style.left.px]="lightboxDetached ? lightboxX : null"
+      [style.top.px]="lightboxDetached ? lightboxY : null"
+      [style.width.px]="lightboxDetached ? lightboxW : null"
+      [style.height.px]="lightboxDetached ? lightboxH : null"
+      (click)="onLightboxBackdropClick($event)"
+    >
+      <div *ngIf="lightboxDetached" class="lb-drag-bar" (mousedown)="onLbDragStart($event)">
+        <span class="lb-drag-title">Image viewer</span>
+        <div class="lb-drag-actions">
+          <button type="button" class="lb-action-btn"
+            (click)="$event.stopPropagation(); lightboxDetached = false" title="Fullscreen">
+            <mat-icon>fullscreen</mat-icon>
+          </button>
+          <button type="button" class="lb-action-btn"
+            (click)="$event.stopPropagation(); lightboxUrl = null; lightboxDetached = false" title="Close">
+            <mat-icon>close</mat-icon>
+          </button>
+        </div>
+      </div>
+      <img [src]="lightboxUrl" class="lb-img" [class.lb-img-detached]="lightboxDetached"
+           (click)="$event.stopPropagation()" />
+      <ng-container *ngIf="!lightboxDetached">
+        <button class="lb-close" (click)="lightboxUrl = null"><mat-icon>close</mat-icon></button>
+        <button class="lb-detach-btn" (click)="detachLightbox()" title="Detach to floating window">
+          <mat-icon>picture_in_picture</mat-icon>
+        </button>
+      </ng-container>
+      <div *ngIf="lightboxDetached" class="lb-resize-corner" (mousedown)="onLbResizeStart($event)"></div>
+    </div>
+  `, styles: [".sidebar{position:fixed;top:0;bottom:0;width:400px;background:#041322;z-index:9999;display:flex;flex-direction:column;box-shadow:0 0 40px #0009;transition:transform .3s cubic-bezier(.4,0,.2,1)}.sidebar.side-right{right:0;transform:translate(100%)}.sidebar.side-left{left:0;transform:translate(-100%)}.sidebar.open.side-right,.sidebar.open.side-left{transform:translate(0)}.resize-handle{position:absolute;top:0;bottom:0;width:5px;cursor:ew-resize;z-index:1;transition:background .15s}.resize-handle:hover,.resize-handle:active{background:#ffffff26}.resize-handle.handle-left{left:0}.resize-handle.handle-right{right:0}.sidebar-header{display:flex;align-items:center;justify-content:space-between;padding:12px 12px 12px 16px;border-bottom:1px solid rgba(255,255,255,.15);flex-shrink:0;position:relative;z-index:2}.header-left{display:flex;align-items:center;gap:10px}.ces-logo-sm{width:28px;height:28px}.header-title{font-size:16px;font-weight:700;color:#fff;letter-spacing:.3px}.header-actions{display:flex;align-items:center;gap:0}.btn-spacer{width:12px}.hdr-btn{width:32px;height:32px;min-width:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:6px!important;transition:background .15s,box-shadow .15s;--mdc-icon-button-state-layer-size: 32px}.hdr-btn .mat-mdc-button-touch-target{width:32px;height:32px}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{font-size:20px;color:#ffffffd9}.sidebar-content{flex:1;overflow:hidden}.ws-status{display:flex;align-items:center;gap:6px;padding:6px 16px;font-size:11px;color:#fff9;border-top:1px solid rgba(255,255,255,.1);flex-shrink:0}.status-dot{width:6px;height:6px;border-radius:50%;background:#fff6}.ws-status.connected .status-dot{background:#22c55e}.ws-status.connecting .status-dot{background:#f59e0b;animation:blink 1s infinite}@keyframes blink{50%{opacity:.3}}.sidebar.floating{position:fixed!important;right:unset!important;left:80px;top:80px;transform:none!important;border-radius:12px;overflow:hidden;resize:none;min-width:280px;min-height:320px}.drag-handle{cursor:grab;-webkit-user-select:none;user-select:none}.drag-handle:active{cursor:grabbing}.float-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.25) 50%);border-bottom-right-radius:12px}@media (max-width: 480px){.sidebar{width:100%!important}.resize-handle{display:none}}.lb-overlay{position:fixed;inset:0;background:#000000e0;display:flex;align-items:center;justify-content:center;z-index:99999;cursor:pointer}.lb-overlay.lb-detached{inset:unset;background:#0c1f35;border:1px solid rgba(255,255,255,.18);border-radius:12px;box-shadow:0 12px 48px #000000b3;display:flex;flex-direction:column;overflow:hidden;cursor:default;min-width:240px;min-height:200px}.lb-drag-bar{display:flex;align-items:center;justify-content:space-between;padding:6px 8px 6px 12px;background:#041322;border-bottom:1px solid rgba(255,255,255,.12);cursor:grab;flex-shrink:0;-webkit-user-select:none;user-select:none}.lb-drag-bar:active{cursor:grabbing}.lb-drag-title{font-size:12px;color:#fff9;letter-spacing:.4px}.lb-drag-actions{display:flex;gap:2px}.lb-action-btn{background:transparent;border:none;border-radius:6px;width:28px;height:28px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#ffffffb3;transition:background .15s}.lb-action-btn:hover{background:#ffffff26}.lb-action-btn mat-icon{font-size:16px;width:16px;height:16px}.lb-img{max-width:92vw;max-height:92vh;border-radius:8px;box-shadow:0 8px 40px #0009;cursor:default}.lb-img.lb-img-detached{max-width:100%;max-height:100%;border-radius:0;box-shadow:none;object-fit:contain;flex:1}.lb-close{position:absolute;top:16px;right:16px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lb-close:hover{background:#ffffff4d}.lb-detach-btn{position:absolute;top:16px;right:60px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lb-detach-btn:hover{background:#ffffff4d}.lb-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.2) 50%);border-bottom-right-radius:12px}\n"] }]
         }], ctorParameters: () => [{ type: MessagingStoreService }] });
 
 class MessagingOverlayComponent {

@@ -1,0 +1,44 @@
+{
+  "name": "@coreline-engineering-solutions/messaging-react-native",
+  "version": "1.0.0",
+  "description": "React Native / Expo messaging UI with WebSocket, inbox, groups, and favorites",
+  "author": "Coreline Engineering Solutions",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Coreline-Engineering-Solutions/messaging.git",
+    "directory": "messaging-react-native"
+  },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "react-native": "src/index.ts",
+  "files": [
+    "lib/**/*",
+    "src/**/*",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "peerDependencies": {
+    "@expo/vector-icons": ">=14.0.0",
+    "@react-native-async-storage/async-storage": ">=2.0.0",
+    "@react-navigation/bottom-tabs": ">=7.0.0",
+    "axios": ">=1.6.0",
+    "expo": ">=52.0.0",
+    "expo-haptics": ">=14.0.0",
+    "expo-image": ">=2.0.0",
+    "expo-image-picker": ">=16.0.0",
+    "react": ">=18.0.0",
+    "react-native": ">=0.76.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.0",
+    "typescript": "~5.9.2"
+  },
+  "peerDependenciesMeta": {
+    "expo": {
+      "optional": true
+    }
+  }
+}

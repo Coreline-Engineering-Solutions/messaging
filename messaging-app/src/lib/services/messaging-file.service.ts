@@ -136,7 +136,8 @@ export class MessagingFileService {
     senderContactId: string,
     content: string,
     fileIds: string[],
-    filenames: string[]
+    filenames: string[],
+    mimeTypes: string[] = []
   ): Observable<any> {
     // Guard: never send temp file IDs to the backend
     const realIds = fileIds.filter(id => !isTempId(id));
@@ -149,6 +150,7 @@ export class MessagingFileService {
       content: content || '',
       attachment_ids: realIds,
       filenames,
+      mime_types: mimeTypes,
     });
   }
 

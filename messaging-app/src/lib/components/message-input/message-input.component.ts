@@ -16,10 +16,6 @@ export interface MessagePayload {
   template: `
     <div
       class="message-input-container"
-      (dragover)="onDragOver($event)"
-      (dragleave)="onDragLeave($event)"
-      (drop)="onDrop($event)"
-      [class.drag-over]="isDragOver"
     >
       <!-- File previews -->
       <div *ngIf="selectedFiles.length > 0" class="file-previews">
@@ -61,11 +57,6 @@ export interface MessagePayload {
         </button>
       </div>
 
-      <!-- Drag overlay -->
-      <div *ngIf="isDragOver" class="drag-overlay">
-        <mat-icon>cloud_upload</mat-icon>
-        <span>Drop files here</span>
-      </div>
     </div>
   `,
   styles: [`
@@ -74,10 +65,6 @@ export interface MessagePayload {
       border-top: 1px solid rgba(255, 255, 255, 0.15);
       background: transparent;
       position: relative;
-    }
-
-    .message-input-container.drag-over {
-      background: rgba(255, 255, 255, 0.1);
     }
 
     .file-previews {
@@ -211,27 +198,6 @@ export interface MessagePayload {
       padding: 0 !important;
     }
 
-    .drag-overlay {
-      position: absolute;
-      inset: 0;
-      background: rgba(31, 75, 216, 0.3);
-      border: 2px dashed rgba(255, 255, 255, 0.5);
-      border-radius: 12px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 4px;
-      color: #fff;
-      font-size: 13px;
-      z-index: 5;
-    }
-
-    .drag-overlay mat-icon {
-      font-size: 28px;
-      width: 28px;
-      height: 28px;
-    }
   `],
 })
 export class MessageInputComponent {
@@ -241,7 +207,6 @@ export class MessageInputComponent {
 
   messageText = '';
   selectedFiles: File[] = [];
-  isDragOver = false;
 
   get canSend(): boolean {
     return this.messageText.trim().length > 0 || this.selectedFiles.length > 0;
@@ -273,34 +238,18 @@ export class MessageInputComponent {
   onFilesSelected(event: Event): void {
     const input = event.target as HTMLInputElement;
     if (input.files) {
-      this.selectedFiles = [...this.selectedFiles, ...Array.from(input.files)];
+      this.addFiles(Array.from(input.files));
     }
+  }
+
+  addFiles(files: File[]): void {
+    if (!files.length) return;
+    this.selectedFiles = [...this.selectedFiles, ...files];
   }
 
   removeFile(index: number): void {
     this.selectedFiles.splice(index, 1);
     this.selectedFiles = [...this.selectedFiles];
-  }
-
-  onDragOver(event: DragEvent): void {
-    event.preventDefault();
-    event.stopPropagation();
-    this.isDragOver = true;
-  }
-
-  onDragLeave(event: DragEvent): void {
-    event.preventDefault();
-    event.stopPropagation();
-    this.isDragOver = false;
-  }
-
-  onDrop(event: DragEvent): void {
-    event.preventDefault();
-    event.stopPropagation();
-    this.isDragOver = false;
-    if (event.dataTransfer?.files) {
-      this.selectedFiles = [...this.selectedFiles, ...Array.from(event.dataTransfer.files)];
-    }
   }
 
   getFileIcon(file: File): string {

@@ -1,0 +1,1 @@
+{"version":3,"file":"MapTabBarButton.d.ts","sourceRoot":"","sources":["../../src/components/MapTabBarButton.tsx"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,uBAAuB,EAAE,MAAM,+BAA+B,CAAC;AAK7E,MAAM,MAAM,oBAAoB,GAAG,uBAAuB,GAAG;IAC3D,gBAAgB,CAAC,EAAE,MAAM,IAAI,CAAC;CAC/B,CAAC;AAEF,2DAA2D;AAC3D,wBAAgB,eAAe,CAAC,EAAE,gBAAgB,EAAE,GAAG,KAAK,EAAE,EAAE,oBAAoB,2CAmBnF"}

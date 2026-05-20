@@ -10,15 +10,12 @@ export declare class MessageInputComponent {
     fileInput: ElementRef<HTMLInputElement>;
     messageText: string;
     selectedFiles: File[];
-    isDragOver: boolean;
     get canSend(): boolean;
     send(): void;
     onEnter(event: Event): void;
     onFilesSelected(event: Event): void;
+    addFiles(files: File[]): void;
     removeFile(index: number): void;
-    onDragOver(event: DragEvent): void;
-    onDragLeave(event: DragEvent): void;
-    onDrop(event: DragEvent): void;
     getFileIcon(file: File): string;
     formatSize(bytes: number): string;
     static ɵfac: i0.ɵɵFactoryDeclaration<MessageInputComponent, never>;

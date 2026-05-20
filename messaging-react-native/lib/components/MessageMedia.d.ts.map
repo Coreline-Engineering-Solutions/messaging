@@ -1,0 +1,1 @@
+{"version":3,"file":"MessageMedia.d.ts","sourceRoot":"","sources":["../../src/components/MessageMedia.tsx"],"names":[],"mappings":"AAUA,OAAO,KAAK,EAAE,OAAO,EAAE,MAAM,oBAAoB,CAAC;AAGlD,wBAAgB,YAAY,CAAC,EAC3B,OAAO,EACP,OAAO,GACR,EAAE;IACD,OAAO,EAAE,OAAO,CAAC;IACjB,OAAO,CAAC,EAAE,CAAC,GAAG,EAAE,MAAM,KAAK,IAAI,CAAC;CACjC,2CAgFA"}

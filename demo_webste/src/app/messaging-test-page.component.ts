@@ -8,7 +8,7 @@ import {
   MessagingOverlayComponent,
   MessagingStoreService,
   SidebarSide,
-} from '@ces/messaging';
+} from '@coreline-engineering-solutions/messaging';
 
 @Component({
   selector: 'app-messaging-test-page',

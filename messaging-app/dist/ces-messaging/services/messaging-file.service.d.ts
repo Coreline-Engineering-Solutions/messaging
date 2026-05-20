@@ -42,7 +42,7 @@ export declare class MessagingFileService {
     /** Pre-warm cache for a list of file IDs (fire-and-forget, skips temp/cached). */
     prewarmCache(fileIds: string[]): void;
     deleteFile(fileId: string): Observable<any>;
-    sendMessageWithAttachments(conversationId: string, senderContactId: string, content: string, fileIds: string[], filenames: string[]): Observable<any>;
+    sendMessageWithAttachments(conversationId: string, senderContactId: string, content: string, fileIds: string[], filenames: string[], mimeTypes?: string[]): Observable<any>;
     /**
      * POST each URL in `urls` sequentially (using the body from `bodyFn()`).
      * Falls back to the next URL only on 404 or network error (status 0).

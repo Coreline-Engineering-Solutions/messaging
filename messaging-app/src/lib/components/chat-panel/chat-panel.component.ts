@@ -80,7 +80,10 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
       <!-- View container -->
       <div class="sidebar-content">
         <app-inbox-list *ngIf="activeView === 'inbox'"></app-inbox-list>
-        <app-chat-thread *ngIf="activeView === 'chat'"></app-chat-thread>
+        <app-chat-thread
+          *ngIf="activeView === 'chat'"
+          (lightboxOpen)="openLightbox($event)"
+        ></app-chat-thread>
         <app-new-conversation *ngIf="activeView === 'new-conversation'"></app-new-conversation>
         <app-group-manager *ngIf="activeView === 'group-manager'"></app-group-manager>
       </div>
@@ -95,6 +98,41 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
 
       <!-- Resize corner (floating mode only) -->
       <div *ngIf="isFloating" class="float-resize-corner" (mousedown)="onFloatResizeStart($event)"></div>
+    </div>
+
+    <!-- ── Lightbox: sibling of .sidebar so position:fixed is relative to viewport ── -->
+    <div
+      *ngIf="lightboxUrl"
+      class="lb-overlay"
+      [class.lb-detached]="lightboxDetached"
+      [style.left.px]="lightboxDetached ? lightboxX : null"
+      [style.top.px]="lightboxDetached ? lightboxY : null"
+      [style.width.px]="lightboxDetached ? lightboxW : null"
+      [style.height.px]="lightboxDetached ? lightboxH : null"
+      (click)="onLightboxBackdropClick($event)"
+    >
+      <div *ngIf="lightboxDetached" class="lb-drag-bar" (mousedown)="onLbDragStart($event)">
+        <span class="lb-drag-title">Image viewer</span>
+        <div class="lb-drag-actions">
+          <button type="button" class="lb-action-btn"
+            (click)="$event.stopPropagation(); lightboxDetached = false" title="Fullscreen">
+            <mat-icon>fullscreen</mat-icon>
+          </button>
+          <button type="button" class="lb-action-btn"
+            (click)="$event.stopPropagation(); lightboxUrl = null; lightboxDetached = false" title="Close">
+            <mat-icon>close</mat-icon>
+          </button>
+        </div>
+      </div>
+      <img [src]="lightboxUrl" class="lb-img" [class.lb-img-detached]="lightboxDetached"
+           (click)="$event.stopPropagation()" />
+      <ng-container *ngIf="!lightboxDetached">
+        <button class="lb-close" (click)="lightboxUrl = null"><mat-icon>close</mat-icon></button>
+        <button class="lb-detach-btn" (click)="detachLightbox()" title="Detach to floating window">
+          <mat-icon>picture_in_picture</mat-icon>
+        </button>
+      </ng-container>
+      <div *ngIf="lightboxDetached" class="lb-resize-corner" (mousedown)="onLbResizeStart($event)"></div>
     </div>
   `,
   styles: [`
@@ -301,6 +339,99 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
         display: none;
       }
     }
+
+    /* ── Lightbox (outside .sidebar so position:fixed is viewport-relative) ── */
+    .lb-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.88);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 99999;
+      cursor: pointer;
+    }
+
+    .lb-overlay.lb-detached {
+      inset: unset;
+      background: #0c1f35;
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 12px;
+      box-shadow: 0 12px 48px rgba(0,0,0,0.7);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      cursor: default;
+      min-width: 240px;
+      min-height: 200px;
+    }
+
+    .lb-drag-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 8px 6px 12px;
+      background: #041322;
+      border-bottom: 1px solid rgba(255,255,255,0.12);
+      cursor: grab;
+      flex-shrink: 0;
+      user-select: none;
+    }
+    .lb-drag-bar:active { cursor: grabbing; }
+
+    .lb-drag-title { font-size: 12px; color: rgba(255,255,255,0.6); letter-spacing: 0.4px; }
+    .lb-drag-actions { display: flex; gap: 2px; }
+
+    .lb-action-btn {
+      background: transparent;
+      border: none;
+      border-radius: 6px;
+      width: 28px; height: 28px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      color: rgba(255,255,255,0.7);
+      transition: background 0.15s;
+    }
+    .lb-action-btn:hover { background: rgba(255,255,255,0.15); }
+    .lb-action-btn mat-icon { font-size: 16px; width: 16px; height: 16px; }
+
+    .lb-img {
+      max-width: 92vw; max-height: 92vh;
+      border-radius: 8px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+      cursor: default;
+    }
+    .lb-img.lb-img-detached {
+      max-width: 100%; max-height: 100%;
+      border-radius: 0; box-shadow: none;
+      object-fit: contain; flex: 1;
+    }
+
+    .lb-close {
+      position: absolute; top: 16px; right: 16px;
+      background: rgba(255,255,255,0.15); border: none; border-radius: 50%;
+      width: 36px; height: 36px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; color: #fff; transition: background 0.15s;
+    }
+    .lb-close:hover { background: rgba(255,255,255,0.3); }
+
+    .lb-detach-btn {
+      position: absolute; top: 16px; right: 60px;
+      background: rgba(255,255,255,0.15); border: none; border-radius: 50%;
+      width: 36px; height: 36px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; color: #fff; transition: background 0.15s;
+    }
+    .lb-detach-btn:hover { background: rgba(255,255,255,0.3); }
+
+    .lb-resize-corner {
+      position: absolute; bottom: 0; right: 0;
+      width: 16px; height: 16px;
+      cursor: se-resize;
+      background: linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.2) 50%);
+      border-bottom-right-radius: 12px;
+    }
   `],
 })
 export class ChatPanelComponent implements OnInit, OnDestroy {
@@ -342,6 +473,26 @@ export class ChatPanelComponent implements OnInit, OnDestroy {
 
   private sub!: Subscription;
 
+  // ── Lightbox state ──
+  lightboxUrl: string | null = null;
+  lightboxDetached = false;
+  lightboxX = 100;
+  lightboxY = 80;
+  lightboxW = 560;
+  lightboxH = 460;
+  private lbDragging = false;
+  private lbDragOffX = 0;
+  private lbDragOffY = 0;
+  private lbResizing = false;
+  private lbResizeStartX = 0;
+  private lbResizeStartY = 0;
+  private lbResizeStartW = 0;
+  private lbResizeStartH = 0;
+  private boundLbMove        = this.onLbDragMove.bind(this);
+  private boundLbEnd         = this.onLbDragEnd.bind(this);
+  private boundLbResizeMove  = this.onLbResizeMove.bind(this);
+  private boundLbResizeEnd   = this.onLbResizeEnd.bind(this);
+
   constructor(private store: MessagingStoreService) {}
 
   ngOnInit(): void {
@@ -382,6 +533,82 @@ export class ChatPanelComponent implements OnInit, OnDestroy {
     document.removeEventListener('mouseup', this.boundFloatEnd);
     document.removeEventListener('mousemove', this.boundFloatResizeMove);
     document.removeEventListener('mouseup', this.boundFloatResizeEnd);
+    document.removeEventListener('mousemove', this.boundLbMove);
+    document.removeEventListener('mouseup', this.boundLbEnd);
+    document.removeEventListener('mousemove', this.boundLbResizeMove);
+    document.removeEventListener('mouseup', this.boundLbResizeEnd);
+  }
+
+  // ── Lightbox ──
+  openLightbox(url: string): void {
+    this.lightboxUrl = url;
+    this.lightboxDetached = false;
+  }
+
+  onLightboxBackdropClick(event: MouseEvent): void {
+    if (this.lightboxDetached) return;
+    if (event.target !== event.currentTarget) return;
+    this.lightboxUrl = null;
+  }
+
+  detachLightbox(): void {
+    this.lightboxDetached = true;
+    this.lightboxX = Math.max(20, Math.round((window.innerWidth  - this.lightboxW) / 2));
+    this.lightboxY = Math.max(20, Math.round((window.innerHeight - this.lightboxH) / 2));
+  }
+
+  onLbDragStart(event: MouseEvent): void {
+    if ((event.target as HTMLElement).closest('button')) return;
+    event.preventDefault();
+    this.lbDragging = true;
+    this.lbDragOffX = event.clientX - this.lightboxX;
+    this.lbDragOffY = event.clientY - this.lightboxY;
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', this.boundLbMove);
+    document.addEventListener('mouseup',   this.boundLbEnd);
+  }
+
+  private onLbDragMove(event: MouseEvent): void {
+    if (!this.lbDragging) return;
+    this.lightboxX = Math.max(0, Math.min(event.clientX - this.lbDragOffX, window.innerWidth  - this.lightboxW));
+    this.lightboxY = Math.max(0, Math.min(event.clientY - this.lbDragOffY, window.innerHeight - 60));
+  }
+
+  private onLbDragEnd(): void {
+    if (!this.lbDragging) return;
+    this.lbDragging = false;
+    document.body.style.userSelect = '';
+    document.removeEventListener('mousemove', this.boundLbMove);
+    document.removeEventListener('mouseup',   this.boundLbEnd);
+  }
+
+  onLbResizeStart(event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.lbResizing = true;
+    this.lbResizeStartX = event.clientX;
+    this.lbResizeStartY = event.clientY;
+    this.lbResizeStartW = this.lightboxW;
+    this.lbResizeStartH = this.lightboxH;
+    document.body.style.cursor = 'se-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', this.boundLbResizeMove);
+    document.addEventListener('mouseup',   this.boundLbResizeEnd);
+  }
+
+  private onLbResizeMove(event: MouseEvent): void {
+    if (!this.lbResizing) return;
+    this.lightboxW = Math.max(240, this.lbResizeStartW + (event.clientX - this.lbResizeStartX));
+    this.lightboxH = Math.max(200, this.lbResizeStartH + (event.clientY - this.lbResizeStartY));
+  }
+
+  private onLbResizeEnd(): void {
+    if (!this.lbResizing) return;
+    this.lbResizing = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    document.removeEventListener('mousemove', this.boundLbResizeMove);
+    document.removeEventListener('mouseup',   this.boundLbResizeEnd);
   }
 
   toggleSide(): void {

@@ -1,5 +1,6 @@
 import {
   Component, OnInit, OnDestroy, ViewChild, ElementRef, AfterViewChecked, ChangeDetectorRef,
+  Output, EventEmitter,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MatIconModule } from '@angular/material/icon';
@@ -21,7 +22,14 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
     MatProgressSpinnerModule, MatTooltipModule, MessageInputComponent,
   ],
   template: `
-    <div class="chat-thread">
+    <div
+      class="chat-thread"
+      [class.drag-over]="threadDragOver"
+      (dragenter)="onThreadDragEnter($event)"
+      (dragover)="onThreadDragOver($event)"
+      (dragleave)="onThreadDragLeave($event)"
+      (drop)="onThreadDrop($event)"
+    >
       <div class="chat-header">
         <button mat-icon-button class="hdr-btn" (click)="goBack()" matTooltip="Back" matTooltipPosition="below">
           <mat-icon>arrow_back</mat-icon>
@@ -37,6 +45,11 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       </div>
 
       <div class="messages-area" #scrollContainer (scroll)="onScroll()">
+        <div *ngIf="threadDragOver" class="thread-drag-overlay">
+          <mat-icon>cloud_upload</mat-icon>
+          <span>Drop files anywhere in this chat</span>
+        </div>
+
         <div *ngIf="loading" class="loading-indicator">
           <mat-spinner diameter="24"></mat-spinner>
           <span>Loading messages...</span>
@@ -88,13 +101,24 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
                 </div>
 
                 <!-- FILE / VIDEO ─────────────────────────────── -->
-                <div *ngIf="msg.message_type === 'FILE' && !isImageAttachment(msg)" class="file-message">
+                <div *ngIf="hasFileAttachment(msg) && !isImageAttachment(msg)" class="file-message">
                   <ng-container *ngIf="isVideoAttachment(msg); else regularFile">
                     <ng-container *ngIf="getMediaUrl(msg) as videoUrl; else videoLoading">
-                      <video controls class="media-video" preload="metadata">
-                        <source [src]="videoUrl" [type]="getAttachmentMimeType(msg)" />
-                        Your browser does not support video.
-                      </video>
+                      <div class="video-message">
+                        <video controls class="media-video" preload="metadata">
+                          <source [src]="videoUrl" [type]="getAttachmentMimeType(msg)" />
+                          Your browser does not support video.
+                        </video>
+                        <a
+                          class="video-download"
+                          [href]="videoUrl"
+                          [attr.download]="getAttachmentName(msg)"
+                          target="_blank"
+                          rel="noopener"
+                        >
+                          Download {{ getAttachmentName(msg) }}
+                        </a>
+                      </div>
                     </ng-container>
                     <ng-template #videoLoading>
                       <div class="media-placeholder">
@@ -104,12 +128,30 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
                     </ng-template>
                   </ng-container>
                   <ng-template #regularFile>
-                    <mat-icon class="file-msg-icon">insert_drive_file</mat-icon>
-                    <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
+                    <ng-container *ngIf="getMediaUrl(msg) as fileUrl; else fileLoading">
+                      <a
+                        class="file-download"
+                        [href]="fileUrl"
+                        [attr.download]="getAttachmentName(msg)"
+                        target="_blank"
+                        rel="noopener"
+                        (click)="$event.stopPropagation()"
+                      >
+                        <mat-icon class="file-msg-icon">{{ getFileIcon(msg) }}</mat-icon>
+                        <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
+                        <mat-icon class="file-download-icon">download</mat-icon>
+                      </a>
+                    </ng-container>
+                    <ng-template #fileLoading>
+                      <mat-icon class="file-msg-icon">{{ getFileIcon(msg) }}</mat-icon>
+                      <span class="file-msg-name">{{ getAttachmentName(msg) }}</span>
+                      <mat-spinner *ngIf="shouldShowMediaSpinner(msg)" diameter="18"></mat-spinner>
+                      <span *ngIf="hasMediaFailed(msg)" class="media-load-label">Unavailable</span>
+                    </ng-template>
                   </ng-template>
                 </div>
                 <div
-                  *ngIf="msg.message_type === 'TEXT' && !isImageAttachment(msg)"
+                  *ngIf="msg.message_type === 'TEXT' && !isImageAttachment(msg) && !hasFileAttachment(msg)"
                   class="text-content"
                 >
                   {{ msg.content }}
@@ -158,64 +200,6 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       ></app-message-input>
     </div>
 
-    <!-- Image viewer: fullscreen overlay OR detached floating window -->
-    <div
-      *ngIf="lightboxUrl"
-      class="lightbox-overlay"
-      [class.lightbox-detached]="lightboxDetached"
-      [style.left.px]="lightboxDetached ? lightboxX : null"
-      [style.top.px]="lightboxDetached ? lightboxY : null"
-      [style.width.px]="lightboxDetached ? lightboxW : null"
-      [style.height.px]="lightboxDetached ? lightboxH : null"
-      (click)="onLightboxBackdropClick($event)"
-    >
-      <!-- Drag handle bar (visible in detached mode) -->
-      <div
-        *ngIf="lightboxDetached"
-        class="lightbox-drag-bar"
-        (mousedown)="onLightboxDragStart($event)"
-      >
-        <span class="lightbox-drag-title">Image viewer</span>
-        <div class="lightbox-drag-actions">
-          <button
-            type="button"
-            class="lightbox-action-btn"
-            (click)="$event.stopPropagation(); expandLightbox()"
-            title="Expand to fullscreen"
-          >
-            <mat-icon>fullscreen</mat-icon>
-          </button>
-          <button
-            type="button"
-            class="lightbox-action-btn"
-            (click)="$event.stopPropagation(); closeLightbox()"
-            title="Close"
-          >
-            <mat-icon>close</mat-icon>
-          </button>
-        </div>
-      </div>
-
-      <img
-        [src]="lightboxUrl"
-        class="lightbox-img"
-        [class.lightbox-img-detached]="lightboxDetached"
-        (click)="$event.stopPropagation()"
-      />
-
-      <!-- Controls shown in fullscreen mode -->
-      <ng-container *ngIf="!lightboxDetached">
-        <button class="lightbox-close" (click)="lightboxUrl = null">
-          <mat-icon>close</mat-icon>
-        </button>
-        <button class="lightbox-detach-btn" (click)="detachLightbox()" title="Detach to floating window">
-          <mat-icon>picture_in_picture</mat-icon>
-        </button>
-      </ng-container>
-
-      <!-- Resize corner (detached mode) -->
-      <div *ngIf="lightboxDetached" class="lightbox-resize-corner" (mousedown)="onLightboxResizeStart($event)"></div>
-    </div>
   `,
   styles: [`
     .chat-thread {
@@ -223,6 +207,36 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       flex-direction: column;
       height: 100%;
       background: #041322;
+      position: relative;
+    }
+
+    .chat-thread.drag-over {
+      outline: 2px dashed rgba(255, 255, 255, 0.45);
+      outline-offset: -6px;
+    }
+
+    .thread-drag-overlay {
+      position: absolute;
+      inset: 8px;
+      z-index: 20;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: #fff;
+      background: rgba(31, 75, 216, 0.32);
+      border: 2px dashed rgba(255, 255, 255, 0.55);
+      border-radius: 14px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .thread-drag-overlay mat-icon {
+      font-size: 36px;
+      width: 36px;
+      height: 36px;
     }
 
     .chat-header {
@@ -389,9 +403,23 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
 
     .media-video {
       max-width: 240px;
+      max-height: 260px;
       border-radius: 10px;
       display: block;
       background: #000;
+    }
+
+    .video-message {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .video-download {
+      color: rgba(255, 255, 255, 0.78);
+      font-size: 12px;
+      text-decoration: underline;
+      text-underline-offset: 2px;
     }
 
     .media-placeholder {
@@ -416,6 +444,15 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       padding: 4px 0;
     }
 
+    .file-download {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: #fff;
+      text-decoration: none;
+      max-width: 240px;
+    }
+
     .file-msg-icon {
       font-size: 20px;
       width: 20px;
@@ -429,145 +466,12 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       word-break: break-all;
     }
 
-    /* ── Lightbox ─────────────────────────────────── */
-    /* ── Lightbox ── */
-    .lightbox-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.88);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 99999;
-      cursor: pointer;
-    }
-
-    /* Detached floating window */
-    .lightbox-overlay.lightbox-detached {
-      inset: unset;
-      background: #0c1f35;
-      border: 1px solid rgba(255,255,255,0.18);
-      border-radius: 12px;
-      box-shadow: 0 12px 48px rgba(0,0,0,0.7);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      cursor: default;
-      min-width: 200px;
-      min-height: 180px;
-    }
-
-    .lightbox-drag-bar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 6px 8px 6px 12px;
-      background: #041322;
-      border-bottom: 1px solid rgba(255,255,255,0.12);
-      cursor: grab;
+    .file-download-icon {
+      font-size: 18px;
+      width: 18px;
+      height: 18px;
+      color: rgba(255, 255, 255, 0.7);
       flex-shrink: 0;
-      user-select: none;
-    }
-
-    .lightbox-drag-bar:active { cursor: grabbing; }
-
-    .lightbox-drag-title {
-      font-size: 12px;
-      color: rgba(255,255,255,0.6);
-      letter-spacing: 0.4px;
-    }
-
-    .lightbox-drag-actions {
-      display: flex;
-      gap: 2px;
-    }
-
-    .lightbox-action-btn {
-      background: transparent;
-      border: none;
-      border-radius: 6px;
-      width: 28px;
-      height: 28px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      color: rgba(255,255,255,0.7);
-      transition: background 0.15s;
-    }
-
-    .lightbox-action-btn:hover { background: rgba(255,255,255,0.15); }
-
-    .lightbox-action-btn mat-icon {
-      font-size: 16px;
-      width: 16px;
-      height: 16px;
-    }
-
-    .lightbox-img {
-      max-width: 92vw;
-      max-height: 92vh;
-      border-radius: 8px;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.6);
-      cursor: default;
-    }
-
-    .lightbox-img.lightbox-img-detached {
-      max-width: 100%;
-      max-height: 100%;
-      border-radius: 0;
-      box-shadow: none;
-      object-fit: contain;
-      flex: 1;
-    }
-
-    .lightbox-close {
-      position: absolute;
-      top: 16px;
-      right: 16px;
-      background: rgba(255,255,255,0.15);
-      border: none;
-      border-radius: 50%;
-      width: 36px;
-      height: 36px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      color: #fff;
-      transition: background 0.15s;
-    }
-
-    .lightbox-close:hover { background: rgba(255,255,255,0.3); }
-
-    .lightbox-detach-btn {
-      position: absolute;
-      top: 16px;
-      right: 60px;
-      background: rgba(255,255,255,0.15);
-      border: none;
-      border-radius: 50%;
-      width: 36px;
-      height: 36px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      color: #fff;
-      transition: background 0.15s;
-    }
-
-    .lightbox-detach-btn:hover { background: rgba(255,255,255,0.3); }
-
-    .lightbox-resize-corner {
-      position: absolute;
-      bottom: 0;
-      right: 0;
-      width: 16px;
-      height: 16px;
-      cursor: se-resize;
-      background: linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.2) 50%);
-      border-bottom-right-radius: 12px;
     }
 
     .message-meta {
@@ -610,6 +514,14 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       border-radius: 999px;
       box-shadow: 0 6px 14px rgba(0, 0, 0, 0.28);
       z-index: 4;
+    }
+
+    /* Both sides: anchor to the right edge of the bubble so the popup
+       grows toward center and never overflows the left viewport edge. */
+    .message-bubble-row.other .quick-reactions,
+    .message-bubble-row.own .quick-reactions {
+      left: auto;
+      right: 0;
     }
 
     .quick-emoji-btn {
@@ -686,6 +598,8 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
 })
 export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked {
   @ViewChild('scrollContainer') scrollContainer!: ElementRef;
+  @ViewChild(MessageInputComponent) messageInput?: MessageInputComponent;
+  @Output() lightboxOpen = new EventEmitter<string>();
 
   messages: Message[] = [];
   visibleContacts: Contact[] = [];
@@ -701,30 +615,9 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   uploading = false;
   hoveredMessageId: string | null = null;
   quickEmojis = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
-
-  /** Lightbox: currently displayed full-size data URL */
-  lightboxUrl: string | null = null;
-  /** When true the lightbox is a draggable floating window instead of full-screen */
-  lightboxDetached = false;
-  lightboxX = 100;
-  lightboxY = 80;
-  lightboxW = 480;
-  lightboxH = 400;
-
-  // lightbox drag state
-  private lbDragging = false;
-  private lbDragOffX = 0;
-  private lbDragOffY = 0;
-  private boundLbMove   = this.onLightboxDragMove.bind(this);
-  private boundLbEnd    = this.onLightboxDragEnd.bind(this);
-  // lightbox resize state
-  private lbResizing = false;
-  private lbResizeStartX = 0;
-  private lbResizeStartY = 0;
-  private lbResizeStartW = 0;
-  private lbResizeStartH = 0;
-  private boundLbResizeMove = this.onLightboxResizeMove.bind(this);
-  private boundLbResizeEnd  = this.onLightboxResizeEnd.bind(this);
+  threadDragOver = false;
+  private threadDragDepth = 0;
+  private boundResetThreadDrag = this.resetThreadDrag.bind(this);
 
   /** Tracks which file IDs are currently being fetched to avoid duplicate requests */
   private mediaLoading = new Set<string>();
@@ -740,6 +633,8 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
 
   ngOnInit(): void {
     this.myContactId = this.auth.contactId;
+    document.addEventListener('drop', this.boundResetThreadDrag, true);
+    document.addEventListener('dragend', this.boundResetThreadDrag, true);
 
     this.sub = combineLatest([
       this.store.activeConversationId,
@@ -780,10 +675,8 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
 
   ngOnDestroy(): void {
     this.sub?.unsubscribe();
-    document.removeEventListener('mousemove', this.boundLbMove);
-    document.removeEventListener('mouseup', this.boundLbEnd);
-    document.removeEventListener('mousemove', this.boundLbResizeMove);
-    document.removeEventListener('mouseup', this.boundLbResizeEnd);
+    document.removeEventListener('drop', this.boundResetThreadDrag, true);
+    document.removeEventListener('dragend', this.boundResetThreadDrag, true);
   }
 
   goBack(): void {
@@ -823,6 +716,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
       next: (responses) => {
         const fileIds   = responses.map((r) => r.file_id);
         const filenames = responses.map((r) => r.filename);
+        const mimeTypes = responses.map((r, idx) => r.mime_type || payload.files[idx]?.type || '');
 
         // Guard: ensure all IDs are real (not temp)
         const hasTemp = fileIds.some(id => id?.startsWith('temp-'));
@@ -841,7 +735,8 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
             this.auth.contactId!,
             payload.text || filenames.join(', '),
             fileIds,
-            filenames
+            filenames,
+            mimeTypes
           )
           .subscribe({
             next: (res: any) => {
@@ -851,7 +746,9 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
               // Add optimistic message so the image appears instantly —
               // the WebSocket event may arrive a moment later and dedup it.
               const firstId = fileIds[0] || '';
-              const isImg = /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(filenames[0] || '');
+              const isImg =
+                (mimeTypes[0] || '').startsWith('image/') ||
+                /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)$/i.test(filenames[0] || '');
               const optimistic: any = {
                 message_id: res?.message_id ? String(res.message_id) : 'temp-' + Date.now(),
                 conversation_id: this.conversationId!,
@@ -865,6 +762,9 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
                 attachments: fileIds.map((id, idx) => ({
                   file_id: id,
                   filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
+                  mime_type: mimeTypes[idx] || undefined,
+                  size_bytes: payload.files[idx]?.size,
+                  url: responses[idx]?.url,
                 })),
               };
               this.store.appendOptimisticMessage(optimistic);
@@ -888,6 +788,52 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   }
 
   onScroll(): void {}
+
+  onThreadDragEnter(event: DragEvent): void {
+    if (!this.dragHasFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.threadDragDepth++;
+    this.threadDragOver = true;
+  }
+
+  onThreadDragOver(event: DragEvent): void {
+    if (!this.dragHasFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy';
+    }
+    this.threadDragOver = true;
+  }
+
+  onThreadDragLeave(event: DragEvent): void {
+    if (!this.dragHasFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.threadDragDepth = Math.max(0, this.threadDragDepth - 1);
+    this.threadDragOver = this.threadDragDepth > 0;
+  }
+
+  onThreadDrop(event: DragEvent): void {
+    if (!this.dragHasFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.resetThreadDrag();
+    const files = event.dataTransfer?.files ? Array.from(event.dataTransfer.files) : [];
+    this.messageInput?.addFiles(files);
+  }
+
+  private resetThreadDrag(): void {
+    this.threadDragDepth = 0;
+    this.threadDragOver = false;
+  }
+
+  private dragHasFiles(event: DragEvent): boolean {
+    const types = event.dataTransfer?.types;
+    if (!types) return false;
+    return Array.from(types).includes('Files');
+  }
 
   shouldShowDateSeparator(index: number): boolean {
     if (index === 0) return true;
@@ -978,9 +924,12 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
       anyMsg?.attachment_id ||
       anyMsg?.attachment_ids?.[0] ||
       (!mediaIsDirectUrl && mu ? mu : undefined);
-    const filename = anyMsg?.filename || anyMsg?.file_name || msg.content;
     const mime = anyMsg?.mime_type || anyMsg?.attachment_mime_type;
-    if (fileId || filename || mime) {
+    const explicitFilename = anyMsg?.filename || anyMsg?.file_name;
+    const filename =
+      explicitFilename ||
+      (fileId || mime || msg.message_type !== 'TEXT' ? msg.content : '');
+    if (fileId || explicitFilename || mime || msg.message_type === 'FILE' || msg.message_type === 'IMAGE') {
       return {
         file_id: String(fileId || ''),
         filename: String(filename || 'File'),
@@ -1032,11 +981,12 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
 
   private prewarmMedia(messages: Message[]): void {
     for (const msg of messages) {
-      if (!this.isImageAttachment(msg) && !this.isVideoAttachment(msg)) continue;
-      const fileId = this.getPrimaryAttachment(msg)?.file_id?.trim();
-      if (fileId && !fileId.startsWith('temp-') && !this.fileService.getCachedDataUrl(fileId)) {
-        this.fetchMedia(fileId);
-      }
+      const att = this.getPrimaryAttachment(msg);
+      const fileId = att?.file_id?.trim();
+      if (!fileId || fileId.startsWith('temp-')) continue;
+      if (this.fileService.getCachedDataUrl(fileId)) continue;
+      // Preload images and videos eagerly; queue other files so download links appear.
+      this.fetchMedia(fileId);
     }
   }
 
@@ -1079,88 +1029,29 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
     return this.getPrimaryAttachment(msg)?.filename || msg.content || 'File';
   }
 
+  hasFileAttachment(msg: Message): boolean {
+    return msg.message_type === 'FILE' || !!this.getPrimaryAttachment(msg);
+  }
+
+  hasMediaFailed(msg: Message): boolean {
+    const fileId = this.getPrimaryAttachment(msg)?.file_id;
+    return !!fileId && this.mediaFailed.has(fileId);
+  }
+
+  getFileIcon(msg: Message): string {
+    const mime = this.getAttachmentMimeType(msg);
+    const name = this.getAttachmentName(msg).toLowerCase();
+    if (mime.startsWith('video/') || /\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(name)) return 'videocam';
+    if (mime.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|flac)$/i.test(name)) return 'audiotrack';
+    if (mime.includes('pdf') || name.endsWith('.pdf')) return 'picture_as_pdf';
+    if (mime.includes('spreadsheet') || mime.includes('excel') || /\.(xls|xlsx|csv)$/i.test(name)) return 'table_chart';
+    if (mime.includes('document') || mime.includes('word') || /\.(doc|docx|txt|rtf)$/i.test(name)) return 'description';
+    if (mime.includes('zip') || /\.(zip|rar|7z|tar|gz)$/i.test(name)) return 'folder_zip';
+    return 'insert_drive_file';
+  }
+
   openLightbox(dataUrl: string): void {
-    this.lightboxUrl = dataUrl;
-    this.lightboxDetached = false;
-  }
-
-  /** Fullscreen mode: only close when the dimmed backdrop is clicked, not after toolbar actions. */
-  onLightboxBackdropClick(event: MouseEvent): void {
-    if (this.lightboxDetached) return;
-    if (event.target !== event.currentTarget) return;
-    this.lightboxUrl = null;
-  }
-
-  expandLightbox(): void {
-    this.lightboxDetached = false;
-    this.cdr.markForCheck();
-  }
-
-  closeLightbox(): void {
-    this.lightboxUrl = null;
-    this.lightboxDetached = false;
-  }
-
-  detachLightbox(): void {
-    this.lightboxDetached = true;
-    this.lightboxX = Math.max(20, Math.round((window.innerWidth  - this.lightboxW) / 2));
-    this.lightboxY = Math.max(20, Math.round((window.innerHeight - this.lightboxH) / 2));
-  }
-
-  onLightboxDragStart(event: MouseEvent): void {
-    if ((event.target as HTMLElement).closest('button')) return;
-    event.preventDefault();
-    this.lbDragging = true;
-    this.lbDragOffX = event.clientX - this.lightboxX;
-    this.lbDragOffY = event.clientY - this.lightboxY;
-    document.body.style.userSelect = 'none';
-    document.addEventListener('mousemove', this.boundLbMove);
-    document.addEventListener('mouseup',   this.boundLbEnd);
-  }
-
-  private onLightboxDragMove(event: MouseEvent): void {
-    if (!this.lbDragging) return;
-    this.lightboxX = Math.max(0, Math.min(event.clientX - this.lbDragOffX, window.innerWidth  - this.lightboxW));
-    this.lightboxY = Math.max(0, Math.min(event.clientY - this.lbDragOffY, window.innerHeight - 60));
-    this.cdr.markForCheck();
-  }
-
-  private onLightboxDragEnd(): void {
-    if (!this.lbDragging) return;
-    this.lbDragging = false;
-    document.body.style.userSelect = '';
-    document.removeEventListener('mousemove', this.boundLbMove);
-    document.removeEventListener('mouseup',   this.boundLbEnd);
-  }
-
-  onLightboxResizeStart(event: MouseEvent): void {
-    event.preventDefault();
-    event.stopPropagation();
-    this.lbResizing = true;
-    this.lbResizeStartX = event.clientX;
-    this.lbResizeStartY = event.clientY;
-    this.lbResizeStartW = this.lightboxW;
-    this.lbResizeStartH = this.lightboxH;
-    document.body.style.cursor = 'se-resize';
-    document.body.style.userSelect = 'none';
-    document.addEventListener('mousemove', this.boundLbResizeMove);
-    document.addEventListener('mouseup',   this.boundLbResizeEnd);
-  }
-
-  private onLightboxResizeMove(event: MouseEvent): void {
-    if (!this.lbResizing) return;
-    this.lightboxW = Math.max(200, this.lbResizeStartW + (event.clientX - this.lbResizeStartX));
-    this.lightboxH = Math.max(180, this.lbResizeStartH + (event.clientY - this.lbResizeStartY));
-    this.cdr.markForCheck();
-  }
-
-  private onLightboxResizeEnd(): void {
-    if (!this.lbResizing) return;
-    this.lbResizing = false;
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-    document.removeEventListener('mousemove', this.boundLbResizeMove);
-    document.removeEventListener('mouseup',   this.boundLbResizeEnd);
+    this.lightboxOpen.emit(dataUrl);
   }
 
   // ── Reactions ────────────────────────────────────────────────────────────
