@@ -516,9 +516,13 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       z-index: 4;
     }
 
-    /* Both sides: anchor to the right edge of the bubble so the popup
-       grows toward center and never overflows the left viewport edge. */
-    .message-bubble-row.other .quick-reactions,
+    /* Received messages sit on the left, so grow the picker rightward.
+       Own messages sit on the right, so grow the picker leftward. */
+    .message-bubble-row.other .quick-reactions {
+      left: 0;
+      right: auto;
+    }
+
     .message-bubble-row.own .quick-reactions {
       left: auto;
       right: 0;
