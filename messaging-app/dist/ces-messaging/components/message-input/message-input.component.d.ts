@@ -3,6 +3,11 @@ import * as i0 from "@angular/core";
 export interface MessagePayload {
     text: string;
     files: File[];
+    forcePlainText?: boolean;
+}
+export interface MessageTextPayload {
+    text: string;
+    forcePlainText?: boolean;
 }
 export interface ReplyPreview {
     senderName: string;
@@ -18,7 +23,7 @@ export declare class MessageInputComponent implements OnChanges, AfterViewInit, 
     replyTo: ReplyPreview | null;
     enableMentions: boolean;
     mentionOptions: MentionOption[];
-    messageSent: EventEmitter<string>;
+    messageSent: EventEmitter<MessageTextPayload>;
     messageWithFiles: EventEmitter<MessagePayload>;
     replyCancelled: EventEmitter<void>;
     fileInput: ElementRef<HTMLInputElement>;
@@ -27,6 +32,8 @@ export declare class MessageInputComponent implements OnChanges, AfterViewInit, 
     selectedFiles: File[];
     textareaHeight: number;
     mentionSuggestions: MentionOption[];
+    detectedCodeLanguage: string | null;
+    codeDetectionDismissed: boolean;
     private readonly draftPrefix;
     private lastConversationId;
     private resizing;
@@ -61,6 +68,11 @@ export declare class MessageInputComponent implements OnChanges, AfterViewInit, 
     focus(): void;
     updateMentionSuggestions(): void;
     insertMention(option: MentionOption): void;
+    dismissCodeDetection(): void;
+    private updateCodeDetection;
+    private detectCodeLanguage;
+    private looksLikeMarkdown;
+    private isTableContent;
     onKeydown(event: KeyboardEvent): void;
     onEnter(event: Event): void;
     onFilesSelected(event: Event): void;

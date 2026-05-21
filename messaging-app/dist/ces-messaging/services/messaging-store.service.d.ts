@@ -31,6 +31,7 @@ export declare class MessagingStoreService implements OnDestroy {
     private toast$;
     private removedGroupIds$;
     private mentionConversationIds$;
+    private groupMembershipVersion$;
     readonly inbox: Observable<InboxItem[]>;
     readonly messagesMap: Observable<Map<string, Message[]>>;
     readonly openChats: Observable<ChatWindow[]>;
@@ -62,6 +63,7 @@ export declare class MessagingStoreService implements OnDestroy {
     }>;
     readonly removedGroupIds: Observable<Set<string>>;
     readonly mentionConversationIds: Observable<Set<string>>;
+    readonly groupMembershipVersion: Observable<number>;
     private wsSub;
     private destroy$;
     private pollTimer;
@@ -97,7 +99,7 @@ export declare class MessagingStoreService implements OnDestroy {
     setMessageTextScale(scale: number): void;
     setCodeTextScale(scale: number): void;
     testNotificationSound(): void;
-    prepareOutgoingMessageContent(content: string, replyTo?: Message | null): string;
+    prepareOutgoingMessageContent(content: string, replyTo?: Message | null, forcePlainText?: boolean): string;
     createReplyPreview(message: Message): MessageReplyPreview;
     showToast(message: string, type?: 'info' | 'success' | 'error', durationMs?: number): void;
     getSidebarSide(): SidebarSide;
@@ -111,6 +113,7 @@ export declare class MessagingStoreService implements OnDestroy {
     sendMessage(conversationId: string | null, content: string, messageType?: 'TEXT' | 'IMAGE' | 'SYSTEM', options?: {
         replyTo?: Message | null;
         mentions?: string[];
+        forcePlainText?: boolean;
     }): void;
     openDirectConversation(recipientContactId: string, displayName: string): void;
     sendDirectMessage(recipientContactId: string, content: string): void;
@@ -156,6 +159,7 @@ export declare class MessagingStoreService implements OnDestroy {
     private coalesceMessageText;
     private parseReplyContent;
     private replyBodyText;
+    private notifyGroupMembershipChanged;
     private replyExcerpt;
     private currentMentionTokens;
     private messageTextMentionsCurrentUser;

@@ -41,6 +41,7 @@ function getContactDisplayName(contact) {
     }
     return contact.email;
 }
+const PLAIN_TEXT_MESSAGE_PREFIX = '[messaging:plain-text]\n';
 /** Get display name from message sender fields */
 function getMessageSenderName(msg) {
     if (msg.sender_name)
@@ -850,6 +851,7 @@ class MessagingStoreService {
     toast$ = new BehaviorSubject(null);
     removedGroupIds$ = new BehaviorSubject(new Set());
     mentionConversationIds$ = new BehaviorSubject(new Set());
+    groupMembershipVersion$ = new BehaviorSubject(0);
     // ── Public observables ──
     inbox = this.inbox$.asObservable();
     messagesMap = this.messagesMap$.asObservable();
@@ -873,6 +875,7 @@ class MessagingStoreService {
     toast = this.toast$.asObservable();
     removedGroupIds = this.removedGroupIds$.asObservable();
     mentionConversationIds = this.mentionConversationIds$.asObservable();
+    groupMembershipVersion = this.groupMembershipVersion$.asObservable();
     wsSub = null;
     destroy$ = new Subject();
     pollTimer = null;
@@ -918,6 +921,7 @@ class MessagingStoreService {
         this.removalToastShown.clear();
         this.removedGroupIds$.next(new Set());
         this.mentionConversationIds$.next(new Set());
+        this.groupMembershipVersion$.next(0);
         this.toast$.next(null);
     }
     // ── Polling fallback (inbox only - messages rely on WebSocket) ──
@@ -1019,14 +1023,15 @@ class MessagingStoreService {
     testNotificationSound() {
         this.playSoftNotificationSound(true);
     }
-    prepareOutgoingMessageContent(content, replyTo) {
+    prepareOutgoingMessageContent(content, replyTo, forcePlainText) {
         const body = String(content || '').trim();
-        if (!replyTo)
-            return body;
-        const reply = this.createReplyPreview(replyTo);
-        const sender = (reply.sender_name || 'message').replace(/\]/g, '').trim();
-        const excerpt = this.replyExcerpt(reply.content || '');
-        return `[Reply to ${sender}]\n> ${excerpt}\n\n${body}`;
+        const withReply = !replyTo ? body : (() => {
+            const reply = this.createReplyPreview(replyTo);
+            const sender = (reply.sender_name || 'message').replace(/\]/g, '').trim();
+            const excerpt = this.replyExcerpt(reply.content || '');
+            return `[Reply to ${sender}]\n> ${excerpt}\n\n${body}`;
+        })();
+        return forcePlainText ? `${PLAIN_TEXT_MESSAGE_PREFIX}${withReply}` : withReply;
     }
     createReplyPreview(message) {
         return {
@@ -1209,7 +1214,7 @@ class MessagingStoreService {
         }
         if (!conversationId)
             return;
-        const outgoingContent = this.prepareOutgoingMessageContent(content, options?.replyTo || null);
+        const outgoingContent = this.prepareOutgoingMessageContent(content, options?.replyTo || null, options?.forcePlainText);
         const replyTo = options?.replyTo ? this.createReplyPreview(options.replyTo) : undefined;
         const tempMessageId = 'temp-' + Date.now();
         const optimistic = {
@@ -1221,6 +1226,7 @@ class MessagingStoreService {
             content,
             reply_to: replyTo,
             mentions: options?.mentions,
+            render_as_plain_text: options?.forcePlainText,
             created_at: new Date().toISOString(),
             is_read: false,
         };
@@ -1241,6 +1247,7 @@ class MessagingStoreService {
                     content: pickedContent,
                     reply_to: replyTo ?? res?.reply_to,
                     mentions: options?.mentions ?? res?.mentions,
+                    render_as_plain_text: options?.forcePlainText,
                 });
                 const map = new Map(this.messagesMap$.value);
                 const msgs = [...(map.get(conversationId) || [])];
@@ -1365,6 +1372,7 @@ class MessagingStoreService {
                     forkJoin(removeJobs).subscribe({
                         next: () => {
                             this.loadInbox();
+                            this.notifyGroupMembershipChanged();
                             callbacks?.success?.();
                         },
                         error: () => {
@@ -1382,6 +1390,7 @@ class MessagingStoreService {
             next: () => {
                 this.loadInbox();
                 if (action === 'add' && conversationId && participantContactIds?.length) {
+                    this.notifyGroupMembershipChanged();
                     const addedNames = participantContactIds.map((id) => this.getContactNameById(id));
                     const text = `${this.getContactNameById(contactId)} added ${addedNames.join(', ')} to the group`;
                     this.sendMessage(conversationId, text, 'SYSTEM');
@@ -1756,6 +1765,9 @@ class MessagingStoreService {
     replyBodyText(content) {
         return this.parseReplyContent(content)?.body ?? String(content || '');
     }
+    notifyGroupMembershipChanged() {
+        this.groupMembershipVersion$.next(this.groupMembershipVersion$.value + 1);
+    }
     replyExcerpt(content) {
         const parsed = this.parseReplyContent(content);
         const base = (parsed?.body ?? content).replace(/\s+/g, ' ').trim();
@@ -1861,6 +1873,14 @@ class MessagingStoreService {
             pinned_at: raw?.pinned_at,
             pinned_by: raw?.pinned_by,
         };
+        const rawContent = String(base.content || '');
+        if (rawContent.startsWith(PLAIN_TEXT_MESSAGE_PREFIX)) {
+            base.content = rawContent.slice(PLAIN_TEXT_MESSAGE_PREFIX.length);
+            base.render_as_plain_text = true;
+        }
+        else {
+            base.render_as_plain_text = raw?.render_as_plain_text ?? raw?.renderAsPlainText;
+        }
         const parsedReply = this.parseReplyContent(String(base.content || ''));
         if (parsedReply) {
             base.content = parsedReply.body;
@@ -3019,6 +3039,8 @@ class MessageInputComponent {
     selectedFiles = [];
     textareaHeight = 36;
     mentionSuggestions = [];
+    detectedCodeLanguage = null;
+    codeDetectionDismissed = false;
     draftPrefix = 'messaging_draft_';
     lastConversationId = null;
     resizing = false;
@@ -3039,6 +3061,7 @@ class MessageInputComponent {
         }
         this.lastConversationId = this.conversationId;
         this.messageText = this.loadDraft(this.conversationId);
+        this.updateCodeDetection(this.messageText);
         this.queueAutoResize();
     }
     ngAfterViewInit() {
@@ -3057,15 +3080,18 @@ class MessageInputComponent {
         if (!this.canSend)
             return;
         const text = this.messageText.trim();
+        const forcePlainText = !!this.detectedCodeLanguage && this.codeDetectionDismissed;
         if (this.selectedFiles.length > 0) {
-            this.messageWithFiles.emit({ text, files: [...this.selectedFiles] });
+            this.messageWithFiles.emit({ text, files: [...this.selectedFiles], forcePlainText });
         }
         else {
-            this.messageSent.emit(text);
+            this.messageSent.emit({ text, forcePlainText });
         }
         this.messageText = '';
         this.selectedFiles = [];
         this.mentionSuggestions = [];
+        this.detectedCodeLanguage = null;
+        this.codeDetectionDismissed = false;
         this.manualTextareaHeight = this.minTextareaHeight;
         this.clearDraft(this.conversationId);
         if (this.fileInput)
@@ -3076,6 +3102,7 @@ class MessageInputComponent {
         this.messageText = value;
         this.persistDraft(this.conversationId, value);
         this.updateMentionSuggestions();
+        this.updateCodeDetection(value);
         this.queueAutoResize();
     }
     onPaste(event) {
@@ -3247,6 +3274,56 @@ class MessageInputComponent {
             this.queueAutoResize();
         });
     }
+    dismissCodeDetection() {
+        this.codeDetectionDismissed = true;
+    }
+    updateCodeDetection(value) {
+        const language = this.detectCodeLanguage(value);
+        if (!language) {
+            this.detectedCodeLanguage = null;
+            this.codeDetectionDismissed = false;
+            return;
+        }
+        if (language !== this.detectedCodeLanguage) {
+            this.codeDetectionDismissed = false;
+        }
+        this.detectedCodeLanguage = language;
+    }
+    detectCodeLanguage(value) {
+        const trimmed = value.trim();
+        if (!trimmed || this.looksLikeMarkdown(trimmed) || this.isTableContent(trimmed))
+            return null;
+        const fenced = trimmed.match(/^```([a-zA-Z0-9_+-]*)\s*\n?[\s\S]*?```$/);
+        if (fenced)
+            return (fenced[1] || 'code').toLowerCase();
+        if (!trimmed.includes('\n') && trimmed.length < 40)
+            return null;
+        if (/^\s*(select|with|insert|update|delete|create|alter|drop)\b/i.test(trimmed))
+            return 'sql';
+        const jsDeclaration = /\b(function|const|let|var)\s+[A-Za-z_$][\w$]*\s*(=|=>|\(|:)/.test(trimmed);
+        const jsSyntax = /(=>|console\.log|import\s+.*from|export\s+|[{};])/.test(trimmed);
+        if (jsDeclaration || jsSyntax)
+            return 'javascript';
+        if (/\b(def|import|from|print|class)\b/.test(trimmed) && /:\s*$|^\s{4}/m.test(trimmed))
+            return 'python';
+        if (/<\/?[a-z][\s\S]*>/i.test(trimmed))
+            return 'html';
+        if (/[{};]/.test(trimmed) && /[:=]/.test(trimmed))
+            return 'code';
+        return null;
+    }
+    looksLikeMarkdown(content) {
+        return /(^#{1,6}\s)|(^[-*]\s)|(^\d+\.\s)|(^>\s)|(\*\*[^*]+\*\*)|(`[^`]+`)|(\[[^\]]+\]\([^)]+\))|(^---$)|(^-\s\[[ x]\]\s)|(^```[a-zA-Z0-9_+-]*\s*$)/m.test(content);
+    }
+    isTableContent(content) {
+        if (!content.includes('\t'))
+            return false;
+        const rows = content
+            .split(/\r?\n/)
+            .map((row) => row.split('\t').map((cell) => cell.trim()))
+            .filter((row) => row.some(Boolean));
+        return rows.length >= 2 && rows.some((row) => row.length >= 2);
+    }
     onKeydown(event) {
         if (event.key === 'Escape' && this.mentionSuggestions.length > 0) {
             this.mentionSuggestions = [];
@@ -3358,6 +3435,19 @@ class MessageInputComponent {
         </button>
       </div>
 
+      <div *ngIf="detectedCodeLanguage && !codeDetectionDismissed" class="code-detection-chip">
+        <mat-icon>code</mat-icon>
+        <span>Looks like {{ detectedCodeLanguage }} code</span>
+        <button
+          type="button"
+          class="code-detection-close"
+          (click)="dismissCodeDetection()"
+          title="Send as normal text"
+        >
+          <mat-icon>close</mat-icon>
+        </button>
+      </div>
+
       <div class="input-wrapper">
         <button mat-icon-button class="attach-btn" (click)="fileInput.click()" title="Attach files">
           <mat-icon>attach_file</mat-icon>
@@ -3394,7 +3484,7 @@ class MessageInputComponent {
       </div>
 
     </div>
-  `, isInline: true, styles: [".message-input-container{padding:8px 12px;border-top:1px solid rgba(255,255,255,.15);background:transparent;position:relative}.input-resize-handle{position:absolute;top:-5px;left:0;right:0;height:10px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;z-index:2}.input-resize-handle span{width:42px;height:3px;border-radius:999px;background:#ffffff38;transition:background .15s,width .15s}.input-resize-handle:hover span{width:56px;background:#ffffff6b}.file-previews{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:80px;overflow-y:auto}.reply-compose-preview{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:8px 10px;border-radius:12px;background:#7fb4ff1f;border-left:3px solid rgba(127,180,255,.8);color:#fff}.reply-compose-preview>mat-icon{color:#bfdbfe;font-size:18px;width:18px;height:18px;flex-shrink:0}.reply-compose-text{min-width:0;flex:1}.reply-compose-text span{display:block;font-size:11px;font-weight:700;color:#bfdbfe;margin-bottom:2px}.reply-compose-text p{margin:0;font-size:12px;color:#ffffffc7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.reply-cancel-btn{width:24px;height:24px;border:none;border-radius:999px;background:#ffffff14;color:#fffc;display:inline-flex;align-items:center;justify-content:center;padding:0;cursor:pointer;flex-shrink:0}.reply-cancel-btn mat-icon{font-size:16px;width:16px;height:16px}.mention-suggestions{margin-bottom:8px;border-radius:12px;overflow:hidden;background:#071d30;border:1px solid rgba(127,180,255,.22);box-shadow:0 10px 24px #0000003d}.mention-suggestion{width:100%;border:none;background:transparent;color:#fff;display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;text-align:left}.mention-suggestion:hover,.mention-suggestion:focus{background:#7fb4ff24;outline:none}.mention-avatar{width:22px;height:22px;border-radius:999px;background:#7fb4ff38;color:#bfdbfe;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0}.mention-suggestion small{margin-left:auto;color:#ffffff85;font-size:11px}.file-chip{display:flex;align-items:center;gap:4px;background:#ffffff26;border-radius:8px;padding:4px 4px 4px 8px;max-width:200px}.file-icon{font-size:16px;width:16px;height:16px;color:#fffc}.file-name{font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px}.file-size{font-size:10px;color:#ffffff80;flex-shrink:0}.file-remove{width:20px!important;height:20px!important}.file-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fff9}.input-wrapper{display:flex;align-items:flex-end;gap:4px;background:#ffffff1a;border-radius:24px;padding:2px 4px}.attach-btn,.send-btn{flex-shrink:0;width:36px;height:36px;padding:0!important;margin:0;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:0!important}.attach-btn mat-icon,.send-btn mat-icon{color:#ffffffb3;font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}.send-btn mat-icon{color:#ffffffe6}.message-textarea{flex:1;border:none;outline:none;background:transparent;resize:none;font-size:14px;font-family:inherit;line-height:1.5;min-height:24px;max-height:180px;padding:7px 0;color:#fff;overflow-y:hidden;box-sizing:border-box}.message-textarea::placeholder{color:#ffffff80}.send-btn:disabled mat-icon{color:#ffffff4d}:host ::ng-deep .attach-btn .mat-mdc-button-touch-target,:host ::ng-deep .send-btn .mat-mdc-button-touch-target{height:36px!important;width:36px!important}:host ::ng-deep .attach-btn .mdc-icon-button__icon,:host ::ng-deep .send-btn .mdc-icon-button__icon{display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }] });
+  `, isInline: true, styles: [".message-input-container{padding:8px 12px;border-top:1px solid rgba(255,255,255,.15);background:transparent;position:relative}.input-resize-handle{position:absolute;top:-5px;left:0;right:0;height:10px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;z-index:2}.input-resize-handle span{width:42px;height:3px;border-radius:999px;background:#ffffff38;transition:background .15s,width .15s}.input-resize-handle:hover span{width:56px;background:#ffffff6b}.file-previews{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:80px;overflow-y:auto}.reply-compose-preview{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:8px 10px;border-radius:12px;background:#7fb4ff1f;border-left:3px solid rgba(127,180,255,.8);color:#fff}.reply-compose-preview>mat-icon{color:#bfdbfe;font-size:18px;width:18px;height:18px;flex-shrink:0}.reply-compose-text{min-width:0;flex:1}.reply-compose-text span{display:block;font-size:11px;font-weight:700;color:#bfdbfe;margin-bottom:2px}.reply-compose-text p{margin:0;font-size:12px;color:#ffffffc7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.reply-cancel-btn{width:24px;height:24px;border:none;border-radius:999px;background:#ffffff14;color:#fffc;display:inline-flex;align-items:center;justify-content:center;padding:0;cursor:pointer;flex-shrink:0}.reply-cancel-btn mat-icon{font-size:16px;width:16px;height:16px}.mention-suggestions{margin-bottom:8px;border-radius:12px;overflow:hidden;background:#071d30;border:1px solid rgba(127,180,255,.22);box-shadow:0 10px 24px #0000003d}.mention-suggestion{width:100%;border:none;background:transparent;color:#fff;display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;text-align:left}.mention-suggestion:hover,.mention-suggestion:focus{background:#7fb4ff24;outline:none}.mention-avatar{width:22px;height:22px;border-radius:999px;background:#7fb4ff38;color:#bfdbfe;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0}.mention-suggestion small{margin-left:auto;color:#ffffff85;font-size:11px}.code-detection-chip{display:inline-flex;align-items:center;gap:7px;margin-bottom:8px;padding:6px 8px;border-radius:999px;background:#7fb4ff24;border:1px solid rgba(127,180,255,.32);color:#bfdbfe;font-size:12px;font-weight:700}.code-detection-chip>mat-icon{font-size:15px;width:15px;height:15px}.code-detection-close{width:20px;height:20px;border:none;border-radius:999px;background:#ffffff14;color:#ffffffd1;display:inline-flex;align-items:center;justify-content:center;padding:0;cursor:pointer}.code-detection-close mat-icon{font-size:14px;width:14px;height:14px}.file-chip{display:flex;align-items:center;gap:4px;background:#ffffff26;border-radius:8px;padding:4px 4px 4px 8px;max-width:200px}.file-icon{font-size:16px;width:16px;height:16px;color:#fffc}.file-name{font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px}.file-size{font-size:10px;color:#ffffff80;flex-shrink:0}.file-remove{width:20px!important;height:20px!important}.file-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fff9}.input-wrapper{display:flex;align-items:flex-end;gap:4px;background:#ffffff1a;border-radius:24px;padding:2px 4px}.attach-btn,.send-btn{flex-shrink:0;width:36px;height:36px;padding:0!important;margin:0;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:0!important}.attach-btn mat-icon,.send-btn mat-icon{color:#ffffffb3;font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}.send-btn mat-icon{color:#ffffffe6}.message-textarea{flex:1;border:none;outline:none;background:transparent;resize:none;font-size:14px;font-family:inherit;line-height:1.5;min-height:24px;max-height:180px;padding:7px 0;color:#fff;overflow-y:hidden;box-sizing:border-box}.message-textarea::placeholder{color:#ffffff80}.send-btn:disabled mat-icon{color:#ffffff4d}:host ::ng-deep .attach-btn .mat-mdc-button-touch-target,:host ::ng-deep .send-btn .mat-mdc-button-touch-target{height:36px!important;width:36px!important}:host ::ng-deep .attach-btn .mdc-icon-button__icon,:host ::ng-deep .send-btn .mdc-icon-button__icon{display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: MessageInputComponent, decorators: [{
             type: Component,
@@ -3447,6 +3537,19 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
         </button>
       </div>
 
+      <div *ngIf="detectedCodeLanguage && !codeDetectionDismissed" class="code-detection-chip">
+        <mat-icon>code</mat-icon>
+        <span>Looks like {{ detectedCodeLanguage }} code</span>
+        <button
+          type="button"
+          class="code-detection-close"
+          (click)="dismissCodeDetection()"
+          title="Send as normal text"
+        >
+          <mat-icon>close</mat-icon>
+        </button>
+      </div>
+
       <div class="input-wrapper">
         <button mat-icon-button class="attach-btn" (click)="fileInput.click()" title="Attach files">
           <mat-icon>attach_file</mat-icon>
@@ -3483,7 +3586,7 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
       </div>
 
     </div>
-  `, styles: [".message-input-container{padding:8px 12px;border-top:1px solid rgba(255,255,255,.15);background:transparent;position:relative}.input-resize-handle{position:absolute;top:-5px;left:0;right:0;height:10px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;z-index:2}.input-resize-handle span{width:42px;height:3px;border-radius:999px;background:#ffffff38;transition:background .15s,width .15s}.input-resize-handle:hover span{width:56px;background:#ffffff6b}.file-previews{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:80px;overflow-y:auto}.reply-compose-preview{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:8px 10px;border-radius:12px;background:#7fb4ff1f;border-left:3px solid rgba(127,180,255,.8);color:#fff}.reply-compose-preview>mat-icon{color:#bfdbfe;font-size:18px;width:18px;height:18px;flex-shrink:0}.reply-compose-text{min-width:0;flex:1}.reply-compose-text span{display:block;font-size:11px;font-weight:700;color:#bfdbfe;margin-bottom:2px}.reply-compose-text p{margin:0;font-size:12px;color:#ffffffc7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.reply-cancel-btn{width:24px;height:24px;border:none;border-radius:999px;background:#ffffff14;color:#fffc;display:inline-flex;align-items:center;justify-content:center;padding:0;cursor:pointer;flex-shrink:0}.reply-cancel-btn mat-icon{font-size:16px;width:16px;height:16px}.mention-suggestions{margin-bottom:8px;border-radius:12px;overflow:hidden;background:#071d30;border:1px solid rgba(127,180,255,.22);box-shadow:0 10px 24px #0000003d}.mention-suggestion{width:100%;border:none;background:transparent;color:#fff;display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;text-align:left}.mention-suggestion:hover,.mention-suggestion:focus{background:#7fb4ff24;outline:none}.mention-avatar{width:22px;height:22px;border-radius:999px;background:#7fb4ff38;color:#bfdbfe;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0}.mention-suggestion small{margin-left:auto;color:#ffffff85;font-size:11px}.file-chip{display:flex;align-items:center;gap:4px;background:#ffffff26;border-radius:8px;padding:4px 4px 4px 8px;max-width:200px}.file-icon{font-size:16px;width:16px;height:16px;color:#fffc}.file-name{font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px}.file-size{font-size:10px;color:#ffffff80;flex-shrink:0}.file-remove{width:20px!important;height:20px!important}.file-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fff9}.input-wrapper{display:flex;align-items:flex-end;gap:4px;background:#ffffff1a;border-radius:24px;padding:2px 4px}.attach-btn,.send-btn{flex-shrink:0;width:36px;height:36px;padding:0!important;margin:0;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:0!important}.attach-btn mat-icon,.send-btn mat-icon{color:#ffffffb3;font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}.send-btn mat-icon{color:#ffffffe6}.message-textarea{flex:1;border:none;outline:none;background:transparent;resize:none;font-size:14px;font-family:inherit;line-height:1.5;min-height:24px;max-height:180px;padding:7px 0;color:#fff;overflow-y:hidden;box-sizing:border-box}.message-textarea::placeholder{color:#ffffff80}.send-btn:disabled mat-icon{color:#ffffff4d}:host ::ng-deep .attach-btn .mat-mdc-button-touch-target,:host ::ng-deep .send-btn .mat-mdc-button-touch-target{height:36px!important;width:36px!important}:host ::ng-deep .attach-btn .mdc-icon-button__icon,:host ::ng-deep .send-btn .mdc-icon-button__icon{display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important}\n"] }]
+  `, styles: [".message-input-container{padding:8px 12px;border-top:1px solid rgba(255,255,255,.15);background:transparent;position:relative}.input-resize-handle{position:absolute;top:-5px;left:0;right:0;height:10px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;z-index:2}.input-resize-handle span{width:42px;height:3px;border-radius:999px;background:#ffffff38;transition:background .15s,width .15s}.input-resize-handle:hover span{width:56px;background:#ffffff6b}.file-previews{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:80px;overflow-y:auto}.reply-compose-preview{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:8px 10px;border-radius:12px;background:#7fb4ff1f;border-left:3px solid rgba(127,180,255,.8);color:#fff}.reply-compose-preview>mat-icon{color:#bfdbfe;font-size:18px;width:18px;height:18px;flex-shrink:0}.reply-compose-text{min-width:0;flex:1}.reply-compose-text span{display:block;font-size:11px;font-weight:700;color:#bfdbfe;margin-bottom:2px}.reply-compose-text p{margin:0;font-size:12px;color:#ffffffc7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.reply-cancel-btn{width:24px;height:24px;border:none;border-radius:999px;background:#ffffff14;color:#fffc;display:inline-flex;align-items:center;justify-content:center;padding:0;cursor:pointer;flex-shrink:0}.reply-cancel-btn mat-icon{font-size:16px;width:16px;height:16px}.mention-suggestions{margin-bottom:8px;border-radius:12px;overflow:hidden;background:#071d30;border:1px solid rgba(127,180,255,.22);box-shadow:0 10px 24px #0000003d}.mention-suggestion{width:100%;border:none;background:transparent;color:#fff;display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;text-align:left}.mention-suggestion:hover,.mention-suggestion:focus{background:#7fb4ff24;outline:none}.mention-avatar{width:22px;height:22px;border-radius:999px;background:#7fb4ff38;color:#bfdbfe;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0}.mention-suggestion small{margin-left:auto;color:#ffffff85;font-size:11px}.code-detection-chip{display:inline-flex;align-items:center;gap:7px;margin-bottom:8px;padding:6px 8px;border-radius:999px;background:#7fb4ff24;border:1px solid rgba(127,180,255,.32);color:#bfdbfe;font-size:12px;font-weight:700}.code-detection-chip>mat-icon{font-size:15px;width:15px;height:15px}.code-detection-close{width:20px;height:20px;border:none;border-radius:999px;background:#ffffff14;color:#ffffffd1;display:inline-flex;align-items:center;justify-content:center;padding:0;cursor:pointer}.code-detection-close mat-icon{font-size:14px;width:14px;height:14px}.file-chip{display:flex;align-items:center;gap:4px;background:#ffffff26;border-radius:8px;padding:4px 4px 4px 8px;max-width:200px}.file-icon{font-size:16px;width:16px;height:16px;color:#fffc}.file-name{font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px}.file-size{font-size:10px;color:#ffffff80;flex-shrink:0}.file-remove{width:20px!important;height:20px!important}.file-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fff9}.input-wrapper{display:flex;align-items:flex-end;gap:4px;background:#ffffff1a;border-radius:24px;padding:2px 4px}.attach-btn,.send-btn{flex-shrink:0;width:36px;height:36px;padding:0!important;margin:0;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:0!important}.attach-btn mat-icon,.send-btn mat-icon{color:#ffffffb3;font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}.send-btn mat-icon{color:#ffffffe6}.message-textarea{flex:1;border:none;outline:none;background:transparent;resize:none;font-size:14px;font-family:inherit;line-height:1.5;min-height:24px;max-height:180px;padding:7px 0;color:#fff;overflow-y:hidden;box-sizing:border-box}.message-textarea::placeholder{color:#ffffff80}.send-btn:disabled mat-icon{color:#ffffff4d}:host ::ng-deep .attach-btn .mat-mdc-button-touch-target,:host ::ng-deep .send-btn .mat-mdc-button-touch-target{height:36px!important;width:36px!important}:host ::ng-deep .attach-btn .mdc-icon-button__icon,:host ::ng-deep .send-btn .mdc-icon-button__icon{display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important}\n"] }]
         }], propDecorators: { conversationId: [{
                 type: Input
             }], replyTo: [{
@@ -3544,6 +3647,7 @@ class ChatThreadComponent {
     activeMediaRequests = 0;
     maxMediaRequests = 2;
     lastMentionConversationId = null;
+    lastGroupMembershipVersion = -1;
     constructor(store, api, auth, fileService, cdr, sanitizer) {
         this.store = store;
         this.api = api;
@@ -3565,13 +3669,20 @@ class ChatThreadComponent {
             this.store.removedGroupIds,
             this.store.messageTextScale,
             this.store.codeTextScale,
-        ]).subscribe(([convId, msgMap, chats, contacts, loading, removedGroupIds, messageTextScale, codeTextScale]) => {
+            this.store.groupMembershipVersion,
+        ]).subscribe(([convId, msgMap, chats, contacts, loading, removedGroupIds, messageTextScale, codeTextScale, groupMembershipVersion]) => {
             this.loading = loading;
             this.visibleContacts = contacts || [];
             this.messageTextScale = messageTextScale;
             this.codeTextScale = codeTextScale;
             if (this.isGroup && this.conversationId && this.mentionOptions.length === 0) {
                 this.refreshMentionOptions();
+            }
+            if (this.isGroup &&
+                this.conversationId &&
+                groupMembershipVersion !== this.lastGroupMembershipVersion) {
+                this.lastGroupMembershipVersion = groupMembershipVersion;
+                this.refreshMentionOptions(true);
             }
             if (convId && convId !== this.conversationId) {
                 this.conversationId = convId;
@@ -3581,7 +3692,7 @@ class ChatThreadComponent {
                 const chat = chats.find((c) => c.conversationId === convId);
                 this.conversationName = chat?.name || 'Chat';
                 this.isGroup = chat?.isGroup || false;
-                this.refreshMentionOptions();
+                this.refreshMentionOptions(true);
             }
             if (this.conversationId) {
                 const prevLen = this.messages.length;
@@ -3658,14 +3769,14 @@ class ChatThreadComponent {
         const text = String(value || '').replace(/\s+/g, ' ').trim();
         return text.length > 120 ? `${text.slice(0, 117)}...` : text || 'Attachment';
     }
-    refreshMentionOptions() {
+    refreshMentionOptions(force = false) {
         if (!this.isGroup || !this.conversationId) {
             this.mentionOptions = [];
             this.lastMentionConversationId = null;
             return;
         }
         const convId = this.conversationId;
-        if (this.lastMentionConversationId === convId && this.mentionOptions.length > 0)
+        if (!force && this.lastMentionConversationId === convId && this.mentionOptions.length > 0)
             return;
         this.lastMentionConversationId = convId;
         this.api.getConversationParticipants(convId).subscribe({
@@ -3723,13 +3834,15 @@ class ChatThreadComponent {
             .filter((option) => mentionedTokens.has(option.token.toLowerCase()))
             .map((option) => option.contactId);
     }
-    onSendMessage(content) {
+    onSendMessage(payload) {
         if (this.isRemovedFromGroup)
             return;
+        const content = payload.text;
         const mentions = this.getMentionIdsFromContent(content);
         this.store.sendMessage(this.conversationId, content, 'TEXT', {
             replyTo: this.replyToMessage,
             mentions,
+            forcePlainText: payload.forcePlainText,
         });
         this.clearReply();
         this.shouldScrollToBottom = true;
@@ -3757,7 +3870,7 @@ class ChatThreadComponent {
                 this.fileService.prewarmCache(fileIds);
                 // Step 3: Send the message with the real file_ids.
                 const messageText = payload.text || filenames.join(', ');
-                const outgoingText = this.store.prepareOutgoingMessageContent(messageText, this.replyToMessage);
+                const outgoingText = this.store.prepareOutgoingMessageContent(messageText, this.replyToMessage, payload.forcePlainText);
                 const replyTo = this.replyToMessage ? {
                     message_id: String(this.replyToMessage.message_id || ''),
                     sender_name: this.getSenderName(this.replyToMessage),
@@ -3784,6 +3897,7 @@ class ChatThreadComponent {
                             content: messageText,
                             reply_to: replyTo,
                             mentions,
+                            render_as_plain_text: payload.forcePlainText,
                             media_url: firstId,
                             created_at: new Date().toISOString(),
                             is_read: false,
@@ -3917,6 +4031,8 @@ class ChatThreadComponent {
     }
     isCodeContent(value, msg) {
         const content = value.trim();
+        if (msg?.render_as_plain_text)
+            return false;
         if (!content || (msg ? this.isTableText(msg) : this.isTableContent(content)))
             return false;
         if (this.looksLikeMarkdown(content) && !this.isSingleFencedCodeBlock(content))
@@ -3990,7 +4106,9 @@ class ChatThreadComponent {
             return null;
         if (/^\s*(select|with|insert|update|delete|create|alter|drop)\b/i.test(trimmed))
             return 'sql';
-        if (/\b(function|const|let|var|=>|console\.log|import\s+.*from)\b/.test(trimmed))
+        const jsDeclaration = /\b(function|const|let|var)\s+[A-Za-z_$][\w$]*\s*(=|=>|\(|:)/.test(trimmed);
+        const jsSyntax = /(=>|console\.log|import\s+.*from|export\s+|[{};])/.test(trimmed);
+        if (jsDeclaration || jsSyntax)
             return 'javascript';
         if (/\b(def|import|from|print|class)\b/.test(trimmed) && /:\s*$|^\s{4}/m.test(trimmed))
             return 'python';
@@ -4796,7 +4914,7 @@ class ChatThreadComponent {
                   *ngIf="hasFileAttachment(msg) && getMessageCaption(msg)"
                   class="attachment-caption"
                 >
-                  <div *ngIf="isCodeContent(getMessageCaption(msg)); else nonCodeCaption" class="code-message-wrap attachment-render-block">
+                  <div *ngIf="isCodeContent(getMessageCaption(msg), msg); else nonCodeCaption" class="code-message-wrap attachment-render-block">
                     <button type="button" class="render-copy-btn" (click)="copyTextValue(getMessageCaption(msg), $event)" title="Copy code">
                       <mat-icon>content_copy</mat-icon>
                     </button>
@@ -5110,7 +5228,7 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
                   *ngIf="hasFileAttachment(msg) && getMessageCaption(msg)"
                   class="attachment-caption"
                 >
-                  <div *ngIf="isCodeContent(getMessageCaption(msg)); else nonCodeCaption" class="code-message-wrap attachment-render-block">
+                  <div *ngIf="isCodeContent(getMessageCaption(msg), msg); else nonCodeCaption" class="code-message-wrap attachment-render-block">
                     <button type="button" class="render-copy-btn" (click)="copyTextValue(getMessageCaption(msg), $event)" title="Copy code">
                       <mat-icon>content_copy</mat-icon>
                     </button>

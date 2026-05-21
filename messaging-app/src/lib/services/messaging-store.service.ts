@@ -8,6 +8,7 @@ import {
   InboxItem,
   Message,
   MessageReplyPreview,
+  PLAIN_TEXT_MESSAGE_PREFIX,
   Attachment,
   Contact,
   ChatWindow,
@@ -52,6 +53,7 @@ export class MessagingStoreService implements OnDestroy {
   private toast$ = new BehaviorSubject<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
   private removedGroupIds$ = new BehaviorSubject<Set<string>>(new Set());
   private mentionConversationIds$ = new BehaviorSubject<Set<string>>(new Set());
+  private groupMembershipVersion$ = new BehaviorSubject<number>(0);
 
   // ── Public observables ──
   readonly inbox = this.inbox$.asObservable();
@@ -76,6 +78,7 @@ export class MessagingStoreService implements OnDestroy {
   readonly toast = this.toast$.asObservable();
   readonly removedGroupIds = this.removedGroupIds$.asObservable();
   readonly mentionConversationIds = this.mentionConversationIds$.asObservable();
+  readonly groupMembershipVersion = this.groupMembershipVersion$.asObservable();
 
   private wsSub: Subscription | null = null;
   private destroy$ = new Subject<void>();
@@ -129,6 +132,7 @@ export class MessagingStoreService implements OnDestroy {
     this.removalToastShown.clear();
     this.removedGroupIds$.next(new Set());
     this.mentionConversationIds$.next(new Set());
+    this.groupMembershipVersion$.next(0);
     this.toast$.next(null);
   }
 
@@ -248,13 +252,15 @@ export class MessagingStoreService implements OnDestroy {
     this.playSoftNotificationSound(true);
   }
 
-  prepareOutgoingMessageContent(content: string, replyTo?: Message | null): string {
+  prepareOutgoingMessageContent(content: string, replyTo?: Message | null, forcePlainText?: boolean): string {
     const body = String(content || '').trim();
-    if (!replyTo) return body;
-    const reply = this.createReplyPreview(replyTo);
-    const sender = (reply.sender_name || 'message').replace(/\]/g, '').trim();
-    const excerpt = this.replyExcerpt(reply.content || '');
-    return `[Reply to ${sender}]\n> ${excerpt}\n\n${body}`;
+    const withReply = !replyTo ? body : (() => {
+      const reply = this.createReplyPreview(replyTo);
+      const sender = (reply.sender_name || 'message').replace(/\]/g, '').trim();
+      const excerpt = this.replyExcerpt(reply.content || '');
+      return `[Reply to ${sender}]\n> ${excerpt}\n\n${body}`;
+    })();
+    return forcePlainText ? `${PLAIN_TEXT_MESSAGE_PREFIX}${withReply}` : withReply;
   }
 
   createReplyPreview(message: Message): MessageReplyPreview {
@@ -461,7 +467,7 @@ export class MessagingStoreService implements OnDestroy {
     conversationId: string | null,
     content: string,
     messageType: 'TEXT' | 'IMAGE' | 'SYSTEM' = 'TEXT',
-    options?: { replyTo?: Message | null; mentions?: string[] }
+    options?: { replyTo?: Message | null; mentions?: string[]; forcePlainText?: boolean }
   ): void {
     const contactId = this.auth.contactId;
     if (!contactId) return;
@@ -477,7 +483,7 @@ export class MessagingStoreService implements OnDestroy {
 
     if (!conversationId) return;
 
-    const outgoingContent = this.prepareOutgoingMessageContent(content, options?.replyTo || null);
+    const outgoingContent = this.prepareOutgoingMessageContent(content, options?.replyTo || null, options?.forcePlainText);
     const replyTo = options?.replyTo ? this.createReplyPreview(options.replyTo) : undefined;
     const tempMessageId = 'temp-' + Date.now();
     const optimistic: Message = {
@@ -489,6 +495,7 @@ export class MessagingStoreService implements OnDestroy {
       content,
       reply_to: replyTo,
       mentions: options?.mentions,
+      render_as_plain_text: options?.forcePlainText,
       created_at: new Date().toISOString(),
       is_read: false,
     };
@@ -510,6 +517,7 @@ export class MessagingStoreService implements OnDestroy {
           content: pickedContent,
           reply_to: replyTo ?? res?.reply_to,
           mentions: options?.mentions ?? res?.mentions,
+          render_as_plain_text: options?.forcePlainText,
         });
         const map = new Map(this.messagesMap$.value);
         const msgs = [...(map.get(conversationId) || [])];
@@ -672,6 +680,7 @@ export class MessagingStoreService implements OnDestroy {
           forkJoin(removeJobs).subscribe({
             next: () => {
               this.loadInbox();
+              this.notifyGroupMembershipChanged();
               callbacks?.success?.();
             },
             error: () => {
@@ -690,6 +699,7 @@ export class MessagingStoreService implements OnDestroy {
       next: () => {
         this.loadInbox();
         if (action === 'add' && conversationId && participantContactIds?.length) {
+          this.notifyGroupMembershipChanged();
           const addedNames = participantContactIds.map((id) => this.getContactNameById(id));
           const text = `${this.getContactNameById(contactId)} added ${addedNames.join(', ')} to the group`;
           this.sendMessage(conversationId, text, 'SYSTEM');
@@ -1105,6 +1115,10 @@ export class MessagingStoreService implements OnDestroy {
     return this.parseReplyContent(content)?.body ?? String(content || '');
   }
 
+  private notifyGroupMembershipChanged(): void {
+    this.groupMembershipVersion$.next(this.groupMembershipVersion$.value + 1);
+  }
+
   private replyExcerpt(content: string): string {
     const parsed = this.parseReplyContent(content);
     const base = (parsed?.body ?? content).replace(/\s+/g, ' ').trim();
@@ -1216,6 +1230,14 @@ export class MessagingStoreService implements OnDestroy {
       pinned_at: raw?.pinned_at,
       pinned_by: raw?.pinned_by,
     };
+
+    const rawContent = String(base.content || '');
+    if (rawContent.startsWith(PLAIN_TEXT_MESSAGE_PREFIX)) {
+      base.content = rawContent.slice(PLAIN_TEXT_MESSAGE_PREFIX.length);
+      base.render_as_plain_text = true;
+    } else {
+      base.render_as_plain_text = raw?.render_as_plain_text ?? raw?.renderAsPlainText;
+    }
 
     const parsedReply = this.parseReplyContent(String(base.content || ''));
     if (parsedReply) {

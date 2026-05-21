@@ -34,6 +34,7 @@ export interface MessageReplyPreview {
     sender_name?: string;
     content?: string;
 }
+export declare const PLAIN_TEXT_MESSAGE_PREFIX = "[messaging:plain-text]\n";
 export interface Message {
     message_id: string;
     conversation_id: string;
@@ -60,6 +61,7 @@ export interface Message {
     read_by_names?: string[];
     parent_message_id?: string;
     reply_to?: MessageReplyPreview;
+    render_as_plain_text?: boolean;
     thread_count?: number;
     reactions?: MessageReaction[];
     mentions?: string[];

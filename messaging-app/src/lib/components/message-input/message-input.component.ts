@@ -18,6 +18,12 @@ import { MatButtonModule } from '@angular/material/button';
 export interface MessagePayload {
   text: string;
   files: File[];
+  forcePlainText?: boolean;
+}
+
+export interface MessageTextPayload {
+  text: string;
+  forcePlainText?: boolean;
 }
 
 export interface ReplyPreview {
@@ -81,6 +87,19 @@ export interface MentionOption {
           <span class="mention-avatar">&#64;</span>
           <span>{{ option.label }}</span>
           <small>&#64;{{ option.token }}</small>
+        </button>
+      </div>
+
+      <div *ngIf="detectedCodeLanguage && !codeDetectionDismissed" class="code-detection-chip">
+        <mat-icon>code</mat-icon>
+        <span>Looks like {{ detectedCodeLanguage }} code</span>
+        <button
+          type="button"
+          class="code-detection-close"
+          (click)="dismissCodeDetection()"
+          title="Send as normal text"
+        >
+          <mat-icon>close</mat-icon>
         </button>
       </div>
 
@@ -275,6 +294,46 @@ export interface MentionOption {
       font-size: 11px;
     }
 
+    .code-detection-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 8px;
+      padding: 6px 8px;
+      border-radius: 999px;
+      background: rgba(127, 180, 255, 0.14);
+      border: 1px solid rgba(127, 180, 255, 0.32);
+      color: #bfdbfe;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .code-detection-chip > mat-icon {
+      font-size: 15px;
+      width: 15px;
+      height: 15px;
+    }
+
+    .code-detection-close {
+      width: 20px;
+      height: 20px;
+      border: none;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.82);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      cursor: pointer;
+    }
+
+    .code-detection-close mat-icon {
+      font-size: 14px;
+      width: 14px;
+      height: 14px;
+    }
+
     .file-chip {
       display: flex;
       align-items: center;
@@ -407,7 +466,7 @@ export class MessageInputComponent implements OnChanges, AfterViewInit, OnDestro
   @Input() replyTo: ReplyPreview | null = null;
   @Input() enableMentions = false;
   @Input() mentionOptions: MentionOption[] = [];
-  @Output() messageSent = new EventEmitter<string>();
+  @Output() messageSent = new EventEmitter<MessageTextPayload>();
   @Output() messageWithFiles = new EventEmitter<MessagePayload>();
   @Output() replyCancelled = new EventEmitter<void>();
   @ViewChild('fileInput') fileInput!: ElementRef<HTMLInputElement>;
@@ -417,6 +476,8 @@ export class MessageInputComponent implements OnChanges, AfterViewInit, OnDestro
   selectedFiles: File[] = [];
   textareaHeight = 36;
   mentionSuggestions: MentionOption[] = [];
+  detectedCodeLanguage: string | null = null;
+  codeDetectionDismissed = false;
   private readonly draftPrefix = 'messaging_draft_';
   private lastConversationId: string | null = null;
   private resizing = false;
@@ -437,6 +498,7 @@ export class MessageInputComponent implements OnChanges, AfterViewInit, OnDestro
     }
     this.lastConversationId = this.conversationId;
     this.messageText = this.loadDraft(this.conversationId);
+    this.updateCodeDetection(this.messageText);
     this.queueAutoResize();
   }
 
@@ -458,16 +520,19 @@ export class MessageInputComponent implements OnChanges, AfterViewInit, OnDestro
   send(): void {
     if (!this.canSend) return;
     const text = this.messageText.trim();
+    const forcePlainText = !!this.detectedCodeLanguage && this.codeDetectionDismissed;
 
     if (this.selectedFiles.length > 0) {
-      this.messageWithFiles.emit({ text, files: [...this.selectedFiles] });
+      this.messageWithFiles.emit({ text, files: [...this.selectedFiles], forcePlainText });
     } else {
-      this.messageSent.emit(text);
+      this.messageSent.emit({ text, forcePlainText });
     }
 
     this.messageText = '';
     this.selectedFiles = [];
     this.mentionSuggestions = [];
+    this.detectedCodeLanguage = null;
+    this.codeDetectionDismissed = false;
     this.manualTextareaHeight = this.minTextareaHeight;
     this.clearDraft(this.conversationId);
     if (this.fileInput) this.fileInput.nativeElement.value = '';
@@ -478,6 +543,7 @@ export class MessageInputComponent implements OnChanges, AfterViewInit, OnDestro
     this.messageText = value;
     this.persistDraft(this.conversationId, value);
     this.updateMentionSuggestions();
+    this.updateCodeDetection(value);
     this.queueAutoResize();
   }
 
@@ -669,6 +735,52 @@ export class MessageInputComponent implements OnChanges, AfterViewInit, OnDestro
       textarea.selectionStart = textarea.selectionEnd = caret;
       this.queueAutoResize();
     });
+  }
+
+  dismissCodeDetection(): void {
+    this.codeDetectionDismissed = true;
+  }
+
+  private updateCodeDetection(value: string): void {
+    const language = this.detectCodeLanguage(value);
+    if (!language) {
+      this.detectedCodeLanguage = null;
+      this.codeDetectionDismissed = false;
+      return;
+    }
+    if (language !== this.detectedCodeLanguage) {
+      this.codeDetectionDismissed = false;
+    }
+    this.detectedCodeLanguage = language;
+  }
+
+  private detectCodeLanguage(value: string): string | null {
+    const trimmed = value.trim();
+    if (!trimmed || this.looksLikeMarkdown(trimmed) || this.isTableContent(trimmed)) return null;
+    const fenced = trimmed.match(/^```([a-zA-Z0-9_+-]*)\s*\n?[\s\S]*?```$/);
+    if (fenced) return (fenced[1] || 'code').toLowerCase();
+    if (!trimmed.includes('\n') && trimmed.length < 40) return null;
+    if (/^\s*(select|with|insert|update|delete|create|alter|drop)\b/i.test(trimmed)) return 'sql';
+    const jsDeclaration = /\b(function|const|let|var)\s+[A-Za-z_$][\w$]*\s*(=|=>|\(|:)/.test(trimmed);
+    const jsSyntax = /(=>|console\.log|import\s+.*from|export\s+|[{};])/.test(trimmed);
+    if (jsDeclaration || jsSyntax) return 'javascript';
+    if (/\b(def|import|from|print|class)\b/.test(trimmed) && /:\s*$|^\s{4}/m.test(trimmed)) return 'python';
+    if (/<\/?[a-z][\s\S]*>/i.test(trimmed)) return 'html';
+    if (/[{};]/.test(trimmed) && /[:=]/.test(trimmed)) return 'code';
+    return null;
+  }
+
+  private looksLikeMarkdown(content: string): boolean {
+    return /(^#{1,6}\s)|(^[-*]\s)|(^\d+\.\s)|(^>\s)|(\*\*[^*]+\*\*)|(`[^`]+`)|(\[[^\]]+\]\([^)]+\))|(^---$)|(^-\s\[[ x]\]\s)|(^```[a-zA-Z0-9_+-]*\s*$)/m.test(content);
+  }
+
+  private isTableContent(content: string): boolean {
+    if (!content.includes('\t')) return false;
+    const rows = content
+      .split(/\r?\n/)
+      .map((row) => row.split('\t').map((cell) => cell.trim()))
+      .filter((row) => row.some(Boolean));
+    return rows.length >= 2 && rows.some((row) => row.length >= 2);
   }
 
   onKeydown(event: KeyboardEvent): void {

@@ -14,7 +14,7 @@ import { MessagingApiService } from '../../services/messaging-api.service';
 import { MessagingFileService } from '../../services/messaging-file.service';
 import { AuthService } from '../../services/auth.service';
 import { Contact, ConversationParticipant, Message, Attachment, getContactDisplayName, getMessageSenderName } from '../../models/messaging.models';
-import { MentionOption, MessageInputComponent, MessagePayload, ReplyPreview } from '../message-input/message-input.component';
+import { MentionOption, MessageInputComponent, MessagePayload, MessageTextPayload, ReplyPreview } from '../message-input/message-input.component';
 
 @Component({
   selector: 'app-chat-thread',
@@ -188,7 +188,7 @@ import { MentionOption, MessageInputComponent, MessagePayload, ReplyPreview } fr
                   *ngIf="hasFileAttachment(msg) && getMessageCaption(msg)"
                   class="attachment-caption"
                 >
-                  <div *ngIf="isCodeContent(getMessageCaption(msg)); else nonCodeCaption" class="code-message-wrap attachment-render-block">
+                  <div *ngIf="isCodeContent(getMessageCaption(msg), msg); else nonCodeCaption" class="code-message-wrap attachment-render-block">
                     <button type="button" class="render-copy-btn" (click)="copyTextValue(getMessageCaption(msg), $event)" title="Copy code">
                       <mat-icon>content_copy</mat-icon>
                     </button>
@@ -1321,6 +1321,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   private activeMediaRequests = 0;
   private readonly maxMediaRequests = 2;
   private lastMentionConversationId: string | null = null;
+  private lastGroupMembershipVersion = -1;
 
   constructor(
     private store: MessagingStoreService,
@@ -1345,13 +1346,22 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
       this.store.removedGroupIds,
       this.store.messageTextScale,
       this.store.codeTextScale,
-    ]).subscribe(([convId, msgMap, chats, contacts, loading, removedGroupIds, messageTextScale, codeTextScale]) => {
+      this.store.groupMembershipVersion,
+    ]).subscribe(([convId, msgMap, chats, contacts, loading, removedGroupIds, messageTextScale, codeTextScale, groupMembershipVersion]) => {
       this.loading = loading;
       this.visibleContacts = contacts || [];
       this.messageTextScale = messageTextScale;
       this.codeTextScale = codeTextScale;
       if (this.isGroup && this.conversationId && this.mentionOptions.length === 0) {
         this.refreshMentionOptions();
+      }
+      if (
+        this.isGroup &&
+        this.conversationId &&
+        groupMembershipVersion !== this.lastGroupMembershipVersion
+      ) {
+        this.lastGroupMembershipVersion = groupMembershipVersion;
+        this.refreshMentionOptions(true);
       }
 
       if (convId && convId !== this.conversationId) {
@@ -1362,7 +1372,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
         const chat = chats.find((c) => c.conversationId === convId);
         this.conversationName = chat?.name || 'Chat';
         this.isGroup = chat?.isGroup || false;
-        this.refreshMentionOptions();
+        this.refreshMentionOptions(true);
       }
 
       if (this.conversationId) {
@@ -1450,7 +1460,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
     return text.length > 120 ? `${text.slice(0, 117)}...` : text || 'Attachment';
   }
 
-  private refreshMentionOptions(): void {
+  private refreshMentionOptions(force = false): void {
     if (!this.isGroup || !this.conversationId) {
       this.mentionOptions = [];
       this.lastMentionConversationId = null;
@@ -1458,7 +1468,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
     }
 
     const convId = this.conversationId;
-    if (this.lastMentionConversationId === convId && this.mentionOptions.length > 0) return;
+    if (!force && this.lastMentionConversationId === convId && this.mentionOptions.length > 0) return;
     this.lastMentionConversationId = convId;
 
     this.api.getConversationParticipants(convId).subscribe({
@@ -1521,12 +1531,14 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
       .map((option) => option.contactId);
   }
 
-  onSendMessage(content: string): void {
+  onSendMessage(payload: MessageTextPayload): void {
     if (this.isRemovedFromGroup) return;
+    const content = payload.text;
     const mentions = this.getMentionIdsFromContent(content);
     this.store.sendMessage(this.conversationId, content, 'TEXT', {
       replyTo: this.replyToMessage,
       mentions,
+      forcePlainText: payload.forcePlainText,
     });
     this.clearReply();
     this.shouldScrollToBottom = true;
@@ -1557,7 +1569,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
 
         // Step 3: Send the message with the real file_ids.
         const messageText = payload.text || filenames.join(', ');
-        const outgoingText = this.store.prepareOutgoingMessageContent(messageText, this.replyToMessage);
+        const outgoingText = this.store.prepareOutgoingMessageContent(messageText, this.replyToMessage, payload.forcePlainText);
         const replyTo = this.replyToMessage ? {
           message_id: String(this.replyToMessage.message_id || ''),
           sender_name: this.getSenderName(this.replyToMessage),
@@ -1593,6 +1605,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
                 content: messageText,
                 reply_to: replyTo,
                 mentions,
+                render_as_plain_text: payload.forcePlainText,
                 media_url: firstId,
                 created_at: new Date().toISOString(),
                 is_read: false,
@@ -1733,6 +1746,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
 
   isCodeContent(value: string, msg?: Message): boolean {
     const content = value.trim();
+    if (msg?.render_as_plain_text) return false;
     if (!content || (msg ? this.isTableText(msg) : this.isTableContent(content))) return false;
     if (this.looksLikeMarkdown(content) && !this.isSingleFencedCodeBlock(content)) return false;
     if (/^```[\s\S]*```$/.test(content)) return true;
@@ -1814,7 +1828,9 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
     const trimmed = code.trim();
     if (!trimmed.includes('\n') && trimmed.length < 40) return null;
     if (/^\s*(select|with|insert|update|delete|create|alter|drop)\b/i.test(trimmed)) return 'sql';
-    if (/\b(function|const|let|var|=>|console\.log|import\s+.*from)\b/.test(trimmed)) return 'javascript';
+    const jsDeclaration = /\b(function|const|let|var)\s+[A-Za-z_$][\w$]*\s*(=|=>|\(|:)/.test(trimmed);
+    const jsSyntax = /(=>|console\.log|import\s+.*from|export\s+|[{};])/.test(trimmed);
+    if (jsDeclaration || jsSyntax) return 'javascript';
     if (/\b(def|import|from|print|class)\b/.test(trimmed) && /:\s*$|^\s{4}/m.test(trimmed)) return 'python';
     if (/<\/?[a-z][\s\S]*>/i.test(trimmed)) return 'html';
     if (/[{};]/.test(trimmed) && /[:=]/.test(trimmed)) return 'code';

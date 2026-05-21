@@ -5,7 +5,7 @@ import { MessagingApiService } from '../../services/messaging-api.service';
 import { MessagingFileService } from '../../services/messaging-file.service';
 import { AuthService } from '../../services/auth.service';
 import { Contact, Message, Attachment } from '../../models/messaging.models';
-import { MentionOption, MessageInputComponent, MessagePayload, ReplyPreview } from '../message-input/message-input.component';
+import { MentionOption, MessageInputComponent, MessagePayload, MessageTextPayload, ReplyPreview } from '../message-input/message-input.component';
 import * as i0 from "@angular/core";
 export declare class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked {
     private store;
@@ -45,6 +45,7 @@ export declare class ChatThreadComponent implements OnInit, OnDestroy, AfterView
     private activeMediaRequests;
     private readonly maxMediaRequests;
     private lastMentionConversationId;
+    private lastGroupMembershipVersion;
     constructor(store: MessagingStoreService, api: MessagingApiService, auth: AuthService, fileService: MessagingFileService, cdr: ChangeDetectorRef, sanitizer: DomSanitizer);
     ngOnInit(): void;
     ngAfterViewChecked(): void;
@@ -64,7 +65,7 @@ export declare class ChatThreadComponent implements OnInit, OnDestroy, AfterView
     private contactsToMentionOptions;
     private toMentionToken;
     private getMentionIdsFromContent;
-    onSendMessage(content: string): void;
+    onSendMessage(payload: MessageTextPayload): void;
     onSendWithFiles(payload: MessagePayload): void;
     loadOlder(): void;
     onScroll(): void;
