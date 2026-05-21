@@ -1,4 +1,4 @@
-Updated 2026-05-13
+Updated 2026-05-21
 
 # @coreline-engineering-solutions/messaging — Angular Messaging Library
 
