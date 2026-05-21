@@ -7,6 +7,7 @@ export declare class FloatingButtonComponent implements OnInit, OnDestroy {
     unreadCount: number;
     side: SidebarSide;
     isOpen: boolean;
+    isFloating: boolean;
     private sub;
     constructor(store: MessagingStoreService);
     ngOnInit(): void;

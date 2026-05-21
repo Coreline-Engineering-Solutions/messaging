@@ -10,10 +10,11 @@ import { SidebarSide } from '../../models/messaging.models';
   imports: [CommonModule],
   template: `
     <div
-      *ngIf="!isOpen"
+      *ngIf="!isOpen || isFloating"
       class="floating-btn"
       [class.side-left]="side === 'left'"
       [class.side-right]="side === 'right'"
+      [class.panel-open]="isOpen"
       (click)="toggle()"
     >
       <div class="fab-inner" [class.has-unread]="unreadCount > 0">
@@ -69,6 +70,11 @@ import { SidebarSide } from '../../models/messaging.models';
       animation: pulse 2s infinite;
     }
 
+    .floating-btn.panel-open .fab-inner {
+      background: #0a3d62;
+      border-color: rgba(255, 255, 255, 0.35);
+    }
+
     .ces-logo {
       width: 24px;
       height: 24px;
@@ -102,6 +108,7 @@ export class FloatingButtonComponent implements OnInit, OnDestroy {
   unreadCount = 0;
   side: SidebarSide = 'right';
   isOpen = false;
+  isFloating = false;
 
   private sub!: Subscription;
 
@@ -112,10 +119,12 @@ export class FloatingButtonComponent implements OnInit, OnDestroy {
       this.store.totalUnread,
       this.store.sidebarSide,
       this.store.panelOpen,
-    ]).subscribe(([count, side, open]) => {
+      this.store.panelFloating,
+    ]).subscribe(([count, side, open, floating]) => {
       this.unreadCount = count;
       this.side = side;
       this.isOpen = open;
+      this.isFloating = floating;
     });
   }
 

@@ -317,6 +317,10 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
       min-height: 320px;
     }
 
+    .sidebar.floating:not(.open) {
+      display: none;
+    }
+
     .drag-handle {
       cursor: grab;
       user-select: none;
@@ -511,6 +515,7 @@ export class ChatPanelComponent implements OnInit, OnDestroy {
       try {
         const f = JSON.parse(savedFloat);
         this.isFloating = f.isFloating ?? false;
+        this.store.setPanelFloating(this.isFloating);
         this.floatX = f.x ?? 80;
         this.floatY = f.y ?? 80;
         this.floatWidth = f.w ?? 380;
@@ -641,6 +646,7 @@ export class ChatPanelComponent implements OnInit, OnDestroy {
 
   toggleFloat(): void {
     this.isFloating = !this.isFloating;
+    this.store.setPanelFloating(this.isFloating);
     if (this.isFloating) {
       // Centre the float window on screen when first popping out
       this.floatX = Math.max(20, Math.round((window.innerWidth  - this.floatWidth)  / 2));

@@ -35,6 +35,7 @@ export class MessagingStoreService implements OnDestroy {
   private panelPosition$ = new BehaviorSubject<{ x: number; y: number } | null>(null);
   private panelSize$ = new BehaviorSubject<{ width: number; height: number }>({ width: 380, height: 560 });
   private wasOpenBeforeDrag$ = new BehaviorSubject<boolean>(false);
+  private panelFloating$ = new BehaviorSubject<boolean>(false);
 
   // ── Public observables ──
   readonly inbox = this.inbox$.asObservable();
@@ -51,6 +52,7 @@ export class MessagingStoreService implements OnDestroy {
   readonly panelSize = this.panelSize$.asObservable();
   readonly wasOpenBeforeDrag = this.wasOpenBeforeDrag$.asObservable();
   readonly sidebarSide = this.sidebarSide$.asObservable();
+  readonly panelFloating = this.panelFloating$.asObservable();
 
   private wsSub: Subscription | null = null;
   private destroy$ = new Subject<void>();
@@ -175,6 +177,10 @@ export class MessagingStoreService implements OnDestroy {
     const next = this.sidebarSide$.value === 'right' ? 'left' : 'right';
     this.sidebarSide$.next(next);
     localStorage.setItem('messaging_sidebar_side', next);
+  }
+
+  setPanelFloating(isFloating: boolean): void {
+    this.panelFloating$.next(isFloating);
   }
 
   getSidebarSide(): SidebarSide {

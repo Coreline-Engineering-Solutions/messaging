@@ -23,6 +23,7 @@ export declare class MessagingStoreService implements OnDestroy {
     private panelPosition$;
     private panelSize$;
     private wasOpenBeforeDrag$;
+    private panelFloating$;
     readonly inbox: Observable<InboxItem[]>;
     readonly messagesMap: Observable<Map<string, Message[]>>;
     readonly openChats: Observable<ChatWindow[]>;
@@ -43,6 +44,7 @@ export declare class MessagingStoreService implements OnDestroy {
     }>;
     readonly wasOpenBeforeDrag: Observable<boolean>;
     readonly sidebarSide: Observable<SidebarSide>;
+    readonly panelFloating: Observable<boolean>;
     private wsSub;
     private destroy$;
     private pollTimer;
@@ -69,6 +71,7 @@ export declare class MessagingStoreService implements OnDestroy {
     onButtonDragEnd(buttonX: number, buttonY: number): void;
     setView(view: 'inbox' | 'chat' | 'new-conversation' | 'group-manager' | 'conversation-settings'): void;
     toggleSidebarSide(): void;
+    setPanelFloating(isFloating: boolean): void;
     getSidebarSide(): SidebarSide;
     loadInbox(): void;
     loadVisibleContacts(): void;
