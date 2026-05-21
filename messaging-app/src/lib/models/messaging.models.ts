@@ -34,10 +34,17 @@ export interface InboxItem {
   last_message_at: string;
   unread_count: number;
   is_group?: boolean;
+  has_mention?: boolean;
   participant_count?: number;
   other_participant_id?: string;
   other_participant_name?: string;
   other_participant_email?: string;
+}
+
+export interface MessageReplyPreview {
+  message_id?: string;
+  sender_name?: string;
+  content?: string;
 }
 
 export interface Message {
@@ -59,6 +66,7 @@ export interface Message {
   read_by?: Array<string | number | { contact_id?: string | number; username?: string; name?: string; display_name?: string; email?: string }>;
   read_by_names?: string[];
   parent_message_id?: string;
+  reply_to?: MessageReplyPreview;
   thread_count?: number;
   reactions?: MessageReaction[];
   mentions?: string[];

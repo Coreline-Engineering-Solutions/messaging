@@ -8,21 +8,22 @@ import * as i1$1 from '@angular/common';
 import { CommonModule } from '@angular/common';
 import * as i3 from '@angular/forms';
 import { FormsModule } from '@angular/forms';
-import * as i5 from '@angular/material/icon';
+import * as i4 from '@angular/material/icon';
 import { MatIconModule } from '@angular/material/icon';
 import * as i6 from '@angular/material/button';
 import { MatButtonModule } from '@angular/material/button';
-import * as i8 from '@angular/material/tooltip';
+import * as i7 from '@angular/material/tooltip';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import * as i6$1 from '@angular/material/core';
 import { MatRippleModule, MatNativeDateModule } from '@angular/material/core';
-import * as i7 from '@angular/material/progress-spinner';
+import * as i9 from '@angular/material/progress-spinner';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
-import * as i4 from '@angular/material/menu';
+import * as i5 from '@angular/platform-browser';
+import * as i4$1 from '@angular/material/menu';
 import { MatMenuModule } from '@angular/material/menu';
 import * as i7$1 from '@angular/material/input';
 import { MatInputModule } from '@angular/material/input';
-import * as i8$1 from '@angular/material/form-field';
+import * as i8 from '@angular/material/form-field';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import * as i10 from '@angular/material/datepicker';
 import { MatDatepickerModule } from '@angular/material/datepicker';
@@ -844,8 +845,11 @@ class MessagingStoreService {
     panelFloating$ = new BehaviorSubject(false);
     notificationVolume$ = new BehaviorSubject(Number(localStorage.getItem('messaging_notification_volume') ?? '0.35'));
     notificationsMuted$ = new BehaviorSubject(localStorage.getItem('messaging_notifications_muted') === 'true');
+    messageTextScale$ = new BehaviorSubject(Number(localStorage.getItem('messaging_message_text_scale') ?? '1'));
+    codeTextScale$ = new BehaviorSubject(Number(localStorage.getItem('messaging_code_text_scale') ?? '1'));
     toast$ = new BehaviorSubject(null);
     removedGroupIds$ = new BehaviorSubject(new Set());
+    mentionConversationIds$ = new BehaviorSubject(new Set());
     // ── Public observables ──
     inbox = this.inbox$.asObservable();
     messagesMap = this.messagesMap$.asObservable();
@@ -864,8 +868,11 @@ class MessagingStoreService {
     panelFloating = this.panelFloating$.asObservable();
     notificationVolume = this.notificationVolume$.asObservable();
     notificationsMuted = this.notificationsMuted$.asObservable();
+    messageTextScale = this.messageTextScale$.asObservable();
+    codeTextScale = this.codeTextScale$.asObservable();
     toast = this.toast$.asObservable();
     removedGroupIds = this.removedGroupIds$.asObservable();
+    mentionConversationIds = this.mentionConversationIds$.asObservable();
     wsSub = null;
     destroy$ = new Subject();
     pollTimer = null;
@@ -910,6 +917,7 @@ class MessagingStoreService {
         this.deletingConversationIds.clear();
         this.removalToastShown.clear();
         this.removedGroupIds$.next(new Set());
+        this.mentionConversationIds$.next(new Set());
         this.toast$.next(null);
     }
     // ── Polling fallback (inbox only - messages rely on WebSocket) ──
@@ -998,8 +1006,36 @@ class MessagingStoreService {
         this.notificationsMuted$.next(muted);
         localStorage.setItem('messaging_notifications_muted', String(muted));
     }
+    setMessageTextScale(scale) {
+        const normalized = Math.max(0.8, Math.min(1.5, Number(scale)));
+        this.messageTextScale$.next(normalized);
+        localStorage.setItem('messaging_message_text_scale', String(normalized));
+    }
+    setCodeTextScale(scale) {
+        const normalized = Math.max(0.8, Math.min(1.5, Number(scale)));
+        this.codeTextScale$.next(normalized);
+        localStorage.setItem('messaging_code_text_scale', String(normalized));
+    }
     testNotificationSound() {
         this.playSoftNotificationSound(true);
+    }
+    prepareOutgoingMessageContent(content, replyTo) {
+        const body = String(content || '').trim();
+        if (!replyTo)
+            return body;
+        const reply = this.createReplyPreview(replyTo);
+        const sender = (reply.sender_name || 'message').replace(/\]/g, '').trim();
+        const excerpt = this.replyExcerpt(reply.content || '');
+        return `[Reply to ${sender}]\n> ${excerpt}\n\n${body}`;
+    }
+    createReplyPreview(message) {
+        return {
+            message_id: String(message.message_id || ''),
+            sender_name: getMessageSenderName(message) !== 'Unknown'
+                ? getMessageSenderName(message)
+                : this.getContactNameById(message.sender_id),
+            content: this.replyExcerpt(String(message.content || '')),
+        };
     }
     showToast(message, type = 'info', durationMs = 3000) {
         if (this.toastTimer) {
@@ -1024,10 +1060,14 @@ class MessagingStoreService {
             next: (items) => {
                 const mapped = items.map(item => {
                     const isGroup = item.is_group === true || item.is_group === 'True';
+                    const conversationId = String(item.conversation_id);
+                    const preview = this.replyBodyText(item.last_message_preview || '');
+                    const hasMention = this.mentionConversationIds$.value.has(conversationId) ||
+                        (Number(item.unread_count || 0) > 0 && this.messageTextMentionsCurrentUser(preview));
                     if (!isGroup && !item.name && item.other_participant_name) {
-                        return { ...item, name: item.other_participant_name, is_group: false };
+                        return { ...item, name: item.other_participant_name, last_message_preview: preview, is_group: false, has_mention: hasMention };
                     }
-                    return { ...item, is_group: isGroup };
+                    return { ...item, last_message_preview: preview, is_group: isGroup, has_mention: hasMention };
                 }).filter(item => !this.deletingConversationIds.has(String(item.conversation_id)) &&
                     !this.removedGroupIds$.value.has(String(item.conversation_id)));
                 this.inbox$.next(mapped);
@@ -1155,7 +1195,7 @@ class MessagingStoreService {
             },
         });
     }
-    sendMessage(conversationId, content, messageType = 'TEXT') {
+    sendMessage(conversationId, content, messageType = 'TEXT', options) {
         const contactId = this.auth.contactId;
         if (!contactId)
             return;
@@ -1169,6 +1209,8 @@ class MessagingStoreService {
         }
         if (!conversationId)
             return;
+        const outgoingContent = this.prepareOutgoingMessageContent(content, options?.replyTo || null);
+        const replyTo = options?.replyTo ? this.createReplyPreview(options.replyTo) : undefined;
         const tempMessageId = 'temp-' + Date.now();
         const optimistic = {
             message_id: tempMessageId,
@@ -1177,17 +1219,19 @@ class MessagingStoreService {
             sender_name: 'You',
             message_type: messageType,
             content,
+            reply_to: replyTo,
+            mentions: options?.mentions,
             created_at: new Date().toISOString(),
             is_read: false,
         };
         this.appendMessage(optimistic);
-        this.api.sendMessage(conversationId, contactId, content, messageType).subscribe({
+        this.api.sendMessage(conversationId, contactId, outgoingContent, messageType).subscribe({
             next: (res) => {
                 const realId = res?.message_id ?? res?.id ?? res?.messageId;
                 if (realId == null || String(realId).startsWith('temp-')) {
                     return;
                 }
-                const pickedContent = this.coalesceMessageText(res, optimistic.content);
+                const pickedContent = this.coalesceMessageText(res, outgoingContent || optimistic.content);
                 const merged = this.normalizeMessageShape({
                     ...optimistic,
                     ...res,
@@ -1195,6 +1239,8 @@ class MessagingStoreService {
                     conversation_id: conversationId,
                     message_type: messageType === 'SYSTEM' ? 'SYSTEM' : res?.message_type ?? optimistic.message_type,
                     content: pickedContent,
+                    reply_to: replyTo ?? res?.reply_to,
+                    mentions: options?.mentions ?? res?.mentions,
                 });
                 const map = new Map(this.messagesMap$.value);
                 const msgs = [...(map.get(conversationId) || [])];
@@ -1295,9 +1341,10 @@ class MessagingStoreService {
             return;
         this.api.markConversationRead(conversationId, contactId).subscribe({
             next: () => {
-                const items = this.inbox$.value.map((item) => item.conversation_id === conversationId ? { ...item, unread_count: 0 } : item);
+                const items = this.inbox$.value.map((item) => item.conversation_id === conversationId ? { ...item, unread_count: 0, has_mention: false } : item);
                 this.inbox$.next(items);
                 this.recalcUnread(items);
+                this.setConversationMention(conversationId, false);
             },
             error: () => { },
         });
@@ -1582,6 +1629,7 @@ class MessagingStoreService {
             }
         }
         const isFromOther = String(message.sender_id) !== myContactId;
+        const mentionsMe = isFromOther && this.messageMentionsCurrentUser(message);
         const duplicateIdx = existing.findIndex((m) => String(m.message_id) === String(message.message_id) ||
             (String(m.sender_id) === String(message.sender_id) &&
                 String(m.content ?? '') === String(message.content ?? '') &&
@@ -1604,6 +1652,9 @@ class MessagingStoreService {
         if (this.activeConversationId$.value !== message.conversation_id) {
             if (isFromOther && !isDuplicate) {
                 this.incrementUnread(message.conversation_id);
+                if (mentionsMe) {
+                    this.setConversationMention(message.conversation_id, true);
+                }
             }
         }
         else {
@@ -1665,10 +1716,12 @@ class MessagingStoreService {
         const preview = text || '[Image]';
         const items = this.inbox$.value.map((item) => {
             if (item.conversation_id === message.conversation_id) {
+                const mentioned = item.has_mention || this.mentionConversationIds$.value.has(String(item.conversation_id));
                 return {
                     ...item,
                     last_message_preview: preview,
                     last_message_at: message.created_at,
+                    has_mention: mentioned,
                 };
             }
             return item;
@@ -1686,6 +1739,72 @@ class MessagingStoreService {
                 return String(c).trim();
         }
         return typeof fallback === 'string' ? fallback : String(fallback ?? '');
+    }
+    parseReplyContent(content) {
+        const value = String(content || '');
+        const match = value.match(/^\[Reply to ([^\]]+)\]\n> ([^\n]*)\n\n([\s\S]*)$/);
+        if (!match)
+            return null;
+        return {
+            reply: {
+                sender_name: match[1].trim(),
+                content: match[2].trim(),
+            },
+            body: match[3],
+        };
+    }
+    replyBodyText(content) {
+        return this.parseReplyContent(content)?.body ?? String(content || '');
+    }
+    replyExcerpt(content) {
+        const parsed = this.parseReplyContent(content);
+        const base = (parsed?.body ?? content).replace(/\s+/g, ' ').trim();
+        return base.length > 120 ? `${base.slice(0, 117)}...` : base || 'Attachment';
+    }
+    currentMentionTokens() {
+        const current = this.auth.currentContact;
+        const values = [
+            current?.username,
+            current?.email?.split('@')[0],
+            current?.first_name,
+            current?.last_name,
+            current?.email,
+        ];
+        return values
+            .map((value) => String(value || '').trim().toLowerCase())
+            .filter(Boolean)
+            .map((value) => value.replace(/^@/, ''));
+    }
+    messageTextMentionsCurrentUser(content) {
+        const tokens = this.currentMentionTokens();
+        if (!tokens.length)
+            return false;
+        const mentions = Array.from(String(content || '').matchAll(/(^|[^a-zA-Z0-9._-])@([a-zA-Z0-9._-]+)/g))
+            .map((match) => match[2].toLowerCase());
+        return mentions.some((mention) => tokens.includes(mention));
+    }
+    messageMentionsCurrentUser(message) {
+        const myId = String(this.auth.contactId || '');
+        const explicitMentions = Array.isArray(message.mentions)
+            ? message.mentions.map((id) => String(id))
+            : [];
+        return (!!myId && explicitMentions.includes(myId)) ||
+            this.messageTextMentionsCurrentUser(String(message.content || ''));
+    }
+    setConversationMention(conversationId, hasMention) {
+        const id = String(conversationId || '');
+        if (!id)
+            return;
+        const next = new Set(this.mentionConversationIds$.value);
+        if (hasMention) {
+            next.add(id);
+        }
+        else {
+            next.delete(id);
+        }
+        this.mentionConversationIds$.next(next);
+        const items = this.inbox$.value.map((item) => String(item.conversation_id) === id ? { ...item, has_mention: hasMention } : item);
+        this.inbox$.next(items);
     }
     messageLooksLikeMedia(m) {
         const t = m.message_type;
@@ -1742,6 +1861,14 @@ class MessagingStoreService {
             pinned_at: raw?.pinned_at,
             pinned_by: raw?.pinned_by,
         };
+        const parsedReply = this.parseReplyContent(String(base.content || ''));
+        if (parsedReply) {
+            base.content = parsedReply.body;
+            base.reply_to = raw?.reply_to ?? raw?.replyTo ?? parsedReply.reply;
+        }
+        else {
+            base.reply_to = raw?.reply_to ?? raw?.replyTo;
+        }
         const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
         const toStringArray = (value) => {
             if (Array.isArray(value)) {
@@ -1873,19 +2000,17 @@ class MessagingStoreService {
                 ? [String(raw.filename)]
                 : raw?.file_name
                     ? [String(raw.file_name)]
-                    : base.content && !uuidRe.test(contentTrim)
-                        ? [String(base.content)]
-                        : [];
+                    : [];
         const mimeTypes = toStringArray(raw?.mime_types).length
             ? toStringArray(raw?.mime_types)
             : toStringArray(raw?.mimeTypes);
         if (attachmentIds.length > 0 || filenames.length > 0) {
-            const fallbackMime = raw?.mime_type ?? raw?.attachment_mime_type;
+            const fallbackMime = raw?.mime_type ?? raw?.attachment_mime_type ?? (base.message_type === 'IMAGE' ? 'image/*' : undefined);
             const urlFallback = raw?.file_url ?? raw?.url ?? raw?.media_url ?? raw?.mediaUrl;
             const ids = attachmentIds.length > 0 ? attachmentIds : [];
             const built = ids.map((id, idx) => ({
                 file_id: id,
-                filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
+                filename: filenames[idx] || filenames[0] || (base.message_type === 'IMAGE' ? `Image ${idx + 1}` : `Attachment ${idx + 1}`),
                 mime_type: mimeTypes[idx] || fallbackMime,
                 url: urlFallback,
             }));
@@ -2300,6 +2425,8 @@ class InboxListComponent {
     activeTab = 'all';
     notificationVolume = 0.35;
     notificationsMuted = false;
+    messageTextScale = 1;
+    codeTextScale = 1;
     contextMenu = null;
     tabStorageKey = 'messaging_inbox_active_tab';
     sub;
@@ -2312,6 +2439,8 @@ class InboxListComponent {
         this.sub.add(this.store.inbox.subscribe((items) => (this.inbox = items)));
         this.sub.add(this.store.notificationVolume.subscribe((volume) => (this.notificationVolume = volume)));
         this.sub.add(this.store.notificationsMuted.subscribe((muted) => (this.notificationsMuted = muted)));
+        this.sub.add(this.store.messageTextScale.subscribe((scale) => (this.messageTextScale = scale)));
+        this.sub.add(this.store.codeTextScale.subscribe((scale) => (this.codeTextScale = scale)));
     }
     ngOnDestroy() {
         this.sub?.unsubscribe();
@@ -2366,6 +2495,12 @@ class InboxListComponent {
         if (!this.notificationsMuted && this.notificationVolume > 0) {
             this.store.testNotificationSound();
         }
+    }
+    onMessageTextScaleChange(value) {
+        this.store.setMessageTextScale(Number(value));
+    }
+    onCodeTextScaleChange(value) {
+        this.store.setCodeTextScale(Number(value));
     }
     openConversation(item) {
         this.store.openConversation(item.conversation_id, item.name || 'Chat', item.is_group);
@@ -2454,6 +2589,12 @@ class InboxListComponent {
             </div>
             <div class="info-bottom">
               <span class="conv-preview">{{ item.last_message_preview || 'No messages yet' }}</span>
+              <span
+                *ngIf="item.has_mention"
+                class="mention-badge"
+                matTooltip="You were mentioned"
+                matTooltipPosition="above"
+              >&#64;</span>
               <span *ngIf="item.unread_count > 0" class="unread-badge">
                 {{ item.unread_count > 99 ? '99+' : item.unread_count }}
               </span>
@@ -2515,6 +2656,54 @@ class InboxListComponent {
               (change)="previewNotificationSound()"
             />
           </div>
+
+          <div class="settings-card">
+            <div class="settings-header">
+              <div class="settings-icon display-icon">
+                <mat-icon>text_fields</mat-icon>
+              </div>
+              <div>
+                <h4>Display Size</h4>
+                <p>Adjust message text and programming block sizes.</p>
+              </div>
+            </div>
+
+            <label class="volume-label" for="messaging-message-size-slider">
+              Message size
+              <span>{{ (messageTextScale * 100) | number:'1.0-0' }}%</span>
+            </label>
+            <input
+              id="messaging-message-size-slider"
+              type="range"
+              min="0.8"
+              max="1.5"
+              step="0.05"
+              class="settings-volume"
+              [(ngModel)]="messageTextScale"
+              (ngModelChange)="onMessageTextScaleChange($event)"
+            />
+            <div class="settings-preview message-preview" [style.font-size.px]="13 * messageTextScale">
+              This is how normal message text will appear in chat.
+            </div>
+
+            <label class="volume-label" for="messaging-code-size-slider">
+              Programming size
+              <span>{{ (codeTextScale * 100) | number:'1.0-0' }}%</span>
+            </label>
+            <input
+              id="messaging-code-size-slider"
+              type="range"
+              min="0.8"
+              max="1.5"
+              step="0.05"
+              class="settings-volume"
+              [(ngModel)]="codeTextScale"
+              (ngModelChange)="onCodeTextScaleChange($event)"
+            />
+            <pre class="settings-preview code-preview" [style.font-size.px]="12 * codeTextScale"><code>SELECT ticket_ref, status
+FROM logging.ticket
+WHERE status = 'Open';</code></pre>
+          </div>
         </div>
       </div>
 
@@ -2524,40 +2713,50 @@ class InboxListComponent {
           class="inbox-tab"
           [class.active]="activeTab === 'all'"
           (click)="setActiveTab('all')"
+          matTooltip="All"
+          matTooltipPosition="above"
         >
-          All
+          <mat-icon>forum</mat-icon>
         </button>
         <button
           type="button"
           class="inbox-tab"
           [class.active]="activeTab === 'direct'"
           (click)="setActiveTab('direct')"
+          matTooltip="Chats"
+          matTooltipPosition="above"
         >
-          Chats
+          <mat-icon>chat</mat-icon>
         </button>
         <button
           type="button"
           class="inbox-tab"
           [class.active]="activeTab === 'groups'"
           (click)="setActiveTab('groups')"
+          matTooltip="Groups"
+          matTooltipPosition="above"
         >
-          Groups
+          <mat-icon>groups</mat-icon>
         </button>
         <button
           type="button"
           class="inbox-tab"
           [class.active]="activeTab === 'projects'"
           (click)="setActiveTab('projects')"
+          matTooltip="Projects"
+          matTooltipPosition="above"
         >
-          Projects
+          <mat-icon>workspaces</mat-icon>
         </button>
         <button
           type="button"
           class="inbox-tab"
           [class.active]="activeTab === 'settings'"
           (click)="setActiveTab('settings')"
+          matTooltip="Settings"
+          matTooltipPosition="above"
         >
-          Settings
+          <mat-icon>settings</mat-icon>
         </button>
       </div>
 
@@ -2579,7 +2778,7 @@ class InboxListComponent {
       </div>
       <div *ngIf="contextMenu" class="ctx-backdrop" (click)="closeContextMenu()"></div>
     </div>
-  `, isInline: true, styles: [".inbox-container{display:flex;flex-direction:column;height:100%;background:transparent;container-type:inline-size}.search-bar{display:flex;align-items:center;margin:8px 16px;padding:8px 12px;background:transparent;border-radius:10px}.search-icon{color:#ffffffb3;font-size:18px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#fff9}.inbox-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;padding:10px 16px 12px;border-top:1px solid rgba(255,255,255,.1);flex-shrink:0}.inbox-tab{min-width:0;border:1px solid rgba(255,255,255,.14);background:#ffffff0f;color:#ffffffb8;border-radius:999px;padding:7px 4px;font-size:clamp(9px,3.1cqw,11px);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;text-align:center;transition:background .15s,border-color .15s,color .15s}.inbox-tab:hover{background:#ffffff1f;color:#fff}.inbox-tab.active{background:#1a5fa859;border-color:#7fb4ff73;color:#fff}@container (max-width: 330px){.inbox-tabs{gap:3px;padding:8px 8px 10px}.inbox-tab{padding:6px 2px;letter-spacing:-.2px}}@container (max-width: 280px){.inbox-tabs{gap:2px;padding-left:6px;padding-right:6px}.inbox-tab{font-size:8.5px}}.conversation-list{flex:1;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}.conversation-list::-webkit-scrollbar{display:none}.conversation-item{display:flex;align-items:center;padding:12px 16px;cursor:pointer;transition:background .15s;gap:12px}.conversation-item:hover{background:#ffffff1a}.conversation-item.has-unread{background:#ffffff26}.avatar{width:48px;height:48px;border-radius:50%;background:#0d2540;display:flex;align-items:center;justify-content:center;flex-shrink:0}.avatar mat-icon{color:#ffffffb3;font-size:24px}.group-avatar{background:#0a1f38}.group-avatar mat-icon{color:#ffffffb3}.conversation-info{flex:1;min-width:0}.info-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px}.conv-name{font-weight:600;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}.conv-time{font-size:11px;color:#ffffffb3;flex-shrink:0;margin-left:8px}.info-bottom{display:flex;justify-content:space-between;align-items:center}.conv-preview{font-size:13px;color:#ffffffb3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}.has-unread .conv-name{color:#fff}.has-unread .conv-preview{color:#ffffffe6;font-weight:500}.unread-badge{background:#1a5fa8;color:#fff;border-radius:10px;min-width:20px;height:20px;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;padding:0 6px;flex-shrink:0}.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;color:#9ca3af}.empty-state mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:12px}.empty-state p{margin:0 0 16px;font-size:14px}.projects-state p{margin-bottom:0}.settings-panel{padding:16px;color:#fff}.settings-card{border-radius:14px;background:#ffffff12;border:1px solid rgba(255,255,255,.12);padding:16px;box-shadow:0 10px 28px #0000002e}.settings-header{display:flex;gap:12px;align-items:flex-start;margin-bottom:16px}.settings-icon{width:36px;height:36px;border-radius:10px;background:#1a5fa859;display:flex;align-items:center;justify-content:center;flex-shrink:0}.settings-icon mat-icon{color:#bfdbfe}.settings-header h4{margin:0 0 4px;font-size:15px;font-weight:700}.settings-header p{margin:0;color:#ffffffa6;font-size:12px;line-height:1.4}.settings-toggle{width:100%;justify-content:center;border-radius:10px;color:#fff!important;border-color:#fff3!important;margin-bottom:16px}.settings-toggle mat-icon{margin-right:8px;font-size:18px;width:18px;height:18px}.volume-label{display:flex;justify-content:space-between;align-items:center;color:#ffffffc7;font-size:12px;font-weight:600;margin-bottom:8px}.settings-volume{width:100%;accent-color:#7fb4ff;cursor:pointer}.context-menu{position:fixed;z-index:10001;background:#071d30;border-radius:8px;padding:4px 0;box-shadow:0 8px 24px #0000004d;min-width:200px}.ctx-item{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;color:#ffffffe6;font-size:13px;transition:background .15s}.ctx-item:hover{background:#ffffff1a}.ctx-item mat-icon{font-size:18px;width:18px;height:18px}.ctx-danger{color:#f87171}.ctx-danger:hover{background:#f8717126}.ctx-backdrop{position:fixed;inset:0;z-index:10000}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "pipe", type: i1$1.DecimalPipe, name: "number" }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.RangeValueAccessor, selector: "input[type=range][formControlName],input[type=range][formControl],input[type=range][ngModel]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6$1.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }] });
+  `, isInline: true, styles: [".inbox-container{display:flex;flex-direction:column;height:100%;background:transparent;container-type:inline-size}.search-bar{display:flex;align-items:center;margin:8px 16px;padding:8px 12px;background:transparent;border-radius:10px}.search-icon{color:#ffffffb3;font-size:18px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#fff9}.inbox-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;padding:10px 16px 12px;border-top:1px solid rgba(255,255,255,.1);flex-shrink:0}.inbox-tab{min-width:0;border:1px solid rgba(255,255,255,.14);background:#ffffff0f;color:#ffffffb8;border-radius:999px;padding:6px 4px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s,border-color .15s,color .15s}.inbox-tab mat-icon{font-size:clamp(17px,6cqw,21px);width:clamp(17px,6cqw,21px);height:clamp(17px,6cqw,21px);line-height:clamp(17px,6cqw,21px)}.inbox-tab:hover{background:#ffffff1f;color:#fff}.inbox-tab.active{background:#1a5fa859;border-color:#7fb4ff73;color:#fff}@container (max-width: 330px){.inbox-tabs{gap:3px;padding:8px 8px 10px}.inbox-tab{padding:6px 2px;letter-spacing:-.2px}}@container (max-width: 280px){.inbox-tabs{gap:2px;padding-left:6px;padding-right:6px}.inbox-tab{font-size:8.5px}}.conversation-list{flex:1;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}.conversation-list::-webkit-scrollbar{display:none}.conversation-item{display:flex;align-items:center;padding:12px 16px;cursor:pointer;transition:background .15s;gap:12px}.conversation-item:hover{background:#ffffff1a}.conversation-item.has-unread{background:#ffffff26}.avatar{width:48px;height:48px;border-radius:50%;background:#0d2540;display:flex;align-items:center;justify-content:center;flex-shrink:0}.avatar mat-icon{color:#ffffffb3;font-size:24px}.group-avatar{background:#0a1f38}.group-avatar mat-icon{color:#ffffffb3}.conversation-info{flex:1;min-width:0}.info-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px}.conv-name{font-weight:600;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}.conv-time{font-size:11px;color:#ffffffb3;flex-shrink:0;margin-left:8px}.info-bottom{display:flex;justify-content:space-between;align-items:center;gap:6px}.conv-preview{font-size:13px;color:#ffffffb3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}.has-unread .conv-name{color:#fff}.has-unread .conv-preview{color:#ffffffe6;font-weight:500}.unread-badge{background:#1a5fa8;color:#fff;border-radius:10px;min-width:20px;height:20px;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;padding:0 6px;flex-shrink:0}.mention-badge{width:20px;height:20px;border-radius:999px;background:#7fb4ff33;border:1px solid rgba(127,180,255,.55);color:#bfdbfe;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0;margin-left:6px;box-shadow:0 0 0 2px #7fb4ff0f}.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;color:#9ca3af}.empty-state mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:12px}.empty-state p{margin:0 0 16px;font-size:14px}.projects-state p{margin-bottom:0}.settings-panel{padding:16px;color:#fff;display:flex;flex-direction:column;gap:12px}.settings-card{border-radius:14px;background:#ffffff12;border:1px solid rgba(255,255,255,.12);padding:16px;box-shadow:0 10px 28px #0000002e}.settings-header{display:flex;gap:12px;align-items:flex-start;margin-bottom:16px}.settings-icon{width:36px;height:36px;border-radius:10px;background:#1a5fa859;display:flex;align-items:center;justify-content:center;flex-shrink:0}.settings-icon mat-icon{color:#bfdbfe}.settings-icon.display-icon{background:#86efac24}.settings-icon.display-icon mat-icon{color:#bbf7d0}.settings-header h4{margin:0 0 4px;font-size:15px;font-weight:700}.settings-header p{margin:0;color:#ffffffa6;font-size:12px;line-height:1.4}.settings-toggle{width:100%;justify-content:center;border-radius:10px;color:#fff!important;border-color:#fff3!important;margin-bottom:16px}.settings-toggle mat-icon{margin-right:8px;font-size:18px;width:18px;height:18px}.volume-label{display:flex;justify-content:space-between;align-items:center;color:#ffffffc7;font-size:12px;font-weight:600;margin-bottom:8px}.settings-volume{width:100%;accent-color:#7fb4ff;cursor:pointer;margin-bottom:12px}.settings-preview{margin:0 0 16px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:#ffffff0f;color:#f5f7ff;box-sizing:border-box}.message-preview{padding:9px 11px;line-height:1.35}.code-preview{padding:10px 11px;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;line-height:1.45;white-space:pre-wrap;color:#dbeafe;background:#061827;margin-bottom:0}.context-menu{position:fixed;z-index:10001;background:#071d30;border-radius:8px;padding:4px 0;box-shadow:0 8px 24px #0000004d;min-width:200px}.ctx-item{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;color:#ffffffe6;font-size:13px;transition:background .15s}.ctx-item:hover{background:#ffffff1a}.ctx-item mat-icon{font-size:18px;width:18px;height:18px}.ctx-danger{color:#f87171}.ctx-danger:hover{background:#f8717126}.ctx-backdrop{position:fixed;inset:0;z-index:10000}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "pipe", type: i1$1.DecimalPipe, name: "number" }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.RangeValueAccessor, selector: "input[type=range][formControlName],input[type=range][formControl],input[type=range][ngModel]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6$1.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: InboxListComponent, decorators: [{
             type: Component,
@@ -2614,6 +2813,12 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
             </div>
             <div class="info-bottom">
               <span class="conv-preview">{{ item.last_message_preview || 'No messages yet' }}</span>
+              <span
+                *ngIf="item.has_mention"
+                class="mention-badge"
+                matTooltip="You were mentioned"
+                matTooltipPosition="above"
+              >&#64;</span>
               <span *ngIf="item.unread_count > 0" class="unread-badge">
                 {{ item.unread_count > 99 ? '99+' : item.unread_count }}
               </span>
@@ -2675,6 +2880,54 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
               (change)="previewNotificationSound()"
             />
           </div>
+
+          <div class="settings-card">
+            <div class="settings-header">
+              <div class="settings-icon display-icon">
+                <mat-icon>text_fields</mat-icon>
+              </div>
+              <div>
+                <h4>Display Size</h4>
+                <p>Adjust message text and programming block sizes.</p>
+              </div>
+            </div>
+
+            <label class="volume-label" for="messaging-message-size-slider">
+              Message size
+              <span>{{ (messageTextScale * 100) | number:'1.0-0' }}%</span>
+            </label>
+            <input
+              id="messaging-message-size-slider"
+              type="range"
+              min="0.8"
+              max="1.5"
+              step="0.05"
+              class="settings-volume"
+              [(ngModel)]="messageTextScale"
+              (ngModelChange)="onMessageTextScaleChange($event)"
+            />
+            <div class="settings-preview message-preview" [style.font-size.px]="13 * messageTextScale">
+              This is how normal message text will appear in chat.
+            </div>
+
+            <label class="volume-label" for="messaging-code-size-slider">
+              Programming size
+              <span>{{ (codeTextScale * 100) | number:'1.0-0' }}%</span>
+            </label>
+            <input
+              id="messaging-code-size-slider"
+              type="range"
+              min="0.8"
+              max="1.5"
+              step="0.05"
+              class="settings-volume"
+              [(ngModel)]="codeTextScale"
+              (ngModelChange)="onCodeTextScaleChange($event)"
+            />
+            <pre class="settings-preview code-preview" [style.font-size.px]="12 * codeTextScale"><code>SELECT ticket_ref, status
+FROM logging.ticket
+WHERE status = 'Open';</code></pre>
+          </div>
         </div>
       </div>
 
@@ -2684,40 +2937,50 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
           class="inbox-tab"
           [class.active]="activeTab === 'all'"
           (click)="setActiveTab('all')"
+          matTooltip="All"
+          matTooltipPosition="above"
         >
-          All
+          <mat-icon>forum</mat-icon>
         </button>
         <button
           type="button"
           class="inbox-tab"
           [class.active]="activeTab === 'direct'"
           (click)="setActiveTab('direct')"
+          matTooltip="Chats"
+          matTooltipPosition="above"
         >
-          Chats
+          <mat-icon>chat</mat-icon>
         </button>
         <button
           type="button"
           class="inbox-tab"
           [class.active]="activeTab === 'groups'"
           (click)="setActiveTab('groups')"
+          matTooltip="Groups"
+          matTooltipPosition="above"
         >
-          Groups
+          <mat-icon>groups</mat-icon>
         </button>
         <button
           type="button"
           class="inbox-tab"
           [class.active]="activeTab === 'projects'"
           (click)="setActiveTab('projects')"
+          matTooltip="Projects"
+          matTooltipPosition="above"
         >
-          Projects
+          <mat-icon>workspaces</mat-icon>
         </button>
         <button
           type="button"
           class="inbox-tab"
           [class.active]="activeTab === 'settings'"
           (click)="setActiveTab('settings')"
+          matTooltip="Settings"
+          matTooltipPosition="above"
         >
-          Settings
+          <mat-icon>settings</mat-icon>
         </button>
       </div>
 
@@ -2739,18 +3002,23 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
       </div>
       <div *ngIf="contextMenu" class="ctx-backdrop" (click)="closeContextMenu()"></div>
     </div>
-  `, styles: [".inbox-container{display:flex;flex-direction:column;height:100%;background:transparent;container-type:inline-size}.search-bar{display:flex;align-items:center;margin:8px 16px;padding:8px 12px;background:transparent;border-radius:10px}.search-icon{color:#ffffffb3;font-size:18px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#fff9}.inbox-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;padding:10px 16px 12px;border-top:1px solid rgba(255,255,255,.1);flex-shrink:0}.inbox-tab{min-width:0;border:1px solid rgba(255,255,255,.14);background:#ffffff0f;color:#ffffffb8;border-radius:999px;padding:7px 4px;font-size:clamp(9px,3.1cqw,11px);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;text-align:center;transition:background .15s,border-color .15s,color .15s}.inbox-tab:hover{background:#ffffff1f;color:#fff}.inbox-tab.active{background:#1a5fa859;border-color:#7fb4ff73;color:#fff}@container (max-width: 330px){.inbox-tabs{gap:3px;padding:8px 8px 10px}.inbox-tab{padding:6px 2px;letter-spacing:-.2px}}@container (max-width: 280px){.inbox-tabs{gap:2px;padding-left:6px;padding-right:6px}.inbox-tab{font-size:8.5px}}.conversation-list{flex:1;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}.conversation-list::-webkit-scrollbar{display:none}.conversation-item{display:flex;align-items:center;padding:12px 16px;cursor:pointer;transition:background .15s;gap:12px}.conversation-item:hover{background:#ffffff1a}.conversation-item.has-unread{background:#ffffff26}.avatar{width:48px;height:48px;border-radius:50%;background:#0d2540;display:flex;align-items:center;justify-content:center;flex-shrink:0}.avatar mat-icon{color:#ffffffb3;font-size:24px}.group-avatar{background:#0a1f38}.group-avatar mat-icon{color:#ffffffb3}.conversation-info{flex:1;min-width:0}.info-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px}.conv-name{font-weight:600;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}.conv-time{font-size:11px;color:#ffffffb3;flex-shrink:0;margin-left:8px}.info-bottom{display:flex;justify-content:space-between;align-items:center}.conv-preview{font-size:13px;color:#ffffffb3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}.has-unread .conv-name{color:#fff}.has-unread .conv-preview{color:#ffffffe6;font-weight:500}.unread-badge{background:#1a5fa8;color:#fff;border-radius:10px;min-width:20px;height:20px;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;padding:0 6px;flex-shrink:0}.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;color:#9ca3af}.empty-state mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:12px}.empty-state p{margin:0 0 16px;font-size:14px}.projects-state p{margin-bottom:0}.settings-panel{padding:16px;color:#fff}.settings-card{border-radius:14px;background:#ffffff12;border:1px solid rgba(255,255,255,.12);padding:16px;box-shadow:0 10px 28px #0000002e}.settings-header{display:flex;gap:12px;align-items:flex-start;margin-bottom:16px}.settings-icon{width:36px;height:36px;border-radius:10px;background:#1a5fa859;display:flex;align-items:center;justify-content:center;flex-shrink:0}.settings-icon mat-icon{color:#bfdbfe}.settings-header h4{margin:0 0 4px;font-size:15px;font-weight:700}.settings-header p{margin:0;color:#ffffffa6;font-size:12px;line-height:1.4}.settings-toggle{width:100%;justify-content:center;border-radius:10px;color:#fff!important;border-color:#fff3!important;margin-bottom:16px}.settings-toggle mat-icon{margin-right:8px;font-size:18px;width:18px;height:18px}.volume-label{display:flex;justify-content:space-between;align-items:center;color:#ffffffc7;font-size:12px;font-weight:600;margin-bottom:8px}.settings-volume{width:100%;accent-color:#7fb4ff;cursor:pointer}.context-menu{position:fixed;z-index:10001;background:#071d30;border-radius:8px;padding:4px 0;box-shadow:0 8px 24px #0000004d;min-width:200px}.ctx-item{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;color:#ffffffe6;font-size:13px;transition:background .15s}.ctx-item:hover{background:#ffffff1a}.ctx-item mat-icon{font-size:18px;width:18px;height:18px}.ctx-danger{color:#f87171}.ctx-danger:hover{background:#f8717126}.ctx-backdrop{position:fixed;inset:0;z-index:10000}\n"] }]
+  `, styles: [".inbox-container{display:flex;flex-direction:column;height:100%;background:transparent;container-type:inline-size}.search-bar{display:flex;align-items:center;margin:8px 16px;padding:8px 12px;background:transparent;border-radius:10px}.search-icon{color:#ffffffb3;font-size:18px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#fff9}.inbox-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;padding:10px 16px 12px;border-top:1px solid rgba(255,255,255,.1);flex-shrink:0}.inbox-tab{min-width:0;border:1px solid rgba(255,255,255,.14);background:#ffffff0f;color:#ffffffb8;border-radius:999px;padding:6px 4px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s,border-color .15s,color .15s}.inbox-tab mat-icon{font-size:clamp(17px,6cqw,21px);width:clamp(17px,6cqw,21px);height:clamp(17px,6cqw,21px);line-height:clamp(17px,6cqw,21px)}.inbox-tab:hover{background:#ffffff1f;color:#fff}.inbox-tab.active{background:#1a5fa859;border-color:#7fb4ff73;color:#fff}@container (max-width: 330px){.inbox-tabs{gap:3px;padding:8px 8px 10px}.inbox-tab{padding:6px 2px;letter-spacing:-.2px}}@container (max-width: 280px){.inbox-tabs{gap:2px;padding-left:6px;padding-right:6px}.inbox-tab{font-size:8.5px}}.conversation-list{flex:1;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}.conversation-list::-webkit-scrollbar{display:none}.conversation-item{display:flex;align-items:center;padding:12px 16px;cursor:pointer;transition:background .15s;gap:12px}.conversation-item:hover{background:#ffffff1a}.conversation-item.has-unread{background:#ffffff26}.avatar{width:48px;height:48px;border-radius:50%;background:#0d2540;display:flex;align-items:center;justify-content:center;flex-shrink:0}.avatar mat-icon{color:#ffffffb3;font-size:24px}.group-avatar{background:#0a1f38}.group-avatar mat-icon{color:#ffffffb3}.conversation-info{flex:1;min-width:0}.info-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px}.conv-name{font-weight:600;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}.conv-time{font-size:11px;color:#ffffffb3;flex-shrink:0;margin-left:8px}.info-bottom{display:flex;justify-content:space-between;align-items:center;gap:6px}.conv-preview{font-size:13px;color:#ffffffb3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}.has-unread .conv-name{color:#fff}.has-unread .conv-preview{color:#ffffffe6;font-weight:500}.unread-badge{background:#1a5fa8;color:#fff;border-radius:10px;min-width:20px;height:20px;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;padding:0 6px;flex-shrink:0}.mention-badge{width:20px;height:20px;border-radius:999px;background:#7fb4ff33;border:1px solid rgba(127,180,255,.55);color:#bfdbfe;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0;margin-left:6px;box-shadow:0 0 0 2px #7fb4ff0f}.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;color:#9ca3af}.empty-state mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:12px}.empty-state p{margin:0 0 16px;font-size:14px}.projects-state p{margin-bottom:0}.settings-panel{padding:16px;color:#fff;display:flex;flex-direction:column;gap:12px}.settings-card{border-radius:14px;background:#ffffff12;border:1px solid rgba(255,255,255,.12);padding:16px;box-shadow:0 10px 28px #0000002e}.settings-header{display:flex;gap:12px;align-items:flex-start;margin-bottom:16px}.settings-icon{width:36px;height:36px;border-radius:10px;background:#1a5fa859;display:flex;align-items:center;justify-content:center;flex-shrink:0}.settings-icon mat-icon{color:#bfdbfe}.settings-icon.display-icon{background:#86efac24}.settings-icon.display-icon mat-icon{color:#bbf7d0}.settings-header h4{margin:0 0 4px;font-size:15px;font-weight:700}.settings-header p{margin:0;color:#ffffffa6;font-size:12px;line-height:1.4}.settings-toggle{width:100%;justify-content:center;border-radius:10px;color:#fff!important;border-color:#fff3!important;margin-bottom:16px}.settings-toggle mat-icon{margin-right:8px;font-size:18px;width:18px;height:18px}.volume-label{display:flex;justify-content:space-between;align-items:center;color:#ffffffc7;font-size:12px;font-weight:600;margin-bottom:8px}.settings-volume{width:100%;accent-color:#7fb4ff;cursor:pointer;margin-bottom:12px}.settings-preview{margin:0 0 16px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:#ffffff0f;color:#f5f7ff;box-sizing:border-box}.message-preview{padding:9px 11px;line-height:1.35}.code-preview{padding:10px 11px;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;line-height:1.45;white-space:pre-wrap;color:#dbeafe;background:#061827;margin-bottom:0}.context-menu{position:fixed;z-index:10001;background:#071d30;border-radius:8px;padding:4px 0;box-shadow:0 8px 24px #0000004d;min-width:200px}.ctx-item{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;color:#ffffffe6;font-size:13px;transition:background .15s}.ctx-item:hover{background:#ffffff1a}.ctx-item mat-icon{font-size:18px;width:18px;height:18px}.ctx-danger{color:#f87171}.ctx-danger:hover{background:#f8717126}.ctx-backdrop{position:fixed;inset:0;z-index:10000}\n"] }]
         }], ctorParameters: () => [{ type: MessagingStoreService }] });
 
 class MessageInputComponent {
     conversationId = null;
+    replyTo = null;
+    enableMentions = false;
+    mentionOptions = [];
     messageSent = new EventEmitter();
     messageWithFiles = new EventEmitter();
+    replyCancelled = new EventEmitter();
     fileInput;
     messageTextarea;
     messageText = '';
     selectedFiles = [];
     textareaHeight = 36;
+    mentionSuggestions = [];
     draftPrefix = 'messaging_draft_';
     lastConversationId = null;
     resizing = false;
@@ -2758,6 +3026,9 @@ class MessageInputComponent {
     resizeStartHeight = 0;
     minTextareaHeight = 36;
     maxTextareaHeight = 180;
+    manualTextareaHeight = this.minTextareaHeight;
+    activeMentionStart = -1;
+    activeMentionEnd = -1;
     boundResizeMove = this.onResizeMove.bind(this);
     boundResizeEnd = this.onResizeEnd.bind(this);
     ngOnChanges(changes) {
@@ -2794,6 +3065,8 @@ class MessageInputComponent {
         }
         this.messageText = '';
         this.selectedFiles = [];
+        this.mentionSuggestions = [];
+        this.manualTextareaHeight = this.minTextareaHeight;
         this.clearDraft(this.conversationId);
         if (this.fileInput)
             this.fileInput.nativeElement.value = '';
@@ -2802,9 +3075,23 @@ class MessageInputComponent {
     onTextChange(value) {
         this.messageText = value;
         this.persistDraft(this.conversationId, value);
+        this.updateMentionSuggestions();
         this.queueAutoResize();
     }
     onPaste(event) {
+        const clipboardItems = Array.from(event.clipboardData?.items || []);
+        const imageFiles = clipboardItems
+            .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+            .map((item) => item.getAsFile())
+            .filter((file) => !!file)
+            .map((file) => this.nameClipboardImage(file));
+        if (imageFiles.length > 0) {
+            this.addFiles(imageFiles);
+            const text = event.clipboardData?.getData('text/plain') || '';
+            if (!text.trim()) {
+                event.preventDefault();
+            }
+        }
         const html = event.clipboardData?.getData('text/html') || '';
         if (!html || !/<table[\s>]/i.test(html))
             return;
@@ -2818,8 +3105,11 @@ class MessageInputComponent {
         const el = this.messageTextarea?.nativeElement;
         if (!el)
             return;
-        const nextHeight = Math.min(Math.max(el.scrollHeight, this.minTextareaHeight), Math.max(this.textareaHeight, this.minTextareaHeight));
-        this.textareaHeight = Math.min(nextHeight, this.maxTextareaHeight);
+        el.style.height = 'auto';
+        const nextHeight = Math.min(Math.max(el.scrollHeight, this.manualTextareaHeight, this.minTextareaHeight), this.maxTextareaHeight);
+        this.textareaHeight = nextHeight;
+        el.style.height = `${nextHeight}px`;
+        el.style.overflowY = nextHeight >= this.maxTextareaHeight ? 'auto' : 'hidden';
     }
     onResizeStart(event) {
         event.preventDefault();
@@ -2835,7 +3125,9 @@ class MessageInputComponent {
         if (!this.resizing)
             return;
         const dy = this.resizeStartY - event.clientY;
-        this.textareaHeight = Math.max(this.minTextareaHeight, Math.min(this.maxTextareaHeight, this.resizeStartHeight + dy));
+        const nextHeight = Math.max(this.minTextareaHeight, Math.min(this.maxTextareaHeight, this.resizeStartHeight + dy));
+        this.manualTextareaHeight = nextHeight;
+        this.textareaHeight = nextHeight;
     }
     onResizeEnd() {
         if (!this.resizing)
@@ -2905,6 +3197,72 @@ class MessageInputComponent {
             textarea.selectionStart = textarea.selectionEnd = start + text.length;
         });
     }
+    nameClipboardImage(file) {
+        const extension = file.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+        const filename = `clipboard-image-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`;
+        return new File([file], filename, { type: file.type || 'image/png', lastModified: Date.now() });
+    }
+    focus() {
+        setTimeout(() => this.messageTextarea?.nativeElement?.focus());
+    }
+    updateMentionSuggestions() {
+        if (!this.enableMentions || !this.mentionOptions.length) {
+            this.mentionSuggestions = [];
+            return;
+        }
+        const textarea = this.messageTextarea?.nativeElement;
+        const caret = textarea?.selectionStart ?? this.messageText.length;
+        const beforeCaret = this.messageText.slice(0, caret);
+        const match = beforeCaret.match(/(^|\s)@([a-zA-Z0-9._-]{0,32})$/);
+        if (!match) {
+            this.mentionSuggestions = [];
+            this.activeMentionStart = -1;
+            this.activeMentionEnd = -1;
+            return;
+        }
+        const query = (match[2] || '').toLowerCase();
+        this.activeMentionEnd = caret;
+        this.activeMentionStart = caret - query.length - 1;
+        this.mentionSuggestions = this.mentionOptions
+            .filter((option) => option.token.toLowerCase().includes(query) ||
+            option.label.toLowerCase().includes(query))
+            .slice(0, 5);
+    }
+    insertMention(option) {
+        if (this.activeMentionStart < 0)
+            return;
+        const start = this.activeMentionStart;
+        const end = this.activeMentionEnd >= start ? this.activeMentionEnd : this.messageText.length;
+        const mentionText = `@${option.token} `;
+        const next = `${this.messageText.slice(0, start)}${mentionText}${this.messageText.slice(end)}`;
+        this.onTextChange(next);
+        this.mentionSuggestions = [];
+        setTimeout(() => {
+            const textarea = this.messageTextarea?.nativeElement;
+            if (!textarea)
+                return;
+            const caret = start + mentionText.length;
+            textarea.focus();
+            textarea.selectionStart = textarea.selectionEnd = caret;
+            this.queueAutoResize();
+        });
+    }
+    onKeydown(event) {
+        if (event.key === 'Escape' && this.mentionSuggestions.length > 0) {
+            this.mentionSuggestions = [];
+            event.preventDefault();
+            return;
+        }
+        if (event.key === 'Enter' && this.mentionSuggestions.length > 0) {
+            event.preventDefault();
+            this.insertMention(this.mentionSuggestions[0]);
+            return;
+        }
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            this.send();
+        }
+    }
     onEnter(event) {
         const ke = event;
         if (!ke.shiftKey) {
@@ -2951,7 +3309,7 @@ class MessageInputComponent {
         return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     }
     static ɵfac = i0.ɵɵngDeclareFactory({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: MessageInputComponent, deps: [], target: i0.ɵɵFactoryTarget.Component });
-    static ɵcmp = i0.ɵɵngDeclareComponent({ minVersion: "14.0.0", version: "17.3.12", type: MessageInputComponent, isStandalone: true, selector: "app-message-input", inputs: { conversationId: "conversationId" }, outputs: { messageSent: "messageSent", messageWithFiles: "messageWithFiles" }, viewQueries: [{ propertyName: "fileInput", first: true, predicate: ["fileInput"], descendants: true }, { propertyName: "messageTextarea", first: true, predicate: ["messageTextarea"], descendants: true }], usesOnChanges: true, ngImport: i0, template: `
+    static ɵcmp = i0.ɵɵngDeclareComponent({ minVersion: "14.0.0", version: "17.3.12", type: MessageInputComponent, isStandalone: true, selector: "app-message-input", inputs: { conversationId: "conversationId", replyTo: "replyTo", enableMentions: "enableMentions", mentionOptions: "mentionOptions" }, outputs: { messageSent: "messageSent", messageWithFiles: "messageWithFiles", replyCancelled: "replyCancelled" }, viewQueries: [{ propertyName: "fileInput", first: true, predicate: ["fileInput"], descendants: true }, { propertyName: "messageTextarea", first: true, predicate: ["messageTextarea"], descendants: true }], usesOnChanges: true, ngImport: i0, template: `
     <div
       class="message-input-container"
     >
@@ -2961,6 +3319,17 @@ class MessageInputComponent {
         (mousedown)="onResizeStart($event)"
       >
         <span></span>
+      </div>
+
+      <div *ngIf="replyTo" class="reply-compose-preview">
+        <mat-icon>reply</mat-icon>
+        <div class="reply-compose-text">
+          <span>Replying to {{ replyTo.senderName }}</span>
+          <p>{{ replyTo.content }}</p>
+        </div>
+        <button type="button" class="reply-cancel-btn" (click)="replyCancelled.emit()" title="Cancel reply">
+          <mat-icon>close</mat-icon>
+        </button>
       </div>
 
       <!-- File previews -->
@@ -2973,6 +3342,20 @@ class MessageInputComponent {
             <mat-icon>close</mat-icon>
           </button>
         </div>
+      </div>
+
+      <div *ngIf="mentionSuggestions.length > 0" class="mention-suggestions">
+        <button
+          type="button"
+          *ngFor="let option of mentionSuggestions"
+          class="mention-suggestion"
+          (mousedown)="$event.preventDefault()"
+          (click)="insertMention(option)"
+        >
+          <span class="mention-avatar">&#64;</span>
+          <span>{{ option.label }}</span>
+          <small>&#64;{{ option.token }}</small>
+        </button>
       </div>
 
       <div class="input-wrapper">
@@ -2992,7 +3375,9 @@ class MessageInputComponent {
           (ngModelChange)="onTextChange($event)"
           (input)="autoResize()"
           (paste)="onPaste($event)"
-          (keydown.enter)="onEnter($event)"
+          (click)="updateMentionSuggestions()"
+          (keyup)="updateMentionSuggestions()"
+          (keydown)="onKeydown($event)"
           placeholder="Type a message..."
           rows="1"
           class="message-textarea"
@@ -3009,7 +3394,7 @@ class MessageInputComponent {
       </div>
 
     </div>
-  `, isInline: true, styles: [".message-input-container{padding:8px 12px;border-top:1px solid rgba(255,255,255,.15);background:transparent;position:relative}.input-resize-handle{position:absolute;top:-5px;left:0;right:0;height:10px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;z-index:2}.input-resize-handle span{width:42px;height:3px;border-radius:999px;background:#ffffff38;transition:background .15s,width .15s}.input-resize-handle:hover span{width:56px;background:#ffffff6b}.file-previews{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:80px;overflow-y:auto}.file-chip{display:flex;align-items:center;gap:4px;background:#ffffff26;border-radius:8px;padding:4px 4px 4px 8px;max-width:200px}.file-icon{font-size:16px;width:16px;height:16px;color:#fffc}.file-name{font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px}.file-size{font-size:10px;color:#ffffff80;flex-shrink:0}.file-remove{width:20px!important;height:20px!important}.file-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fff9}.input-wrapper{display:flex;align-items:flex-end;gap:4px;background:#ffffff1a;border-radius:24px;padding:2px 4px}.attach-btn,.send-btn{flex-shrink:0;width:36px;height:36px;padding:0!important;margin:0;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:0!important}.attach-btn mat-icon,.send-btn mat-icon{color:#ffffffb3;font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}.send-btn mat-icon{color:#ffffffe6}.message-textarea{flex:1;border:none;outline:none;background:transparent;resize:none;font-size:14px;font-family:inherit;line-height:1.5;min-height:24px;max-height:180px;padding:7px 0;color:#fff;overflow-y:auto;box-sizing:border-box}.message-textarea::placeholder{color:#ffffff80}.send-btn:disabled mat-icon{color:#ffffff4d}:host ::ng-deep .attach-btn .mat-mdc-button-touch-target,:host ::ng-deep .send-btn .mat-mdc-button-touch-target{height:36px!important;width:36px!important}:host ::ng-deep .attach-btn .mdc-icon-button__icon,:host ::ng-deep .send-btn .mdc-icon-button__icon{display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }] });
+  `, isInline: true, styles: [".message-input-container{padding:8px 12px;border-top:1px solid rgba(255,255,255,.15);background:transparent;position:relative}.input-resize-handle{position:absolute;top:-5px;left:0;right:0;height:10px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;z-index:2}.input-resize-handle span{width:42px;height:3px;border-radius:999px;background:#ffffff38;transition:background .15s,width .15s}.input-resize-handle:hover span{width:56px;background:#ffffff6b}.file-previews{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:80px;overflow-y:auto}.reply-compose-preview{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:8px 10px;border-radius:12px;background:#7fb4ff1f;border-left:3px solid rgba(127,180,255,.8);color:#fff}.reply-compose-preview>mat-icon{color:#bfdbfe;font-size:18px;width:18px;height:18px;flex-shrink:0}.reply-compose-text{min-width:0;flex:1}.reply-compose-text span{display:block;font-size:11px;font-weight:700;color:#bfdbfe;margin-bottom:2px}.reply-compose-text p{margin:0;font-size:12px;color:#ffffffc7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.reply-cancel-btn{width:24px;height:24px;border:none;border-radius:999px;background:#ffffff14;color:#fffc;display:inline-flex;align-items:center;justify-content:center;padding:0;cursor:pointer;flex-shrink:0}.reply-cancel-btn mat-icon{font-size:16px;width:16px;height:16px}.mention-suggestions{margin-bottom:8px;border-radius:12px;overflow:hidden;background:#071d30;border:1px solid rgba(127,180,255,.22);box-shadow:0 10px 24px #0000003d}.mention-suggestion{width:100%;border:none;background:transparent;color:#fff;display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;text-align:left}.mention-suggestion:hover,.mention-suggestion:focus{background:#7fb4ff24;outline:none}.mention-avatar{width:22px;height:22px;border-radius:999px;background:#7fb4ff38;color:#bfdbfe;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0}.mention-suggestion small{margin-left:auto;color:#ffffff85;font-size:11px}.file-chip{display:flex;align-items:center;gap:4px;background:#ffffff26;border-radius:8px;padding:4px 4px 4px 8px;max-width:200px}.file-icon{font-size:16px;width:16px;height:16px;color:#fffc}.file-name{font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px}.file-size{font-size:10px;color:#ffffff80;flex-shrink:0}.file-remove{width:20px!important;height:20px!important}.file-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fff9}.input-wrapper{display:flex;align-items:flex-end;gap:4px;background:#ffffff1a;border-radius:24px;padding:2px 4px}.attach-btn,.send-btn{flex-shrink:0;width:36px;height:36px;padding:0!important;margin:0;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:0!important}.attach-btn mat-icon,.send-btn mat-icon{color:#ffffffb3;font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}.send-btn mat-icon{color:#ffffffe6}.message-textarea{flex:1;border:none;outline:none;background:transparent;resize:none;font-size:14px;font-family:inherit;line-height:1.5;min-height:24px;max-height:180px;padding:7px 0;color:#fff;overflow-y:hidden;box-sizing:border-box}.message-textarea::placeholder{color:#ffffff80}.send-btn:disabled mat-icon{color:#ffffff4d}:host ::ng-deep .attach-btn .mat-mdc-button-touch-target,:host ::ng-deep .send-btn .mat-mdc-button-touch-target{height:36px!important;width:36px!important}:host ::ng-deep .attach-btn .mdc-icon-button__icon,:host ::ng-deep .send-btn .mdc-icon-button__icon{display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: MessageInputComponent, decorators: [{
             type: Component,
@@ -3025,6 +3410,17 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
         <span></span>
       </div>
 
+      <div *ngIf="replyTo" class="reply-compose-preview">
+        <mat-icon>reply</mat-icon>
+        <div class="reply-compose-text">
+          <span>Replying to {{ replyTo.senderName }}</span>
+          <p>{{ replyTo.content }}</p>
+        </div>
+        <button type="button" class="reply-cancel-btn" (click)="replyCancelled.emit()" title="Cancel reply">
+          <mat-icon>close</mat-icon>
+        </button>
+      </div>
+
       <!-- File previews -->
       <div *ngIf="selectedFiles.length > 0" class="file-previews">
         <div *ngFor="let file of selectedFiles; let i = index" class="file-chip">
@@ -3035,6 +3431,20 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
             <mat-icon>close</mat-icon>
           </button>
         </div>
+      </div>
+
+      <div *ngIf="mentionSuggestions.length > 0" class="mention-suggestions">
+        <button
+          type="button"
+          *ngFor="let option of mentionSuggestions"
+          class="mention-suggestion"
+          (mousedown)="$event.preventDefault()"
+          (click)="insertMention(option)"
+        >
+          <span class="mention-avatar">&#64;</span>
+          <span>{{ option.label }}</span>
+          <small>&#64;{{ option.token }}</small>
+        </button>
       </div>
 
       <div class="input-wrapper">
@@ -3054,7 +3464,9 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
           (ngModelChange)="onTextChange($event)"
           (input)="autoResize()"
           (paste)="onPaste($event)"
-          (keydown.enter)="onEnter($event)"
+          (click)="updateMentionSuggestions()"
+          (keyup)="updateMentionSuggestions()"
+          (keydown)="onKeydown($event)"
           placeholder="Type a message..."
           rows="1"
           class="message-textarea"
@@ -3071,12 +3483,20 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
       </div>
 
     </div>
-  `, styles: [".message-input-container{padding:8px 12px;border-top:1px solid rgba(255,255,255,.15);background:transparent;position:relative}.input-resize-handle{position:absolute;top:-5px;left:0;right:0;height:10px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;z-index:2}.input-resize-handle span{width:42px;height:3px;border-radius:999px;background:#ffffff38;transition:background .15s,width .15s}.input-resize-handle:hover span{width:56px;background:#ffffff6b}.file-previews{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:80px;overflow-y:auto}.file-chip{display:flex;align-items:center;gap:4px;background:#ffffff26;border-radius:8px;padding:4px 4px 4px 8px;max-width:200px}.file-icon{font-size:16px;width:16px;height:16px;color:#fffc}.file-name{font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px}.file-size{font-size:10px;color:#ffffff80;flex-shrink:0}.file-remove{width:20px!important;height:20px!important}.file-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fff9}.input-wrapper{display:flex;align-items:flex-end;gap:4px;background:#ffffff1a;border-radius:24px;padding:2px 4px}.attach-btn,.send-btn{flex-shrink:0;width:36px;height:36px;padding:0!important;margin:0;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:0!important}.attach-btn mat-icon,.send-btn mat-icon{color:#ffffffb3;font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}.send-btn mat-icon{color:#ffffffe6}.message-textarea{flex:1;border:none;outline:none;background:transparent;resize:none;font-size:14px;font-family:inherit;line-height:1.5;min-height:24px;max-height:180px;padding:7px 0;color:#fff;overflow-y:auto;box-sizing:border-box}.message-textarea::placeholder{color:#ffffff80}.send-btn:disabled mat-icon{color:#ffffff4d}:host ::ng-deep .attach-btn .mat-mdc-button-touch-target,:host ::ng-deep .send-btn .mat-mdc-button-touch-target{height:36px!important;width:36px!important}:host ::ng-deep .attach-btn .mdc-icon-button__icon,:host ::ng-deep .send-btn .mdc-icon-button__icon{display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important}\n"] }]
+  `, styles: [".message-input-container{padding:8px 12px;border-top:1px solid rgba(255,255,255,.15);background:transparent;position:relative}.input-resize-handle{position:absolute;top:-5px;left:0;right:0;height:10px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;z-index:2}.input-resize-handle span{width:42px;height:3px;border-radius:999px;background:#ffffff38;transition:background .15s,width .15s}.input-resize-handle:hover span{width:56px;background:#ffffff6b}.file-previews{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:80px;overflow-y:auto}.reply-compose-preview{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:8px 10px;border-radius:12px;background:#7fb4ff1f;border-left:3px solid rgba(127,180,255,.8);color:#fff}.reply-compose-preview>mat-icon{color:#bfdbfe;font-size:18px;width:18px;height:18px;flex-shrink:0}.reply-compose-text{min-width:0;flex:1}.reply-compose-text span{display:block;font-size:11px;font-weight:700;color:#bfdbfe;margin-bottom:2px}.reply-compose-text p{margin:0;font-size:12px;color:#ffffffc7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.reply-cancel-btn{width:24px;height:24px;border:none;border-radius:999px;background:#ffffff14;color:#fffc;display:inline-flex;align-items:center;justify-content:center;padding:0;cursor:pointer;flex-shrink:0}.reply-cancel-btn mat-icon{font-size:16px;width:16px;height:16px}.mention-suggestions{margin-bottom:8px;border-radius:12px;overflow:hidden;background:#071d30;border:1px solid rgba(127,180,255,.22);box-shadow:0 10px 24px #0000003d}.mention-suggestion{width:100%;border:none;background:transparent;color:#fff;display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;text-align:left}.mention-suggestion:hover,.mention-suggestion:focus{background:#7fb4ff24;outline:none}.mention-avatar{width:22px;height:22px;border-radius:999px;background:#7fb4ff38;color:#bfdbfe;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0}.mention-suggestion small{margin-left:auto;color:#ffffff85;font-size:11px}.file-chip{display:flex;align-items:center;gap:4px;background:#ffffff26;border-radius:8px;padding:4px 4px 4px 8px;max-width:200px}.file-icon{font-size:16px;width:16px;height:16px;color:#fffc}.file-name{font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px}.file-size{font-size:10px;color:#ffffff80;flex-shrink:0}.file-remove{width:20px!important;height:20px!important}.file-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fff9}.input-wrapper{display:flex;align-items:flex-end;gap:4px;background:#ffffff1a;border-radius:24px;padding:2px 4px}.attach-btn,.send-btn{flex-shrink:0;width:36px;height:36px;padding:0!important;margin:0;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:0!important}.attach-btn mat-icon,.send-btn mat-icon{color:#ffffffb3;font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}.send-btn mat-icon{color:#ffffffe6}.message-textarea{flex:1;border:none;outline:none;background:transparent;resize:none;font-size:14px;font-family:inherit;line-height:1.5;min-height:24px;max-height:180px;padding:7px 0;color:#fff;overflow-y:hidden;box-sizing:border-box}.message-textarea::placeholder{color:#ffffff80}.send-btn:disabled mat-icon{color:#ffffff4d}:host ::ng-deep .attach-btn .mat-mdc-button-touch-target,:host ::ng-deep .send-btn .mat-mdc-button-touch-target{height:36px!important;width:36px!important}:host ::ng-deep .attach-btn .mdc-icon-button__icon,:host ::ng-deep .send-btn .mdc-icon-button__icon{display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important}\n"] }]
         }], propDecorators: { conversationId: [{
+                type: Input
+            }], replyTo: [{
+                type: Input
+            }], enableMentions: [{
+                type: Input
+            }], mentionOptions: [{
                 type: Input
             }], messageSent: [{
                 type: Output
             }], messageWithFiles: [{
+                type: Output
+            }], replyCancelled: [{
                 type: Output
             }], fileInput: [{
                 type: ViewChild,
@@ -3088,9 +3508,11 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
 
 class ChatThreadComponent {
     store;
+    api;
     auth;
     fileService;
     cdr;
+    sanitizer;
     scrollContainer;
     messageInput;
     lightboxOpen = new EventEmitter();
@@ -3099,8 +3521,12 @@ class ChatThreadComponent {
     conversationName = '';
     isGroup = false;
     isRemovedFromGroup = false;
+    messageTextScale = 1;
+    codeTextScale = 1;
     loading = false;
     myContactId = null;
+    replyToMessage = null;
+    mentionOptions = [];
     conversationId = null;
     sub;
     shouldScrollToBottom = true;
@@ -3117,11 +3543,14 @@ class ChatThreadComponent {
     mediaQueue = [];
     activeMediaRequests = 0;
     maxMediaRequests = 2;
-    constructor(store, auth, fileService, cdr) {
+    lastMentionConversationId = null;
+    constructor(store, api, auth, fileService, cdr, sanitizer) {
         this.store = store;
+        this.api = api;
         this.auth = auth;
         this.fileService = fileService;
         this.cdr = cdr;
+        this.sanitizer = sanitizer;
     }
     ngOnInit() {
         this.myContactId = this.auth.contactId;
@@ -3134,16 +3563,25 @@ class ChatThreadComponent {
             this.store.visibleContacts,
             this.store.loadingMessages,
             this.store.removedGroupIds,
-        ]).subscribe(([convId, msgMap, chats, contacts, loading, removedGroupIds]) => {
+            this.store.messageTextScale,
+            this.store.codeTextScale,
+        ]).subscribe(([convId, msgMap, chats, contacts, loading, removedGroupIds, messageTextScale, codeTextScale]) => {
             this.loading = loading;
             this.visibleContacts = contacts || [];
+            this.messageTextScale = messageTextScale;
+            this.codeTextScale = codeTextScale;
+            if (this.isGroup && this.conversationId && this.mentionOptions.length === 0) {
+                this.refreshMentionOptions();
+            }
             if (convId && convId !== this.conversationId) {
                 this.conversationId = convId;
                 this.resetMediaQueue();
+                this.clearReply();
                 this.shouldScrollToBottom = true;
                 const chat = chats.find((c) => c.conversationId === convId);
                 this.conversationName = chat?.name || 'Chat';
                 this.isGroup = chat?.isGroup || false;
+                this.refreshMentionOptions();
             }
             if (this.conversationId) {
                 const prevLen = this.messages.length;
@@ -3188,10 +3626,112 @@ class ChatThreadComponent {
             this.store.openGroupSettings(this.conversationId, this.conversationName);
         }
     }
+    startReply(message, event) {
+        event?.stopPropagation();
+        if (!this.isGroup || this.isSystemMessage(message))
+            return;
+        this.replyToMessage = message;
+        this.messageInput?.focus();
+    }
+    clearReply() {
+        this.replyToMessage = null;
+    }
+    getReplyPreview(message) {
+        const reply = message.reply_to;
+        if (!reply)
+            return null;
+        return {
+            senderName: reply.sender_name || 'Message',
+            content: this.truncateReplyText(reply.content || 'Attachment'),
+        };
+    }
+    getComposeReplyPreview(message) {
+        return {
+            senderName: this.getSenderName(message),
+            content: this.truncateReplyText(this.getMessageBody(message) || this.getAttachmentName(message)),
+        };
+    }
+    getMessageBody(message) {
+        return String(message.content || '');
+    }
+    truncateReplyText(value) {
+        const text = String(value || '').replace(/\s+/g, ' ').trim();
+        return text.length > 120 ? `${text.slice(0, 117)}...` : text || 'Attachment';
+    }
+    refreshMentionOptions() {
+        if (!this.isGroup || !this.conversationId) {
+            this.mentionOptions = [];
+            this.lastMentionConversationId = null;
+            return;
+        }
+        const convId = this.conversationId;
+        if (this.lastMentionConversationId === convId && this.mentionOptions.length > 0)
+            return;
+        this.lastMentionConversationId = convId;
+        this.api.getConversationParticipants(convId).subscribe({
+            next: (members) => {
+                const options = members
+                    .filter((member) => String(member.contact_id) !== String(this.auth.contactId || ''))
+                    .map((member) => this.participantToMentionOption(member))
+                    .filter((option) => !!option);
+                this.mentionOptions = options.length ? options : this.contactsToMentionOptions();
+                this.cdr.markForCheck();
+            },
+            error: () => {
+                this.mentionOptions = this.contactsToMentionOptions();
+                this.cdr.markForCheck();
+            },
+        });
+    }
+    participantToMentionOption(member) {
+        const token = this.toMentionToken(member.username || member.email || String(member.contact_id));
+        if (!token)
+            return null;
+        return {
+            contactId: String(member.contact_id),
+            label: member.username || member.email || `Contact ${member.contact_id}`,
+            token,
+        };
+    }
+    contactsToMentionOptions() {
+        return this.visibleContacts
+            .filter((contact) => String(contact.contact_id) !== String(this.auth.contactId || ''))
+            .map((contact) => {
+            const label = getContactDisplayName(contact);
+            return {
+                contactId: String(contact.contact_id),
+                label,
+                token: this.toMentionToken(contact.username || contact.email?.split('@')[0] || label),
+            };
+        })
+            .filter((option) => !!option.token);
+    }
+    toMentionToken(value) {
+        return String(value || '')
+            .trim()
+            .replace(/^@/, '')
+            .replace(/@.*$/, '')
+            .replace(/[^a-zA-Z0-9._-]/g, '')
+            .slice(0, 32);
+    }
+    getMentionIdsFromContent(content) {
+        if (!this.isGroup || !content || !this.mentionOptions.length)
+            return [];
+        const mentionedTokens = new Set(Array.from(content.matchAll(/(^|[^a-zA-Z0-9._-])@([a-zA-Z0-9._-]+)/g))
+            .map((match) => match[2].toLowerCase()));
+        return this.mentionOptions
+            .filter((option) => mentionedTokens.has(option.token.toLowerCase()))
+            .map((option) => option.contactId);
+    }
     onSendMessage(content) {
         if (this.isRemovedFromGroup)
             return;
-        this.store.sendMessage(this.conversationId, content);
+        const mentions = this.getMentionIdsFromContent(content);
+        this.store.sendMessage(this.conversationId, content, 'TEXT', {
+            replyTo: this.replyToMessage,
+            mentions,
+        });
+        this.clearReply();
         this.shouldScrollToBottom = true;
     }
     onSendWithFiles(payload) {
@@ -3216,8 +3756,16 @@ class ChatThreadComponent {
                 // Step 2: Pre-warm image cache so the optimistic bubble renders immediately.
                 this.fileService.prewarmCache(fileIds);
                 // Step 3: Send the message with the real file_ids.
+                const messageText = payload.text || filenames.join(', ');
+                const outgoingText = this.store.prepareOutgoingMessageContent(messageText, this.replyToMessage);
+                const replyTo = this.replyToMessage ? {
+                    message_id: String(this.replyToMessage.message_id || ''),
+                    sender_name: this.getSenderName(this.replyToMessage),
+                    content: this.truncateReplyText(this.getMessageBody(this.replyToMessage) || this.getAttachmentName(this.replyToMessage)),
+                } : undefined;
+                const mentions = this.getMentionIdsFromContent(messageText);
                 this.fileService
-                    .sendMessageWithAttachments(this.conversationId, this.auth.contactId, payload.text || filenames.join(', '), fileIds, filenames, mimeTypes)
+                    .sendMessageWithAttachments(this.conversationId, this.auth.contactId, outgoingText, fileIds, filenames, mimeTypes)
                     .subscribe({
                     next: (res) => {
                         this.uploading = false;
@@ -3233,7 +3781,9 @@ class ChatThreadComponent {
                             sender_id: this.auth.contactId,
                             sender_name: 'You',
                             message_type: isImg ? 'IMAGE' : 'FILE',
-                            content: payload.text || filenames.join(', '),
+                            content: messageText,
+                            reply_to: replyTo,
+                            mentions,
                             media_url: firstId,
                             created_at: new Date().toISOString(),
                             is_read: false,
@@ -3246,6 +3796,7 @@ class ChatThreadComponent {
                             })),
                         };
                         this.store.appendOptimisticMessage(optimistic);
+                        this.clearReply();
                         this.cdr.markForCheck();
                     },
                     error: () => {
@@ -3342,15 +3893,264 @@ class ChatThreadComponent {
             /^.+ removed .+ from the group$/.test(content);
     }
     isPreformattedText(msg) {
-        const content = String(msg.content || '');
+        return this.isPreformattedContent(this.getMessageBody(msg));
+    }
+    isPreformattedContent(content) {
         return content.includes('\t') || content.includes('\n') || / {2,}/.test(content);
+    }
+    getMessageCaption(msg) {
+        const content = this.getMessageBody(msg).trim();
+        if (!content)
+            return '';
+        const attachmentNames = this.getRenderableAttachments(msg)
+            .map((attachment) => String(attachment.filename || '').trim())
+            .filter(Boolean);
+        if (!attachmentNames.length)
+            return content;
+        const namesText = attachmentNames.join(', ');
+        if (content === namesText || attachmentNames.includes(content))
+            return '';
+        return content;
+    }
+    isCodeText(msg) {
+        return this.isCodeContent(this.getMessageBody(msg), msg);
+    }
+    isCodeContent(value, msg) {
+        const content = value.trim();
+        if (!content || (msg ? this.isTableText(msg) : this.isTableContent(content)))
+            return false;
+        if (this.looksLikeMarkdown(content) && !this.isSingleFencedCodeBlock(content))
+            return false;
+        if (/^```[\s\S]*```$/.test(content))
+            return true;
+        return this.detectCodeLanguage(content) !== null;
+    }
+    isMarkdownText(msg) {
+        return this.isMarkdownContent(this.getMessageBody(msg), msg);
+    }
+    isMarkdownContent(value, msg) {
+        const content = value.trim();
+        if (!content || (msg ? this.isTableText(msg) : this.isTableContent(content)) || this.isSingleFencedCodeBlock(content))
+            return false;
+        return this.looksLikeMarkdown(content);
+    }
+    getCodeLanguage(msg) {
+        return this.getCodeLanguageContent(this.getMessageBody(msg));
+    }
+    getCodeLanguageContent(content) {
+        const parsed = this.parseCodeBlock(content);
+        return parsed.language || this.detectCodeLanguage(parsed.code) || 'code';
+    }
+    getHighlightedCode(msg) {
+        return this.getHighlightedCodeContent(this.getMessageBody(msg));
+    }
+    getHighlightedCodeContent(content) {
+        const parsed = this.parseCodeBlock(content);
+        const language = parsed.language || this.detectCodeLanguage(parsed.code) || 'code';
+        const escaped = this.escapeHtml(parsed.code);
+        const highlighted = this.highlightCode(escaped, language);
+        return this.sanitizer.bypassSecurityTrustHtml(highlighted);
+    }
+    getMarkdownHtml(msg) {
+        return this.getMarkdownHtmlContent(this.getMessageBody(msg));
+    }
+    getMarkdownHtmlContent(content) {
+        return this.sanitizer.bypassSecurityTrustHtml(this.renderMarkdown(content));
+    }
+    copyCode(msg, event) {
+        event.stopPropagation();
+        const content = this.getMessageBody(msg);
+        const parsed = this.parseCodeBlock(content);
+        this.copyText(parsed.code || content);
+    }
+    copyMessageText(msg, event) {
+        event.stopPropagation();
+        this.copyText(this.getMessageBody(msg));
+    }
+    copyTextValue(text, event) {
+        event.stopPropagation();
+        this.copyText(text);
+    }
+    parseCodeBlock(content) {
+        const trimmed = content.trim();
+        const match = trimmed.match(/^```([a-zA-Z0-9_+-]*)\s*\n?([\s\S]*?)```$/);
+        if (!match)
+            return { language: '', code: content };
+        return { language: (match[1] || '').toLowerCase(), code: match[2] || '' };
+    }
+    isSingleFencedCodeBlock(content) {
+        return /^```[a-zA-Z0-9_+-]*\s*\n?[\s\S]*?```$/.test(content.trim());
+    }
+    looksLikeMarkdown(content) {
+        return /(^#{1,6}\s)|(^[-*]\s)|(^\d+\.\s)|(^>\s)|(\*\*[^*]+\*\*)|(`[^`]+`)|(\[[^\]]+\]\([^)]+\))|(^---$)|(^-\s\[[ x]\]\s)|(^```[a-zA-Z0-9_+-]*\s*$)/m.test(content);
+    }
+    detectCodeLanguage(code) {
+        const trimmed = code.trim();
+        if (!trimmed.includes('\n') && trimmed.length < 40)
+            return null;
+        if (/^\s*(select|with|insert|update|delete|create|alter|drop)\b/i.test(trimmed))
+            return 'sql';
+        if (/\b(function|const|let|var|=>|console\.log|import\s+.*from)\b/.test(trimmed))
+            return 'javascript';
+        if (/\b(def|import|from|print|class)\b/.test(trimmed) && /:\s*$|^\s{4}/m.test(trimmed))
+            return 'python';
+        if (/<\/?[a-z][\s\S]*>/i.test(trimmed))
+            return 'html';
+        if (/[{};]/.test(trimmed) && /[:=]/.test(trimmed))
+            return 'code';
+        return null;
+    }
+    highlightCode(escapedCode, language) {
+        const protectedTokens = [];
+        const protect = (value, regex, className) => value.replace(regex, (match) => {
+            const token = `__CODE_TOKEN_${protectedTokens.length}__`;
+            protectedTokens.push(`<span class="${className}">${match}</span>`);
+            return token;
+        });
+        let highlighted = escapedCode;
+        if (language === 'sql') {
+            highlighted = protect(highlighted, /(--.*)$/gm, 'code-token-comment');
+            highlighted = protect(highlighted, /(&quot;.*?&quot;|&#39;.*?&#39;|`.*?`)/g, 'code-token-string');
+            highlighted = highlighted.replace(/\b(SELECT|FROM|WHERE|JOIN|LEFT|RIGHT|INNER|OUTER|ON|GROUP BY|ORDER BY|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|ALTER|DROP|AND|OR|NULL|IS|NOT|AS|LIMIT)\b/gi, '<span class="code-token-keyword">$1</span>');
+            highlighted = highlighted.replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="code-token-number">$1</span>');
+            return this.restoreCodeTokens(highlighted, protectedTokens);
+        }
+        highlighted = protect(highlighted, /(\/\/.*|#.*)$/gm, 'code-token-comment');
+        highlighted = protect(highlighted, /(&quot;.*?&quot;|&#39;.*?&#39;|`.*?`)/g, 'code-token-string');
+        highlighted = highlighted.replace(/\b(function|const|let|var|return|if|else|for|while|class|import|from|export|async|await|def|print|try|catch|new|true|false|null|None)\b/g, '<span class="code-token-keyword">$1</span>');
+        highlighted = highlighted.replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="code-token-number">$1</span>');
+        highlighted = highlighted.replace(/\b([a-zA-Z_$][\w$]*)(?=\()/g, '<span class="code-token-function">$1</span>');
+        return this.restoreCodeTokens(highlighted, protectedTokens);
+    }
+    restoreCodeTokens(value, protectedTokens) {
+        return protectedTokens.reduce((html, token, index) => html.replace(new RegExp(`__CODE_TOKEN_${index}__`, 'g'), token), value);
+    }
+    renderMarkdown(raw) {
+        const codeBlocks = [];
+        const withoutCode = raw.replace(/```([a-zA-Z0-9_+-]*)\s*\n?([\s\S]*?)```/g, (_match, lang, code) => {
+            const language = String(lang || 'code').toLowerCase();
+            const token = `__MD_CODE_${codeBlocks.length}__`;
+            codeBlocks.push(`<pre><code data-language="${this.escapeHtml(language)}">${this.escapeHtml(String(code || ''))}</code></pre>`);
+            return token;
+        });
+        const lines = withoutCode.split(/\r?\n/);
+        const html = [];
+        let listType = null;
+        const closeList = () => {
+            if (listType) {
+                html.push(`</${listType}>`);
+                listType = null;
+            }
+        };
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) {
+                closeList();
+                continue;
+            }
+            const tokenMatch = trimmed.match(/^__MD_CODE_(\d+)__$/);
+            if (tokenMatch) {
+                closeList();
+                html.push(codeBlocks[Number(tokenMatch[1])] || '');
+                continue;
+            }
+            const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+            if (heading) {
+                closeList();
+                html.push(`<h${heading[1].length}>${this.renderMarkdownInline(heading[2])}</h${heading[1].length}>`);
+                continue;
+            }
+            if (/^---+$/.test(trimmed)) {
+                closeList();
+                html.push('<hr>');
+                continue;
+            }
+            const unordered = trimmed.match(/^[-*]\s+(?:\[[ x]\]\s+)?(.+)$/i);
+            if (unordered) {
+                if (listType !== 'ul') {
+                    closeList();
+                    html.push('<ul>');
+                    listType = 'ul';
+                }
+                html.push(`<li>${this.renderMarkdownInline(unordered[1])}</li>`);
+                continue;
+            }
+            const ordered = trimmed.match(/^\d+\.\s+(.+)$/);
+            if (ordered) {
+                if (listType !== 'ol') {
+                    closeList();
+                    html.push('<ol>');
+                    listType = 'ol';
+                }
+                html.push(`<li>${this.renderMarkdownInline(ordered[1])}</li>`);
+                continue;
+            }
+            const quote = trimmed.match(/^>\s+(.+)$/);
+            if (quote) {
+                closeList();
+                html.push(`<blockquote>${this.renderMarkdownInline(quote[1])}</blockquote>`);
+                continue;
+            }
+            closeList();
+            html.push(`<p>${this.renderMarkdownInline(trimmed)}</p>`);
+        }
+        closeList();
+        return html.join('');
+    }
+    renderMarkdownInline(value) {
+        let html = this.escapeHtml(value);
+        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+        html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+        html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+        return html;
+    }
+    copyText(text) {
+        if (!text)
+            return;
+        if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(text).then(() => this.store.showToast('Copied to clipboard', 'success', 1600), () => this.fallbackCopyText(text));
+            return;
+        }
+        this.fallbackCopyText(text);
+    }
+    fallbackCopyText(text) {
+        try {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.left = '-9999px';
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            this.store.showToast('Copied to clipboard', 'success', 1600);
+        }
+        catch {
+            this.store.showToast('Could not copy', 'error', 2200);
+        }
+    }
+    escapeHtml(value) {
+        return value
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
     isTableText(msg) {
         const rows = this.getTableRows(msg);
         return rows.length >= 2 && rows.some((row) => row.length >= 2);
     }
+    isTableContent(content) {
+        const rows = this.getTableRowsFromContent(content);
+        return rows.length >= 2 && rows.some((row) => row.length >= 2);
+    }
     getTableRows(msg) {
-        const content = String(msg.content || '').trim();
+        return this.getTableRowsFromContent(this.getMessageBody(msg));
+    }
+    getTableRowsFromContent(value) {
+        const content = value.trim();
         if (!content.includes('\t'))
             return [];
         const rows = content
@@ -3528,8 +4328,8 @@ class ChatThreadComponent {
                 filename: String(raw?.filename ??
                     raw?.file_name ??
                     raw?.name ??
-                    'File'),
-                mime_type: raw?.mime_type ?? raw?.mimeType,
+                    (msg.message_type === 'IMAGE' ? 'Image' : 'File')),
+                mime_type: raw?.mime_type ?? raw?.mimeType ?? (msg.message_type === 'IMAGE' ? 'image/*' : undefined),
                 size_bytes: raw?.size_bytes ?? raw?.sizeBytes,
                 url: url || undefined,
             });
@@ -3552,8 +4352,8 @@ class ChatThreadComponent {
                     ids.forEach((id, idx) => {
                         add({
                             file_id: id,
-                            filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
-                            mime_type: mimeTypes[idx],
+                            filename: filenames[idx] || filenames[0] || (msg.message_type === 'IMAGE' ? `Image ${idx + 1}` : `Attachment ${idx + 1}`),
+                            mime_type: mimeTypes[idx] || (msg.message_type === 'IMAGE' ? 'image/*' : undefined),
                         });
                     });
                 }
@@ -3568,8 +4368,8 @@ class ChatThreadComponent {
         ids.forEach((id, idx) => {
             add({
                 file_id: id,
-                filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
-                mime_type: mimeTypes[idx] || anyMsg?.mime_type || anyMsg?.attachment_mime_type,
+                filename: filenames[idx] || filenames[0] || (msg.message_type === 'IMAGE' ? `Image ${idx + 1}` : `Attachment ${idx + 1}`),
+                mime_type: mimeTypes[idx] || anyMsg?.mime_type || anyMsg?.attachment_mime_type || (msg.message_type === 'IMAGE' ? 'image/*' : undefined),
             });
         });
         return attachments;
@@ -3615,10 +4415,10 @@ class ChatThreadComponent {
             anyMsg?.attachment_id ||
             anyMsg?.attachment_ids?.[0] ||
             (!mediaIsDirectUrl && !mediaIsStructured && mu ? mu : undefined);
-        const mime = anyMsg?.mime_type || anyMsg?.attachment_mime_type;
+        const mime = anyMsg?.mime_type || anyMsg?.attachment_mime_type || (msg.message_type === 'IMAGE' ? 'image/*' : undefined);
         const explicitFilename = anyMsg?.filename || anyMsg?.file_name;
         const filename = explicitFilename ||
-            (fileId || mime || msg.message_type !== 'TEXT' ? msg.content : '');
+            (msg.message_type === 'IMAGE' ? 'Image' : msg.message_type === 'FILE' ? 'File' : '');
         if (fileId || explicitFilename || mime || msg.message_type === 'FILE' || msg.message_type === 'IMAGE') {
             return {
                 file_id: String(fileId || ''),
@@ -3636,7 +4436,7 @@ class ChatThreadComponent {
         const name = this.getFilenameLike(msg, attachment);
         if (/\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)$/i.test(name))
             return true;
-        return !attachment && msg.message_type === 'IMAGE';
+        return msg.message_type === 'IMAGE';
     }
     /** Returns the cached data URL for a message's media, or null and triggers background load. */
     getMediaUrl(msg, attachment) {
@@ -3830,11 +4630,13 @@ class ChatThreadComponent {
             return '';
         return reaction.reactors.join(', ');
     }
-    static ɵfac = i0.ɵɵngDeclareFactory({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: ChatThreadComponent, deps: [{ token: MessagingStoreService }, { token: AuthService }, { token: MessagingFileService }, { token: i0.ChangeDetectorRef }], target: i0.ɵɵFactoryTarget.Component });
+    static ɵfac = i0.ɵɵngDeclareFactory({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: ChatThreadComponent, deps: [{ token: MessagingStoreService }, { token: MessagingApiService }, { token: AuthService }, { token: MessagingFileService }, { token: i0.ChangeDetectorRef }, { token: i5.DomSanitizer }], target: i0.ɵɵFactoryTarget.Component });
     static ɵcmp = i0.ɵɵngDeclareComponent({ minVersion: "14.0.0", version: "17.3.12", type: ChatThreadComponent, isStandalone: true, selector: "app-chat-thread", outputs: { lightboxOpen: "lightboxOpen" }, viewQueries: [{ propertyName: "scrollContainer", first: true, predicate: ["scrollContainer"], descendants: true }, { propertyName: "messageInput", first: true, predicate: MessageInputComponent, descendants: true }], ngImport: i0, template: `
     <div
       class="chat-thread"
       [class.drag-over]="threadDragOver"
+      [style.--message-text-scale]="messageTextScale"
+      [style.--code-text-scale]="codeTextScale"
       (dragenter)="onThreadDragEnter($event)"
       (dragover)="onThreadDragOver($event)"
       (dragleave)="onThreadDragLeave($event)"
@@ -3909,6 +4711,13 @@ class ChatThreadComponent {
                 {{ getSenderName(msg) }}
               </div>
               <div class="message-bubble" [class.own-bubble]="isOwnMessage(msg)" (mouseenter)="hoveredMessageId = msg.message_id" (mouseleave)="hoveredMessageId = null">
+                <div *ngIf="getReplyPreview(msg) as reply" class="reply-context">
+                  <mat-icon>reply</mat-icon>
+                  <div>
+                    <span>{{ reply.senderName }}</span>
+                    <p>{{ reply.content }}</p>
+                  </div>
+                </div>
                 <!-- ATTACHMENTS ───────────────────────────────── -->
                 <div *ngIf="hasFileAttachment(msg)" class="attachments-list">
                   <div *ngFor="let attachment of getRenderableAttachments(msg); trackBy: trackByAttachment" class="attachment-item">
@@ -3983,8 +4792,48 @@ class ChatThreadComponent {
                     </ng-template>
                   </div>
                 </div>
+                <div
+                  *ngIf="hasFileAttachment(msg) && getMessageCaption(msg)"
+                  class="attachment-caption"
+                >
+                  <div *ngIf="isCodeContent(getMessageCaption(msg)); else nonCodeCaption" class="code-message-wrap attachment-render-block">
+                    <button type="button" class="render-copy-btn" (click)="copyTextValue(getMessageCaption(msg), $event)" title="Copy code">
+                      <mat-icon>content_copy</mat-icon>
+                    </button>
+                    <pre class="code-message"><code [innerHTML]="getHighlightedCodeContent(getMessageCaption(msg))"></code></pre>
+                    <span class="code-language">{{ getCodeLanguageContent(getMessageCaption(msg)) }}</span>
+                  </div>
+                  <ng-template #nonCodeCaption>
+                    <div *ngIf="isMarkdownContent(getMessageCaption(msg)); else plainCaption" class="md-message-wrap attachment-render-block">
+                      <button type="button" class="render-copy-btn" (click)="copyTextValue(getMessageCaption(msg), $event)" title="Copy markdown">
+                        <mat-icon>content_copy</mat-icon>
+                      </button>
+                      <div class="md-message" [innerHTML]="getMarkdownHtmlContent(getMessageCaption(msg))"></div>
+                      <span class="md-language">md</span>
+                    </div>
+                    <ng-template #plainCaption>
+                      <div
+                        class="text-content"
+                        [class.preformatted-text]="isPreformattedContent(getMessageCaption(msg))"
+                      >
+                        {{ getMessageCaption(msg) }}
+                      </div>
+                    </ng-template>
+                  </ng-template>
+                </div>
                 <ng-container *ngIf="msg.message_type === 'TEXT' && !hasFileAttachment(msg)">
+                  <div *ngIf="isCodeText(msg); else nonCodeTextMessage" class="code-message-wrap">
+                    <button type="button" class="render-copy-btn" (click)="copyCode(msg, $event)" title="Copy code">
+                      <mat-icon>content_copy</mat-icon>
+                    </button>
+                    <pre class="code-message"><code [innerHTML]="getHighlightedCode(msg)"></code></pre>
+                    <span class="code-language">{{ getCodeLanguage(msg) }}</span>
+                  </div>
+                  <ng-template #nonCodeTextMessage>
                   <div *ngIf="isTableText(msg); else plainTextMessage" class="table-message-wrap">
+                    <button type="button" class="render-copy-btn" (click)="copyMessageText(msg, $event)" title="Copy table">
+                      <mat-icon>content_copy</mat-icon>
+                    </button>
                     <table class="pasted-table">
                       <tbody>
                         <tr *ngFor="let row of getTableRows(msg); let rowIndex = index">
@@ -3999,12 +4848,22 @@ class ChatThreadComponent {
                     </table>
                   </div>
                   <ng-template #plainTextMessage>
-                    <div
-                      class="text-content"
-                      [class.preformatted-text]="isPreformattedText(msg)"
-                    >
-                      {{ msg.content }}
+                    <div *ngIf="isMarkdownText(msg); else rawTextMessage" class="md-message-wrap">
+                      <button type="button" class="render-copy-btn" (click)="copyMessageText(msg, $event)" title="Copy markdown">
+                        <mat-icon>content_copy</mat-icon>
+                      </button>
+                      <div class="md-message" [innerHTML]="getMarkdownHtml(msg)"></div>
+                      <span class="md-language">md</span>
                     </div>
+                    <ng-template #rawTextMessage>
+                      <div
+                        class="text-content"
+                        [class.preformatted-text]="isPreformattedText(msg)"
+                      >
+                        {{ getMessageBody(msg) }}
+                      </div>
+                    </ng-template>
+                  </ng-template>
                   </ng-template>
                 </ng-container>
                 <div class="message-meta">
@@ -4022,6 +4881,16 @@ class ChatThreadComponent {
                     matTooltipPosition="above"
                   >done</mat-icon>
                 </div>
+                <button
+                  *ngIf="isGroup"
+                  type="button"
+                  class="reply-message-btn"
+                  (click)="startReply(msg, $event)"
+                  matTooltip="Reply"
+                  matTooltipPosition="above"
+                >
+                  <mat-icon>reply</mat-icon>
+                </button>
                 <div *ngIf="hoveredMessageId === msg.message_id" class="quick-reactions">
                   <button
                     *ngFor="let emoji of quickEmojis"
@@ -4060,12 +4929,16 @@ class ChatThreadComponent {
       <app-message-input
         *ngIf="!isRemovedFromGroup"
         [conversationId]="conversationId"
+        [replyTo]="replyToMessage ? getComposeReplyPreview(replyToMessage) : null"
+        [enableMentions]="isGroup"
+        [mentionOptions]="mentionOptions"
         (messageSent)="onSendMessage($event)"
         (messageWithFiles)="onSendWithFiles($event)"
+        (replyCancelled)="clearReply()"
       ></app-message-input>
     </div>
 
-  `, isInline: true, styles: [":host{--attachment-thumb-size: 180px}.chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;align-items:center;gap:0}.header-actions button{width:32px;height:32px;min-width:32px!important;padding:0!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;--mdc-icon-button-state-layer-size: 32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}:host ::ng-deep .hdr-btn .mat-mdc-button-touch-target{width:32px!important;height:32px!important}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.removed-group-state{height:100%;min-height:260px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:10px;padding:32px 24px;color:#ffffffc7;box-sizing:border-box}.removed-group-state mat-icon{width:44px;height:44px;font-size:44px;color:#f87171;margin-bottom:4px}.removed-group-state h4{margin:0;color:#fff;font-size:17px;font-weight:700}.removed-group-state p{margin:0 0 8px;max-width:280px;font-size:13px;line-height:1.4;color:#ffffff9e}.removed-exit-btn{border-radius:10px;background:#ffffff2e!important;color:#fff!important;font-weight:700;padding:0 18px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.system-message-row{align-self:center;max-width:88%;margin:8px auto;text-align:center}.system-message-text{display:inline-flex;align-items:center;justify-content:center;padding:5px 11px;border-radius:999px;background:#ffffff17;border:1px solid rgba(255,255,255,.12);color:#ffffffb8;font-size:11px;line-height:1.35}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.text-content{white-space:pre-wrap;tab-size:4}.text-content.preformatted-text{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;font-size:12px;line-height:1.45;overflow-x:auto;max-width:min(72vw,520px)}.table-message-wrap{max-width:min(76vw,560px);overflow-x:auto;border-radius:9px;border:1px solid rgba(255,255,255,.16);background:#ffffff0a}.pasted-table{border-collapse:collapse;min-width:100%;font-size:12px;line-height:1.35;color:#f5f7ff}.pasted-table th,.pasted-table td{padding:6px 9px;border-right:1px solid rgba(255,255,255,.12);border-bottom:1px solid rgba(255,255,255,.12);text-align:left;white-space:pre-wrap;vertical-align:top}.pasted-table th{background:#ffffff1a;font-weight:700}.pasted-table tr:last-child td,.pasted-table tr:last-child th{border-bottom:none}.pasted-table th:last-child,.pasted-table td:last-child{border-right:none}.image-message{line-height:0}.media-wrapper{position:relative;display:inline-block;line-height:0;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);overflow:hidden;border-radius:10px;background:#ffffff14}.media-img{width:100%;height:100%;border-radius:inherit;display:block;cursor:zoom-in;object-fit:cover}.attachment-actions{position:absolute;right:6px;top:6px;display:flex;gap:4px;opacity:0;transition:opacity .12s ease;pointer-events:none}.media-wrapper:hover .attachment-actions{opacity:1;pointer-events:auto}.attachment-action-btn,.file-download-btn{border:none;border-radius:999px;background:#071d30d1;color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}.attachment-action-btn{width:28px;height:28px}.attachment-action-btn mat-icon{font-size:17px;width:17px;height:17px}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;justify-content:center;gap:8px;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);border-radius:10px;background:#ffffff14;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.attachments-list{display:flex;flex-direction:column;gap:8px;max-width:100%}.attachment-item{max-width:100%}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.attachment-thumb.file-message{position:relative;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);padding:12px;border-radius:10px;background:#ffffff14;flex-direction:column;justify-content:center;box-sizing:border-box;overflow:hidden}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px}.file-msg-icon{font-size:42px;width:42px;height:42px;color:#fffc;flex-shrink:0}.file-msg-name{font-size:13px;color:#fff;line-height:1.2;max-width:100%;overflow:hidden;text-align:center;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;word-break:break-word}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.file-download-btn{width:24px;height:24px;flex-shrink:0;position:absolute;right:6px;top:6px}.file-download-link{border:none;border-radius:999px;background:#ffffff29;color:#fff;cursor:pointer;font-size:11px;padding:4px 10px;margin-top:4px}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.read{color:#60a5fa;opacity:1}.read-icon.unread{color:#dae0fa80;opacity:1}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions{left:0;right:auto}.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:2px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:3px;max-width:180px}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i7.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i8.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "component", type: MessageInputComponent, selector: "app-message-input", inputs: ["conversationId"], outputs: ["messageSent", "messageWithFiles"] }] });
+  `, isInline: true, styles: [":host{--attachment-thumb-size: 180px}.chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative;container-type:inline-size;--attachment-thumb-size: clamp(120px, 48cqw, 180px)}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;align-items:center;gap:0}.header-actions button{width:32px;height:32px;min-width:32px!important;padding:0!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;--mdc-icon-button-state-layer-size: 32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}:host ::ng-deep .hdr-btn .mat-mdc-button-touch-target{width:32px!important;height:32px!important}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.removed-group-state{height:100%;min-height:260px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:10px;padding:32px 24px;color:#ffffffc7;box-sizing:border-box}.removed-group-state mat-icon{width:44px;height:44px;font-size:44px;color:#f87171;margin-bottom:4px}.removed-group-state h4{margin:0;color:#fff;font-size:17px;font-weight:700}.removed-group-state p{margin:0 0 8px;max-width:280px;font-size:13px;line-height:1.4;color:#ffffff9e}.removed-exit-btn{border-radius:10px;background:#ffffff2e!important;color:#fff!important;font-weight:700;padding:0 18px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.system-message-row{align-self:center;max-width:88%;margin:8px auto;text-align:center}.system-message-text{display:inline-flex;align-items:center;justify-content:center;padding:5px 11px;border-radius:999px;background:#ffffff17;border:1px solid rgba(255,255,255,.12);color:#ffffffb8;font-size:11px;line-height:1.35}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:calc(clamp(11px,3.4cqw,13px) * var(--message-text-scale, 1));line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.reply-context{display:flex;align-items:center;gap:7px;margin-bottom:7px;padding:7px 9px;border-radius:10px;background:#ffffff14;border-left:3px solid rgba(127,180,255,.78);max-width:min(68cqw,420px)}.reply-context mat-icon{color:#bfdbfe;font-size:16px;width:16px;height:16px;flex-shrink:0}.reply-context div{min-width:0}.reply-context span{display:block;color:#bfdbfe;font-size:11px;font-weight:700;margin-bottom:2px}.reply-context p{margin:0;color:#ffffffc7;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.text-content{white-space:pre-wrap;tab-size:4}.text-content.preformatted-text{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;font-size:calc(clamp(10px,3.1cqw,12px) * var(--code-text-scale, 1));line-height:1.45;overflow-x:auto;max-width:min(72cqw,520px);scrollbar-width:none;-ms-overflow-style:none}.text-content.preformatted-text::-webkit-scrollbar{display:none}.attachment-caption{margin-top:8px;width:var(--attachment-thumb-size);max-width:var(--attachment-thumb-size);box-sizing:border-box}.attachment-caption .text-content{white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%}.attachment-render-block{width:100%;max-width:100%}.code-message-wrap{position:relative;max-width:min(76cqw,560px);border-radius:10px;overflow:hidden;border:1px solid rgba(255,255,255,.14);background:#061827}.render-copy-btn{position:absolute;top:6px;right:6px;z-index:2;width:26px;height:26px;border:none;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;padding:0;background:#071d30d1;color:#ffffffc7;cursor:pointer;opacity:0;transition:opacity .12s,background .12s,color .12s}.code-message-wrap:hover .render-copy-btn,.table-message-wrap:hover .render-copy-btn,.md-message-wrap:hover .render-copy-btn,.render-copy-btn:focus{opacity:1}.render-copy-btn:hover{background:#7fb4ff38;color:#fff}.render-copy-btn mat-icon{font-size:16px;width:16px;height:16px;line-height:16px}.code-message{margin:0;padding:12px 42px 28px 12px;overflow-x:auto;color:#dbeafe;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;font-size:calc(clamp(10px,3.1cqw,12px) * var(--code-text-scale, 1));line-height:1.45;white-space:pre;tab-size:2;scrollbar-width:none;-ms-overflow-style:none}.code-message::-webkit-scrollbar{display:none}.code-language{position:absolute;right:8px;bottom:6px;padding:2px 7px;border-radius:999px;background:#7fb4ff29;color:#bfdbfe;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;pointer-events:none}.md-language{position:absolute;right:8px;bottom:6px;padding:2px 7px;border-radius:999px;background:#86efac24;color:#bbf7d0;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;pointer-events:none}:host ::ng-deep .code-token-keyword{color:#93c5fd;font-weight:700}:host ::ng-deep .code-token-string{color:#86efac}:host ::ng-deep .code-token-number{color:#fbbf24}:host ::ng-deep .code-token-comment{color:#94a3b8;font-style:italic}:host ::ng-deep .code-token-function{color:#c4b5fd}.table-message-wrap{position:relative;max-width:min(76cqw,560px);overflow-x:auto;border-radius:9px;border:1px solid rgba(255,255,255,.16);background:#ffffff0a;scrollbar-width:none;-ms-overflow-style:none}.table-message-wrap::-webkit-scrollbar{display:none}.pasted-table{border-collapse:collapse;min-width:100%;font-size:calc(clamp(10px,3.1cqw,12px) * var(--code-text-scale, 1));line-height:1.35;color:#f5f7ff}.pasted-table th,.pasted-table td{padding:6px 9px;border-right:1px solid rgba(255,255,255,.12);border-bottom:1px solid rgba(255,255,255,.12);text-align:left;white-space:pre-wrap;vertical-align:top}.pasted-table th{background:#ffffff1a;font-weight:700}.pasted-table tr:last-child td,.pasted-table tr:last-child th{border-bottom:none}.pasted-table th:last-child,.pasted-table td:last-child{border-right:none}.md-message-wrap{position:relative;max-width:min(76cqw,560px);overflow-x:auto;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:#ffffff0d;scrollbar-width:none;-ms-overflow-style:none}.md-message-wrap::-webkit-scrollbar{display:none}.md-message{padding:10px 42px 28px 12px;color:#f5f7ff;font-size:calc(clamp(11px,3.4cqw,13px) * var(--message-text-scale, 1));line-height:1.45;overflow-wrap:anywhere}:host ::ng-deep .md-message h1,:host ::ng-deep .md-message h2,:host ::ng-deep .md-message h3{margin:8px 0 6px;color:#fff;line-height:1.25}:host ::ng-deep .md-message h1{font-size:18px}:host ::ng-deep .md-message h2{font-size:16px}:host ::ng-deep .md-message h3{font-size:14px}:host ::ng-deep .md-message p{margin:6px 0}:host ::ng-deep .md-message ul,:host ::ng-deep .md-message ol{margin:6px 0;padding-left:20px}:host ::ng-deep .md-message blockquote{margin:8px 0;padding-left:10px;border-left:3px solid rgba(127,180,255,.55);color:#ffffffc7}:host ::ng-deep .md-message code{padding:1px 5px;border-radius:5px;background:#00000040;color:#bfdbfe;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;font-size:12px}:host ::ng-deep .md-message pre{margin:8px 0;padding:9px;border-radius:8px;overflow-x:auto;background:#061827;scrollbar-width:none;-ms-overflow-style:none}:host ::ng-deep .md-message pre::-webkit-scrollbar{display:none}:host ::ng-deep .md-message pre code{padding:0;background:transparent;color:#dbeafe;white-space:pre}.image-message{line-height:0}.media-wrapper{position:relative;display:inline-block;line-height:0;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);overflow:hidden;border-radius:10px;background:#ffffff14}.media-img{width:100%;height:100%;border-radius:inherit;display:block;cursor:zoom-in;object-fit:cover}.attachment-actions{position:absolute;right:6px;top:6px;display:flex;gap:4px;opacity:0;transition:opacity .12s ease;pointer-events:none}.media-wrapper:hover .attachment-actions{opacity:1;pointer-events:auto}.attachment-action-btn,.file-download-btn{border:none;border-radius:999px;background:#071d30d1;color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}.attachment-action-btn{width:28px;height:28px}.attachment-action-btn mat-icon{font-size:17px;width:17px;height:17px}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;justify-content:center;gap:8px;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);border-radius:10px;background:#ffffff14;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.attachments-list{display:flex;flex-direction:column;gap:8px;max-width:100%}.attachment-item{max-width:100%}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.attachment-thumb.file-message{position:relative;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);padding:12px;border-radius:10px;background:#ffffff14;flex-direction:column;justify-content:center;box-sizing:border-box;overflow:hidden}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px}.file-msg-icon{font-size:42px;width:42px;height:42px;color:#fffc;flex-shrink:0}.file-msg-name{font-size:13px;color:#fff;line-height:1.2;max-width:100%;overflow:hidden;text-align:center;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;word-break:break-word}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.file-download-btn{width:24px;height:24px;flex-shrink:0;position:absolute;right:6px;top:6px}.file-download-link{border:none;border-radius:999px;background:#ffffff29;color:#fff;cursor:pointer;font-size:11px;padding:4px 10px;margin-top:4px}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.read{color:#60a5fa;opacity:1}.read-icon.unread{color:#dae0fa80;opacity:1}.reply-message-btn{position:absolute;right:-10px;bottom:-10px;width:24px;height:24px;border:1px solid rgba(255,255,255,.16);border-radius:999px;background:#071d30;color:#ffffffc7;display:inline-flex;align-items:center;justify-content:center;padding:0;cursor:pointer;opacity:0;transform:scale(.92);transition:opacity .12s,transform .12s,background .12s,color .12s;z-index:3}.message-bubble:hover .reply-message-btn,.reply-message-btn:focus{opacity:1;transform:scale(1)}.reply-message-btn:hover{background:#7fb4ff38;color:#fff}.reply-message-btn mat-icon{font-size:15px;width:15px;height:15px;line-height:15px}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions{left:0;right:auto}.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:2px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:3px;max-width:180px}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i9.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "component", type: MessageInputComponent, selector: "app-message-input", inputs: ["conversationId", "replyTo", "enableMentions", "mentionOptions"], outputs: ["messageSent", "messageWithFiles", "replyCancelled"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: ChatThreadComponent, decorators: [{
             type: Component,
@@ -4076,6 +4949,8 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
     <div
       class="chat-thread"
       [class.drag-over]="threadDragOver"
+      [style.--message-text-scale]="messageTextScale"
+      [style.--code-text-scale]="codeTextScale"
       (dragenter)="onThreadDragEnter($event)"
       (dragover)="onThreadDragOver($event)"
       (dragleave)="onThreadDragLeave($event)"
@@ -4150,6 +5025,13 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
                 {{ getSenderName(msg) }}
               </div>
               <div class="message-bubble" [class.own-bubble]="isOwnMessage(msg)" (mouseenter)="hoveredMessageId = msg.message_id" (mouseleave)="hoveredMessageId = null">
+                <div *ngIf="getReplyPreview(msg) as reply" class="reply-context">
+                  <mat-icon>reply</mat-icon>
+                  <div>
+                    <span>{{ reply.senderName }}</span>
+                    <p>{{ reply.content }}</p>
+                  </div>
+                </div>
                 <!-- ATTACHMENTS ───────────────────────────────── -->
                 <div *ngIf="hasFileAttachment(msg)" class="attachments-list">
                   <div *ngFor="let attachment of getRenderableAttachments(msg); trackBy: trackByAttachment" class="attachment-item">
@@ -4224,8 +5106,48 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
                     </ng-template>
                   </div>
                 </div>
+                <div
+                  *ngIf="hasFileAttachment(msg) && getMessageCaption(msg)"
+                  class="attachment-caption"
+                >
+                  <div *ngIf="isCodeContent(getMessageCaption(msg)); else nonCodeCaption" class="code-message-wrap attachment-render-block">
+                    <button type="button" class="render-copy-btn" (click)="copyTextValue(getMessageCaption(msg), $event)" title="Copy code">
+                      <mat-icon>content_copy</mat-icon>
+                    </button>
+                    <pre class="code-message"><code [innerHTML]="getHighlightedCodeContent(getMessageCaption(msg))"></code></pre>
+                    <span class="code-language">{{ getCodeLanguageContent(getMessageCaption(msg)) }}</span>
+                  </div>
+                  <ng-template #nonCodeCaption>
+                    <div *ngIf="isMarkdownContent(getMessageCaption(msg)); else plainCaption" class="md-message-wrap attachment-render-block">
+                      <button type="button" class="render-copy-btn" (click)="copyTextValue(getMessageCaption(msg), $event)" title="Copy markdown">
+                        <mat-icon>content_copy</mat-icon>
+                      </button>
+                      <div class="md-message" [innerHTML]="getMarkdownHtmlContent(getMessageCaption(msg))"></div>
+                      <span class="md-language">md</span>
+                    </div>
+                    <ng-template #plainCaption>
+                      <div
+                        class="text-content"
+                        [class.preformatted-text]="isPreformattedContent(getMessageCaption(msg))"
+                      >
+                        {{ getMessageCaption(msg) }}
+                      </div>
+                    </ng-template>
+                  </ng-template>
+                </div>
                 <ng-container *ngIf="msg.message_type === 'TEXT' && !hasFileAttachment(msg)">
+                  <div *ngIf="isCodeText(msg); else nonCodeTextMessage" class="code-message-wrap">
+                    <button type="button" class="render-copy-btn" (click)="copyCode(msg, $event)" title="Copy code">
+                      <mat-icon>content_copy</mat-icon>
+                    </button>
+                    <pre class="code-message"><code [innerHTML]="getHighlightedCode(msg)"></code></pre>
+                    <span class="code-language">{{ getCodeLanguage(msg) }}</span>
+                  </div>
+                  <ng-template #nonCodeTextMessage>
                   <div *ngIf="isTableText(msg); else plainTextMessage" class="table-message-wrap">
+                    <button type="button" class="render-copy-btn" (click)="copyMessageText(msg, $event)" title="Copy table">
+                      <mat-icon>content_copy</mat-icon>
+                    </button>
                     <table class="pasted-table">
                       <tbody>
                         <tr *ngFor="let row of getTableRows(msg); let rowIndex = index">
@@ -4240,12 +5162,22 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
                     </table>
                   </div>
                   <ng-template #plainTextMessage>
-                    <div
-                      class="text-content"
-                      [class.preformatted-text]="isPreformattedText(msg)"
-                    >
-                      {{ msg.content }}
+                    <div *ngIf="isMarkdownText(msg); else rawTextMessage" class="md-message-wrap">
+                      <button type="button" class="render-copy-btn" (click)="copyMessageText(msg, $event)" title="Copy markdown">
+                        <mat-icon>content_copy</mat-icon>
+                      </button>
+                      <div class="md-message" [innerHTML]="getMarkdownHtml(msg)"></div>
+                      <span class="md-language">md</span>
                     </div>
+                    <ng-template #rawTextMessage>
+                      <div
+                        class="text-content"
+                        [class.preformatted-text]="isPreformattedText(msg)"
+                      >
+                        {{ getMessageBody(msg) }}
+                      </div>
+                    </ng-template>
+                  </ng-template>
                   </ng-template>
                 </ng-container>
                 <div class="message-meta">
@@ -4263,6 +5195,16 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
                     matTooltipPosition="above"
                   >done</mat-icon>
                 </div>
+                <button
+                  *ngIf="isGroup"
+                  type="button"
+                  class="reply-message-btn"
+                  (click)="startReply(msg, $event)"
+                  matTooltip="Reply"
+                  matTooltipPosition="above"
+                >
+                  <mat-icon>reply</mat-icon>
+                </button>
                 <div *ngIf="hoveredMessageId === msg.message_id" class="quick-reactions">
                   <button
                     *ngFor="let emoji of quickEmojis"
@@ -4301,13 +5243,17 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
       <app-message-input
         *ngIf="!isRemovedFromGroup"
         [conversationId]="conversationId"
+        [replyTo]="replyToMessage ? getComposeReplyPreview(replyToMessage) : null"
+        [enableMentions]="isGroup"
+        [mentionOptions]="mentionOptions"
         (messageSent)="onSendMessage($event)"
         (messageWithFiles)="onSendWithFiles($event)"
+        (replyCancelled)="clearReply()"
       ></app-message-input>
     </div>
 
-  `, styles: [":host{--attachment-thumb-size: 180px}.chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;align-items:center;gap:0}.header-actions button{width:32px;height:32px;min-width:32px!important;padding:0!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;--mdc-icon-button-state-layer-size: 32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}:host ::ng-deep .hdr-btn .mat-mdc-button-touch-target{width:32px!important;height:32px!important}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.removed-group-state{height:100%;min-height:260px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:10px;padding:32px 24px;color:#ffffffc7;box-sizing:border-box}.removed-group-state mat-icon{width:44px;height:44px;font-size:44px;color:#f87171;margin-bottom:4px}.removed-group-state h4{margin:0;color:#fff;font-size:17px;font-weight:700}.removed-group-state p{margin:0 0 8px;max-width:280px;font-size:13px;line-height:1.4;color:#ffffff9e}.removed-exit-btn{border-radius:10px;background:#ffffff2e!important;color:#fff!important;font-weight:700;padding:0 18px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.system-message-row{align-self:center;max-width:88%;margin:8px auto;text-align:center}.system-message-text{display:inline-flex;align-items:center;justify-content:center;padding:5px 11px;border-radius:999px;background:#ffffff17;border:1px solid rgba(255,255,255,.12);color:#ffffffb8;font-size:11px;line-height:1.35}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.text-content{white-space:pre-wrap;tab-size:4}.text-content.preformatted-text{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;font-size:12px;line-height:1.45;overflow-x:auto;max-width:min(72vw,520px)}.table-message-wrap{max-width:min(76vw,560px);overflow-x:auto;border-radius:9px;border:1px solid rgba(255,255,255,.16);background:#ffffff0a}.pasted-table{border-collapse:collapse;min-width:100%;font-size:12px;line-height:1.35;color:#f5f7ff}.pasted-table th,.pasted-table td{padding:6px 9px;border-right:1px solid rgba(255,255,255,.12);border-bottom:1px solid rgba(255,255,255,.12);text-align:left;white-space:pre-wrap;vertical-align:top}.pasted-table th{background:#ffffff1a;font-weight:700}.pasted-table tr:last-child td,.pasted-table tr:last-child th{border-bottom:none}.pasted-table th:last-child,.pasted-table td:last-child{border-right:none}.image-message{line-height:0}.media-wrapper{position:relative;display:inline-block;line-height:0;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);overflow:hidden;border-radius:10px;background:#ffffff14}.media-img{width:100%;height:100%;border-radius:inherit;display:block;cursor:zoom-in;object-fit:cover}.attachment-actions{position:absolute;right:6px;top:6px;display:flex;gap:4px;opacity:0;transition:opacity .12s ease;pointer-events:none}.media-wrapper:hover .attachment-actions{opacity:1;pointer-events:auto}.attachment-action-btn,.file-download-btn{border:none;border-radius:999px;background:#071d30d1;color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}.attachment-action-btn{width:28px;height:28px}.attachment-action-btn mat-icon{font-size:17px;width:17px;height:17px}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;justify-content:center;gap:8px;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);border-radius:10px;background:#ffffff14;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.attachments-list{display:flex;flex-direction:column;gap:8px;max-width:100%}.attachment-item{max-width:100%}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.attachment-thumb.file-message{position:relative;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);padding:12px;border-radius:10px;background:#ffffff14;flex-direction:column;justify-content:center;box-sizing:border-box;overflow:hidden}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px}.file-msg-icon{font-size:42px;width:42px;height:42px;color:#fffc;flex-shrink:0}.file-msg-name{font-size:13px;color:#fff;line-height:1.2;max-width:100%;overflow:hidden;text-align:center;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;word-break:break-word}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.file-download-btn{width:24px;height:24px;flex-shrink:0;position:absolute;right:6px;top:6px}.file-download-link{border:none;border-radius:999px;background:#ffffff29;color:#fff;cursor:pointer;font-size:11px;padding:4px 10px;margin-top:4px}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.read{color:#60a5fa;opacity:1}.read-icon.unread{color:#dae0fa80;opacity:1}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions{left:0;right:auto}.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:2px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:3px;max-width:180px}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"] }]
-        }], ctorParameters: () => [{ type: MessagingStoreService }, { type: AuthService }, { type: MessagingFileService }, { type: i0.ChangeDetectorRef }], propDecorators: { scrollContainer: [{
+  `, styles: [":host{--attachment-thumb-size: 180px}.chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative;container-type:inline-size;--attachment-thumb-size: clamp(120px, 48cqw, 180px)}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;align-items:center;gap:0}.header-actions button{width:32px;height:32px;min-width:32px!important;padding:0!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;--mdc-icon-button-state-layer-size: 32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}:host ::ng-deep .hdr-btn .mat-mdc-button-touch-target{width:32px!important;height:32px!important}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.removed-group-state{height:100%;min-height:260px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:10px;padding:32px 24px;color:#ffffffc7;box-sizing:border-box}.removed-group-state mat-icon{width:44px;height:44px;font-size:44px;color:#f87171;margin-bottom:4px}.removed-group-state h4{margin:0;color:#fff;font-size:17px;font-weight:700}.removed-group-state p{margin:0 0 8px;max-width:280px;font-size:13px;line-height:1.4;color:#ffffff9e}.removed-exit-btn{border-radius:10px;background:#ffffff2e!important;color:#fff!important;font-weight:700;padding:0 18px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.system-message-row{align-self:center;max-width:88%;margin:8px auto;text-align:center}.system-message-text{display:inline-flex;align-items:center;justify-content:center;padding:5px 11px;border-radius:999px;background:#ffffff17;border:1px solid rgba(255,255,255,.12);color:#ffffffb8;font-size:11px;line-height:1.35}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:calc(clamp(11px,3.4cqw,13px) * var(--message-text-scale, 1));line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.reply-context{display:flex;align-items:center;gap:7px;margin-bottom:7px;padding:7px 9px;border-radius:10px;background:#ffffff14;border-left:3px solid rgba(127,180,255,.78);max-width:min(68cqw,420px)}.reply-context mat-icon{color:#bfdbfe;font-size:16px;width:16px;height:16px;flex-shrink:0}.reply-context div{min-width:0}.reply-context span{display:block;color:#bfdbfe;font-size:11px;font-weight:700;margin-bottom:2px}.reply-context p{margin:0;color:#ffffffc7;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.text-content{white-space:pre-wrap;tab-size:4}.text-content.preformatted-text{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;font-size:calc(clamp(10px,3.1cqw,12px) * var(--code-text-scale, 1));line-height:1.45;overflow-x:auto;max-width:min(72cqw,520px);scrollbar-width:none;-ms-overflow-style:none}.text-content.preformatted-text::-webkit-scrollbar{display:none}.attachment-caption{margin-top:8px;width:var(--attachment-thumb-size);max-width:var(--attachment-thumb-size);box-sizing:border-box}.attachment-caption .text-content{white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%}.attachment-render-block{width:100%;max-width:100%}.code-message-wrap{position:relative;max-width:min(76cqw,560px);border-radius:10px;overflow:hidden;border:1px solid rgba(255,255,255,.14);background:#061827}.render-copy-btn{position:absolute;top:6px;right:6px;z-index:2;width:26px;height:26px;border:none;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;padding:0;background:#071d30d1;color:#ffffffc7;cursor:pointer;opacity:0;transition:opacity .12s,background .12s,color .12s}.code-message-wrap:hover .render-copy-btn,.table-message-wrap:hover .render-copy-btn,.md-message-wrap:hover .render-copy-btn,.render-copy-btn:focus{opacity:1}.render-copy-btn:hover{background:#7fb4ff38;color:#fff}.render-copy-btn mat-icon{font-size:16px;width:16px;height:16px;line-height:16px}.code-message{margin:0;padding:12px 42px 28px 12px;overflow-x:auto;color:#dbeafe;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;font-size:calc(clamp(10px,3.1cqw,12px) * var(--code-text-scale, 1));line-height:1.45;white-space:pre;tab-size:2;scrollbar-width:none;-ms-overflow-style:none}.code-message::-webkit-scrollbar{display:none}.code-language{position:absolute;right:8px;bottom:6px;padding:2px 7px;border-radius:999px;background:#7fb4ff29;color:#bfdbfe;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;pointer-events:none}.md-language{position:absolute;right:8px;bottom:6px;padding:2px 7px;border-radius:999px;background:#86efac24;color:#bbf7d0;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;pointer-events:none}:host ::ng-deep .code-token-keyword{color:#93c5fd;font-weight:700}:host ::ng-deep .code-token-string{color:#86efac}:host ::ng-deep .code-token-number{color:#fbbf24}:host ::ng-deep .code-token-comment{color:#94a3b8;font-style:italic}:host ::ng-deep .code-token-function{color:#c4b5fd}.table-message-wrap{position:relative;max-width:min(76cqw,560px);overflow-x:auto;border-radius:9px;border:1px solid rgba(255,255,255,.16);background:#ffffff0a;scrollbar-width:none;-ms-overflow-style:none}.table-message-wrap::-webkit-scrollbar{display:none}.pasted-table{border-collapse:collapse;min-width:100%;font-size:calc(clamp(10px,3.1cqw,12px) * var(--code-text-scale, 1));line-height:1.35;color:#f5f7ff}.pasted-table th,.pasted-table td{padding:6px 9px;border-right:1px solid rgba(255,255,255,.12);border-bottom:1px solid rgba(255,255,255,.12);text-align:left;white-space:pre-wrap;vertical-align:top}.pasted-table th{background:#ffffff1a;font-weight:700}.pasted-table tr:last-child td,.pasted-table tr:last-child th{border-bottom:none}.pasted-table th:last-child,.pasted-table td:last-child{border-right:none}.md-message-wrap{position:relative;max-width:min(76cqw,560px);overflow-x:auto;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:#ffffff0d;scrollbar-width:none;-ms-overflow-style:none}.md-message-wrap::-webkit-scrollbar{display:none}.md-message{padding:10px 42px 28px 12px;color:#f5f7ff;font-size:calc(clamp(11px,3.4cqw,13px) * var(--message-text-scale, 1));line-height:1.45;overflow-wrap:anywhere}:host ::ng-deep .md-message h1,:host ::ng-deep .md-message h2,:host ::ng-deep .md-message h3{margin:8px 0 6px;color:#fff;line-height:1.25}:host ::ng-deep .md-message h1{font-size:18px}:host ::ng-deep .md-message h2{font-size:16px}:host ::ng-deep .md-message h3{font-size:14px}:host ::ng-deep .md-message p{margin:6px 0}:host ::ng-deep .md-message ul,:host ::ng-deep .md-message ol{margin:6px 0;padding-left:20px}:host ::ng-deep .md-message blockquote{margin:8px 0;padding-left:10px;border-left:3px solid rgba(127,180,255,.55);color:#ffffffc7}:host ::ng-deep .md-message code{padding:1px 5px;border-radius:5px;background:#00000040;color:#bfdbfe;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;font-size:12px}:host ::ng-deep .md-message pre{margin:8px 0;padding:9px;border-radius:8px;overflow-x:auto;background:#061827;scrollbar-width:none;-ms-overflow-style:none}:host ::ng-deep .md-message pre::-webkit-scrollbar{display:none}:host ::ng-deep .md-message pre code{padding:0;background:transparent;color:#dbeafe;white-space:pre}.image-message{line-height:0}.media-wrapper{position:relative;display:inline-block;line-height:0;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);overflow:hidden;border-radius:10px;background:#ffffff14}.media-img{width:100%;height:100%;border-radius:inherit;display:block;cursor:zoom-in;object-fit:cover}.attachment-actions{position:absolute;right:6px;top:6px;display:flex;gap:4px;opacity:0;transition:opacity .12s ease;pointer-events:none}.media-wrapper:hover .attachment-actions{opacity:1;pointer-events:auto}.attachment-action-btn,.file-download-btn{border:none;border-radius:999px;background:#071d30d1;color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}.attachment-action-btn{width:28px;height:28px}.attachment-action-btn mat-icon{font-size:17px;width:17px;height:17px}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;justify-content:center;gap:8px;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);border-radius:10px;background:#ffffff14;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.attachments-list{display:flex;flex-direction:column;gap:8px;max-width:100%}.attachment-item{max-width:100%}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.attachment-thumb.file-message{position:relative;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);padding:12px;border-radius:10px;background:#ffffff14;flex-direction:column;justify-content:center;box-sizing:border-box;overflow:hidden}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px}.file-msg-icon{font-size:42px;width:42px;height:42px;color:#fffc;flex-shrink:0}.file-msg-name{font-size:13px;color:#fff;line-height:1.2;max-width:100%;overflow:hidden;text-align:center;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;word-break:break-word}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.file-download-btn{width:24px;height:24px;flex-shrink:0;position:absolute;right:6px;top:6px}.file-download-link{border:none;border-radius:999px;background:#ffffff29;color:#fff;cursor:pointer;font-size:11px;padding:4px 10px;margin-top:4px}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.read{color:#60a5fa;opacity:1}.read-icon.unread{color:#dae0fa80;opacity:1}.reply-message-btn{position:absolute;right:-10px;bottom:-10px;width:24px;height:24px;border:1px solid rgba(255,255,255,.16);border-radius:999px;background:#071d30;color:#ffffffc7;display:inline-flex;align-items:center;justify-content:center;padding:0;cursor:pointer;opacity:0;transform:scale(.92);transition:opacity .12s,transform .12s,background .12s,color .12s;z-index:3}.message-bubble:hover .reply-message-btn,.reply-message-btn:focus{opacity:1;transform:scale(1)}.reply-message-btn:hover{background:#7fb4ff38;color:#fff}.reply-message-btn mat-icon{font-size:15px;width:15px;height:15px;line-height:15px}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions{left:0;right:auto}.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:2px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:3px;max-width:180px}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"] }]
+        }], ctorParameters: () => [{ type: MessagingStoreService }, { type: MessagingApiService }, { type: AuthService }, { type: MessagingFileService }, { type: i0.ChangeDetectorRef }, { type: i5.DomSanitizer }], propDecorators: { scrollContainer: [{
                 type: ViewChild,
                 args: ['scrollContainer']
             }], messageInput: [{
@@ -4392,7 +5338,7 @@ class NewConversationComponent {
         </div>
       </div>
     </div>
-  `, isInline: true, styles: [".new-conv-container{display:flex;flex-direction:column;height:100%}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.search-bar{display:flex;align-items:center;margin:12px 16px;padding:8px 12px;background:#ffffff26;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#fff9}.contacts-list{flex:1;overflow-y:auto}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff1a}.contact-avatar{width:40px;height:40px;border-radius:50%;background:#0d2540;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#ffffffb3}.contact-info{display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#ffffffb3}.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;color:#fff9}.empty-state mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:12px}.empty-state p{font-size:14px;margin:0}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6$1.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i8.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }] });
+  `, isInline: true, styles: [".new-conv-container{display:flex;flex-direction:column;height:100%}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.search-bar{display:flex;align-items:center;margin:12px 16px;padding:8px 12px;background:#ffffff26;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#fff9}.contacts-list{flex:1;overflow-y:auto}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff1a}.contact-avatar{width:40px;height:40px;border-radius:50%;background:#0d2540;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#ffffffb3}.contact-info{display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#ffffffb3}.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;color:#fff9}.empty-state mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:12px}.empty-state p{font-size:14px;margin:0}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6$1.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: NewConversationComponent, decorators: [{
             type: Component,
@@ -4751,7 +5697,7 @@ class GroupManagerComponent {
         </div>
       </div>
     </div>
-  `, isInline: true, styles: [".group-manager{display:flex;flex-direction:column;height:100%;position:relative}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.scrollable{flex:1;overflow-y:auto}.form-section{padding:12px 16px 0}.section-gap{padding-top:16px}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.loading-row{display:flex;align-items:center;gap:8px;color:#fff9;font-size:13px;padding:8px 0}.members-list{border-radius:8px;overflow:hidden}.member-row{display:flex;align-items:center;padding:8px 12px;gap:10px;background:#ffffff12;border-bottom:1px solid rgba(255,255,255,.06)}.member-row:last-child{border-bottom:none}.member-avatar{width:30px;height:30px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.member-avatar mat-icon{color:#fff;font-size:18px}.member-info{display:flex;flex-direction:column}.member-name{font-size:13px;font-weight:500;color:#fff}.member-sub{font-size:11px;color:#ffffff80}.remove-member-btn{margin-left:auto;color:#fff9!important}.remove-member-btn:hover{color:#f87171!important;background:#f871711a!important}.empty-members{font-size:13px;color:#ffffff80;padding:8px 0}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px;flex-shrink:0}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}.confirm-overlay{position:absolute;inset:0;z-index:10;display:flex;align-items:flex-end;padding:16px;background:#0413229e;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);box-sizing:border-box}.confirm-card{width:100%;padding:16px;border-radius:14px;background:#0c1f35;border:1px solid rgba(255,255,255,.14);box-shadow:0 16px 40px #00000073;color:#fff}.confirm-icon{width:36px;height:36px;border-radius:50%;background:#f8717124;display:flex;align-items:center;justify-content:center;margin-bottom:10px}.confirm-icon mat-icon{color:#f87171}.confirm-copy h4{margin:0 0 6px;font-size:16px;font-weight:700}.confirm-copy p{margin:0;color:#ffffffb3;font-size:13px;line-height:1.4}.confirm-actions{display:flex;gap:8px;margin-top:16px}.confirm-cancel,.confirm-delete{flex:1;border-radius:10px;font-weight:600}.confirm-cancel{color:#fff!important;border-color:#ffffff40!important}.confirm-delete{background:#dc2626e6!important;color:#fff!important}.confirm-delete mat-icon{margin-right:6px;font-size:18px;width:18px;height:18px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6$1.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i8.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i7.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }] });
+  `, isInline: true, styles: [".group-manager{display:flex;flex-direction:column;height:100%;position:relative}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.scrollable{flex:1;overflow-y:auto}.form-section{padding:12px 16px 0}.section-gap{padding-top:16px}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.loading-row{display:flex;align-items:center;gap:8px;color:#fff9;font-size:13px;padding:8px 0}.members-list{border-radius:8px;overflow:hidden}.member-row{display:flex;align-items:center;padding:8px 12px;gap:10px;background:#ffffff12;border-bottom:1px solid rgba(255,255,255,.06)}.member-row:last-child{border-bottom:none}.member-avatar{width:30px;height:30px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.member-avatar mat-icon{color:#fff;font-size:18px}.member-info{display:flex;flex-direction:column}.member-name{font-size:13px;font-weight:500;color:#fff}.member-sub{font-size:11px;color:#ffffff80}.remove-member-btn{margin-left:auto;color:#fff9!important}.remove-member-btn:hover{color:#f87171!important;background:#f871711a!important}.empty-members{font-size:13px;color:#ffffff80;padding:8px 0}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px;flex-shrink:0}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}.confirm-overlay{position:absolute;inset:0;z-index:10;display:flex;align-items:flex-end;padding:16px;background:#0413229e;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);box-sizing:border-box}.confirm-card{width:100%;padding:16px;border-radius:14px;background:#0c1f35;border:1px solid rgba(255,255,255,.14);box-shadow:0 16px 40px #00000073;color:#fff}.confirm-icon{width:36px;height:36px;border-radius:50%;background:#f8717124;display:flex;align-items:center;justify-content:center;margin-bottom:10px}.confirm-icon mat-icon{color:#f87171}.confirm-copy h4{margin:0 0 6px;font-size:16px;font-weight:700}.confirm-copy p{margin:0;color:#ffffffb3;font-size:13px;line-height:1.4}.confirm-actions{display:flex;gap:8px;margin-top:16px}.confirm-cancel,.confirm-delete{flex:1;border-radius:10px;font-weight:600}.confirm-cancel{color:#fff!important;border-color:#ffffff40!important}.confirm-delete{background:#dc2626e6!important;color:#fff!important}.confirm-delete mat-icon{margin-right:6px;font-size:18px;width:18px;height:18px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6$1.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i9.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: GroupManagerComponent, decorators: [{
             type: Component,
@@ -5335,7 +6281,7 @@ class ChatPanelComponent {
       </ng-container>
       <div *ngIf="lightboxDetached" class="lb-resize-corner" (mousedown)="onLbResizeStart($event)"></div>
     </div>
-  `, isInline: true, styles: [".sidebar{position:fixed;top:0;bottom:0;width:400px;background:#041322;z-index:9999;display:flex;flex-direction:column;box-shadow:0 0 40px #0009;transition:transform .3s cubic-bezier(.4,0,.2,1);container-type:inline-size}.sidebar.side-right{right:0;transform:translate(100%)}.sidebar.side-left{left:0;transform:translate(-100%)}.sidebar.open.side-right,.sidebar.open.side-left{transform:translate(0)}.resize-handle{position:absolute;top:0;bottom:0;width:5px;cursor:ew-resize;z-index:1;transition:background .15s}.resize-handle:hover,.resize-handle:active{background:#ffffff26}.resize-handle.handle-left{left:0}.resize-handle.handle-right{right:0}.sidebar-header{display:flex;align-items:center;justify-content:space-between;padding:8px 10px 8px 14px;border-bottom:1px solid rgba(255,255,255,.15);flex-shrink:0;position:relative;z-index:2;min-height:48px}.header-left{display:flex;align-items:center;gap:8px;min-width:0;flex:1 1 auto}.header-title{font-size:clamp(11px,5cqw,16px);font-weight:700;color:#fff;letter-spacing:.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.header-actions{display:flex;align-items:center;gap:0;flex-shrink:0}.btn-spacer{width:12px}.hdr-btn{width:32px;height:32px;min-width:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:6px!important;transition:background .15s,box-shadow .15s;--mdc-icon-button-state-layer-size: 32px}.hdr-btn .mat-mdc-button-touch-target{width:32px;height:32px}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{font-size:20px;color:#ffffffd9}@container (max-width: 330px){.sidebar-header{padding:8px 6px 8px 10px}.header-title{display:none}.header-left{flex:0 0 auto;gap:0}.btn-spacer{width:4px}.hdr-btn{width:28px;height:28px;min-width:28px;--mdc-icon-button-state-layer-size: 28px}.hdr-btn mat-icon{font-size:18px}}.sidebar-content{flex:1;overflow:hidden}.messaging-toast{position:absolute;left:16px;right:16px;bottom:16px;z-index:5;display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;background:#192a3ff5;border:1px solid rgba(255,255,255,.14);box-shadow:0 10px 26px #00000059;color:#fff;font-size:13px;pointer-events:none}.messaging-toast.success{background:#14532df5;border-color:#22c55e66}.messaging-toast.error{background:#7f1d1df5;border-color:#f8717173}.messaging-toast mat-icon{font-size:18px;width:18px;height:18px}.status-dot{width:8px;height:8px;border-radius:50%;background:#fff6;flex-shrink:0}.status-dot.connected{background:#22c55e;box-shadow:0 0 0 3px #22c55e2e}.status-dot.connecting{background:#f59e0b;animation:blink 1s infinite}.status-dot.disconnected{background:#ef4444;box-shadow:0 0 0 3px #ef444424}@keyframes blink{50%{opacity:.3}}.sidebar.floating{position:fixed!important;right:unset!important;left:80px;top:80px;transform:none!important;border-radius:12px;overflow:hidden;resize:none;min-width:280px;min-height:320px}.sidebar.floating:not(.open){display:none}.drag-handle{cursor:grab;-webkit-user-select:none;user-select:none}.drag-handle:active{cursor:grabbing}.float-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.25) 50%);border-bottom-right-radius:12px}@media (max-width: 480px){.sidebar{width:100%!important}.resize-handle{display:none}}.lb-overlay{position:fixed;inset:0;background:#000000e0;display:flex;align-items:center;justify-content:center;z-index:99999;cursor:pointer}.lb-overlay.lb-detached{inset:unset;background:#0c1f35;border:1px solid rgba(255,255,255,.18);border-radius:12px;box-shadow:0 12px 48px #000000b3;display:flex;flex-direction:column;overflow:hidden;cursor:default;min-width:240px;min-height:200px}.lb-drag-bar{display:flex;align-items:center;justify-content:space-between;padding:6px 8px 6px 12px;background:#041322;border-bottom:1px solid rgba(255,255,255,.12);cursor:grab;flex-shrink:0;-webkit-user-select:none;user-select:none}.lb-drag-bar:active{cursor:grabbing}.lb-drag-title{font-size:12px;color:#fff9;letter-spacing:.4px}.lb-drag-actions{display:flex;gap:2px}.lb-action-btn{background:transparent;border:none;border-radius:6px;width:28px;height:28px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#ffffffb3;transition:background .15s}.lb-action-btn:hover{background:#ffffff26}.lb-action-btn mat-icon{font-size:16px;width:16px;height:16px}.lb-img{max-width:92vw;max-height:92vh;border-radius:8px;box-shadow:0 8px 40px #0009;cursor:default}.lb-img.lb-img-detached{max-width:100%;max-height:100%;border-radius:0;box-shadow:none;object-fit:contain;flex:1}.lb-close{position:absolute;top:16px;right:16px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lb-close:hover{background:#ffffff4d}.lb-detach-btn{position:absolute;top:16px;right:60px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lb-detach-btn:hover{background:#ffffff4d}.lb-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.2) 50%);border-bottom-right-radius:12px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i8.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "component", type: InboxListComponent, selector: "app-inbox-list" }, { kind: "component", type: ChatThreadComponent, selector: "app-chat-thread", outputs: ["lightboxOpen"] }, { kind: "component", type: NewConversationComponent, selector: "app-new-conversation" }, { kind: "component", type: GroupManagerComponent, selector: "app-group-manager" }] });
+  `, isInline: true, styles: [".sidebar{position:fixed;top:0;bottom:0;width:400px;background:#041322;z-index:9999;display:flex;flex-direction:column;box-shadow:0 0 40px #0009;transition:transform .3s cubic-bezier(.4,0,.2,1);container-type:inline-size}.sidebar.side-right{right:0;transform:translate(100%)}.sidebar.side-left{left:0;transform:translate(-100%)}.sidebar.open.side-right,.sidebar.open.side-left{transform:translate(0)}.resize-handle{position:absolute;top:0;bottom:0;width:5px;cursor:ew-resize;z-index:1;transition:background .15s}.resize-handle:hover,.resize-handle:active{background:#ffffff26}.resize-handle.handle-left{left:0}.resize-handle.handle-right{right:0}.sidebar-header{display:flex;align-items:center;justify-content:space-between;padding:8px 10px 8px 14px;border-bottom:1px solid rgba(255,255,255,.15);flex-shrink:0;position:relative;z-index:2;min-height:48px}.header-left{display:flex;align-items:center;gap:8px;min-width:0;flex:1 1 auto}.header-title{font-size:clamp(11px,5cqw,16px);font-weight:700;color:#fff;letter-spacing:.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.header-actions{display:flex;align-items:center;gap:0;flex-shrink:0}.btn-spacer{width:12px}.hdr-btn{width:32px;height:32px;min-width:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:6px!important;transition:background .15s,box-shadow .15s;--mdc-icon-button-state-layer-size: 32px}.hdr-btn .mat-mdc-button-touch-target{width:32px;height:32px}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{font-size:20px;color:#ffffffd9}@container (max-width: 330px){.sidebar-header{padding:8px 6px 8px 10px}.header-title{display:none}.header-left{flex:0 0 auto;gap:0}.btn-spacer{width:4px}.hdr-btn{width:28px;height:28px;min-width:28px;--mdc-icon-button-state-layer-size: 28px}.hdr-btn mat-icon{font-size:18px}}.sidebar-content{flex:1;overflow:hidden}.messaging-toast{position:absolute;left:16px;right:16px;bottom:16px;z-index:5;display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;background:#192a3ff5;border:1px solid rgba(255,255,255,.14);box-shadow:0 10px 26px #00000059;color:#fff;font-size:13px;pointer-events:none}.messaging-toast.success{background:#14532df5;border-color:#22c55e66}.messaging-toast.error{background:#7f1d1df5;border-color:#f8717173}.messaging-toast mat-icon{font-size:18px;width:18px;height:18px}.status-dot{width:8px;height:8px;border-radius:50%;background:#fff6;flex-shrink:0}.status-dot.connected{background:#22c55e;box-shadow:0 0 0 3px #22c55e2e}.status-dot.connecting{background:#f59e0b;animation:blink 1s infinite}.status-dot.disconnected{background:#ef4444;box-shadow:0 0 0 3px #ef444424}@keyframes blink{50%{opacity:.3}}.sidebar.floating{position:fixed!important;right:unset!important;left:80px;top:80px;transform:none!important;border-radius:12px;overflow:hidden;resize:none;min-width:280px;min-height:320px}.sidebar.floating:not(.open){display:none}.drag-handle{cursor:grab;-webkit-user-select:none;user-select:none}.drag-handle:active{cursor:grabbing}.float-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.25) 50%);border-bottom-right-radius:12px}@media (max-width: 480px){.sidebar{width:100%!important}.resize-handle{display:none}}.lb-overlay{position:fixed;inset:0;background:#000000e0;display:flex;align-items:center;justify-content:center;z-index:99999;cursor:pointer}.lb-overlay.lb-detached{inset:unset;background:#0c1f35;border:1px solid rgba(255,255,255,.18);border-radius:12px;box-shadow:0 12px 48px #000000b3;display:flex;flex-direction:column;overflow:hidden;cursor:default;min-width:240px;min-height:200px}.lb-drag-bar{display:flex;align-items:center;justify-content:space-between;padding:6px 8px 6px 12px;background:#041322;border-bottom:1px solid rgba(255,255,255,.12);cursor:grab;flex-shrink:0;-webkit-user-select:none;user-select:none}.lb-drag-bar:active{cursor:grabbing}.lb-drag-title{font-size:12px;color:#fff9;letter-spacing:.4px}.lb-drag-actions{display:flex;gap:2px}.lb-action-btn{background:transparent;border:none;border-radius:6px;width:28px;height:28px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#ffffffb3;transition:background .15s}.lb-action-btn:hover{background:#ffffff26}.lb-action-btn mat-icon{font-size:16px;width:16px;height:16px}.lb-img{max-width:92vw;max-height:92vh;border-radius:8px;box-shadow:0 8px 40px #0009;cursor:default}.lb-img.lb-img-detached{max-width:100%;max-height:100%;border-radius:0;box-shadow:none;object-fit:contain;flex:1}.lb-close{position:absolute;top:16px;right:16px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lb-close:hover{background:#ffffff4d}.lb-detach-btn{position:absolute;top:16px;right:60px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lb-detach-btn:hover{background:#ffffff4d}.lb-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.2) 50%);border-bottom-right-radius:12px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "component", type: InboxListComponent, selector: "app-inbox-list" }, { kind: "component", type: ChatThreadComponent, selector: "app-chat-thread", outputs: ["lightboxOpen"] }, { kind: "component", type: NewConversationComponent, selector: "app-new-conversation" }, { kind: "component", type: GroupManagerComponent, selector: "app-group-manager" }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: ChatPanelComponent, decorators: [{
             type: Component,
@@ -5656,7 +6602,7 @@ class ThreadViewerComponent {
         </button>
       </div>
     </div>
-  `, isInline: true, styles: [".thread-viewer{display:flex;flex-direction:column;height:100%;background:#fff}.thread-header{display:flex;align-items:center;padding:12px;border-bottom:1px solid #e0e0e0;gap:8px}.thread-header h3{flex:1;margin:0;font-size:16px;font-weight:500}.parent-message{padding:16px;background:#f5f5f5;border-bottom:2px solid #1976d2}.message-header{display:flex;justify-content:space-between;margin-bottom:4px;font-size:14px}.timestamp{color:#666;font-size:12px}.message-content{margin:8px 0;line-height:1.4}.reply-count{font-size:12px;color:#1976d2;margin-top:8px}.thread-messages{flex:1;overflow-y:auto;padding:16px}.thread-message{margin-bottom:16px;padding:12px;background:#fafafa;border-radius:8px}.loading{display:flex;justify-content:center;align-items:center;flex:1}.thread-input{display:flex;padding:12px;border-top:1px solid #e0e0e0;gap:8px}.thread-input input{flex:1;padding:8px 12px;border:1px solid #ddd;border-radius:20px;outline:none}.thread-input input:focus{border-color:#1976d2}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i7.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }] });
+  `, isInline: true, styles: [".thread-viewer{display:flex;flex-direction:column;height:100%;background:#fff}.thread-header{display:flex;align-items:center;padding:12px;border-bottom:1px solid #e0e0e0;gap:8px}.thread-header h3{flex:1;margin:0;font-size:16px;font-weight:500}.parent-message{padding:16px;background:#f5f5f5;border-bottom:2px solid #1976d2}.message-header{display:flex;justify-content:space-between;margin-bottom:4px;font-size:14px}.timestamp{color:#666;font-size:12px}.message-content{margin:8px 0;line-height:1.4}.reply-count{font-size:12px;color:#1976d2;margin-top:8px}.thread-messages{flex:1;overflow-y:auto;padding:16px}.thread-message{margin-bottom:16px;padding:12px;background:#fafafa;border-radius:8px}.loading{display:flex;justify-content:center;align-items:center;flex:1}.thread-input{display:flex;padding:12px;border-top:1px solid #e0e0e0;gap:8px}.thread-input input{flex:1;padding:8px 12px;border:1px solid #ddd;border-radius:20px;outline:none}.thread-input input:focus{border-color:#1976d2}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i9.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: ThreadViewerComponent, decorators: [{
             type: Component,
@@ -5737,7 +6683,7 @@ class ReactionPickerComponent {
         {{ emoji }}
       </button>
     </div>
-  `, isInline: true, styles: [".reaction-picker{display:flex;gap:2px;align-items:center;justify-content:center;padding:5px 6px;background:linear-gradient(180deg,#1f4bd8,#173396);border:1px solid rgba(255,255,255,.24);border-radius:10px;box-shadow:0 6px 14px #00000038;position:absolute;z-index:1000;bottom:100%;left:0;margin-bottom:3px;white-space:nowrap;overflow:visible}.reaction-picker.align-right{left:auto;right:0}.emoji-btn{font-size:16px;width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;line-height:1;border-radius:7px;transition:transform .2s}.emoji-btn:hover{transform:scale(1.12);background:#ffffff2e}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i8.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }] });
+  `, isInline: true, styles: [".reaction-picker{display:flex;gap:2px;align-items:center;justify-content:center;padding:5px 6px;background:linear-gradient(180deg,#1f4bd8,#173396);border:1px solid rgba(255,255,255,.24);border-radius:10px;box-shadow:0 6px 14px #00000038;position:absolute;z-index:1000;bottom:100%;left:0;margin-bottom:3px;white-space:nowrap;overflow:visible}.reaction-picker.align-right{left:auto;right:0}.emoji-btn{font-size:16px;width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;line-height:1;border-radius:7px;transition:transform .2s}.emoji-btn:hover{transform:scale(1.12);background:#ffffff2e}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: ReactionPickerComponent, decorators: [{
             type: Component,
@@ -5840,7 +6786,7 @@ class MessageActionsComponent {
         </button>
       </mat-menu>
     </div>
-  `, isInline: true, styles: [".message-actions{opacity:0;transition:opacity .2s}:host:hover .message-actions,.message-actions:focus-within{opacity:1}.more-btn{width:28px;height:28px;line-height:28px}.more-btn mat-icon{font-size:18px;width:18px;height:18px}.delete-action{color:#d32f2f}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatMenuModule }, { kind: "component", type: i4.MatMenu, selector: "mat-menu", inputs: ["backdropClass", "aria-label", "aria-labelledby", "aria-describedby", "xPosition", "yPosition", "overlapTrigger", "hasBackdrop", "class", "classList"], outputs: ["closed", "close"], exportAs: ["matMenu"] }, { kind: "component", type: i4.MatMenuItem, selector: "[mat-menu-item]", inputs: ["role", "disabled", "disableRipple"], exportAs: ["matMenuItem"] }, { kind: "directive", type: i4.MatMenuTrigger, selector: "[mat-menu-trigger-for], [matMenuTriggerFor]", inputs: ["mat-menu-trigger-for", "matMenuTriggerFor", "matMenuTriggerData", "matMenuTriggerRestoreFocus"], outputs: ["menuOpened", "onMenuOpen", "menuClosed", "onMenuClose"], exportAs: ["matMenuTrigger"] }] });
+  `, isInline: true, styles: [".message-actions{opacity:0;transition:opacity .2s}:host:hover .message-actions,.message-actions:focus-within{opacity:1}.more-btn{width:28px;height:28px;line-height:28px}.more-btn mat-icon{font-size:18px;width:18px;height:18px}.delete-action{color:#d32f2f}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatMenuModule }, { kind: "component", type: i4$1.MatMenu, selector: "mat-menu", inputs: ["backdropClass", "aria-label", "aria-labelledby", "aria-describedby", "xPosition", "yPosition", "overlapTrigger", "hasBackdrop", "class", "classList"], outputs: ["closed", "close"], exportAs: ["matMenu"] }, { kind: "component", type: i4$1.MatMenuItem, selector: "[mat-menu-item]", inputs: ["role", "disabled", "disableRipple"], exportAs: ["matMenuItem"] }, { kind: "directive", type: i4$1.MatMenuTrigger, selector: "[mat-menu-trigger-for], [matMenuTriggerFor]", inputs: ["mat-menu-trigger-for", "matMenuTriggerFor", "matMenuTriggerData", "matMenuTriggerRestoreFocus"], outputs: ["menuOpened", "onMenuOpen", "menuClosed", "onMenuClose"], exportAs: ["matMenuTrigger"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: MessageActionsComponent, decorators: [{
             type: Component,
@@ -5949,7 +6895,7 @@ class PresenceIndicatorComponent {
       [class.offline]="status === 'offline'"
       [matTooltip]="getTooltip()"
     ></div>
-  `, isInline: true, styles: [".presence-indicator{width:10px;height:10px;border-radius:50%;border:2px solid white;position:absolute;bottom:0;right:0}.presence-indicator.online{background-color:#4caf50}.presence-indicator.away{background-color:#ff9800}.presence-indicator.busy{background-color:#f44336}.presence-indicator.offline{background-color:#9e9e9e}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i8.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }] });
+  `, isInline: true, styles: [".presence-indicator{width:10px;height:10px;border-radius:50%;border:2px solid white;position:absolute;bottom:0;right:0}.presence-indicator.online{background-color:#4caf50}.presence-indicator.away{background-color:#ff9800}.presence-indicator.busy{background-color:#f44336}.presence-indicator.offline{background-color:#9e9e9e}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: PresenceIndicatorComponent, decorators: [{
             type: Component,
@@ -6150,7 +7096,7 @@ class SearchPanelComponent {
         </div>
       </div>
     </div>
-  `, isInline: true, styles: [".search-panel{display:flex;flex-direction:column;height:100%;background:#fff}.search-header{display:flex;justify-content:space-between;align-items:center;padding:16px;border-bottom:1px solid #e0e0e0}.search-header h3{margin:0;font-size:18px;font-weight:500}.search-input-container{padding:16px;border-bottom:1px solid #e0e0e0}.search-field{width:100%;margin-bottom:8px}.filters{padding:16px;background:#f5f5f5;display:flex;flex-direction:column;gap:12px}.search-results{flex:1;overflow-y:auto;padding:16px}.loading{display:flex;justify-content:center;padding:32px}.no-results{text-align:center;color:#666;padding:32px}.result-item{padding:12px;border-bottom:1px solid #e0e0e0;cursor:pointer;transition:background .2s}.result-item:hover{background:#f5f5f5}.result-header{display:flex;justify-content:space-between;margin-bottom:4px;font-size:14px}.timestamp{color:#666;font-size:12px}.result-content{font-size:14px;color:#333;line-height:1.4}.result-content ::ng-deep mark{background-color:#ffeb3b;padding:2px 4px;border-radius:2px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatInputModule }, { kind: "directive", type: i7$1.MatInput, selector: "input[matInput], textarea[matInput], select[matNativeControl],      input[matNativeControl], textarea[matNativeControl]", inputs: ["disabled", "id", "placeholder", "name", "required", "type", "errorStateMatcher", "aria-describedby", "value", "readonly"], exportAs: ["matInput"] }, { kind: "component", type: i8$1.MatFormField, selector: "mat-form-field", inputs: ["hideRequiredMarker", "color", "floatLabel", "appearance", "subscriptSizing", "hintLabel"], exportAs: ["matFormField"] }, { kind: "directive", type: i8$1.MatLabel, selector: "mat-label" }, { kind: "directive", type: i8$1.MatPrefix, selector: "[matPrefix], [matIconPrefix], [matTextPrefix]", inputs: ["matTextPrefix"] }, { kind: "directive", type: i8$1.MatSuffix, selector: "[matSuffix], [matIconSuffix], [matTextSuffix]", inputs: ["matTextSuffix"] }, { kind: "ngmodule", type: MatFormFieldModule }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i7.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }, { kind: "ngmodule", type: MatDatepickerModule }, { kind: "component", type: i10.MatDatepicker, selector: "mat-datepicker", exportAs: ["matDatepicker"] }, { kind: "directive", type: i10.MatDatepickerInput, selector: "input[matDatepicker]", inputs: ["matDatepicker", "min", "max", "matDatepickerFilter"], exportAs: ["matDatepickerInput"] }, { kind: "component", type: i10.MatDatepickerToggle, selector: "mat-datepicker-toggle", inputs: ["for", "tabIndex", "aria-label", "disabled", "disableRipple"], exportAs: ["matDatepickerToggle"] }, { kind: "ngmodule", type: MatNativeDateModule }] });
+  `, isInline: true, styles: [".search-panel{display:flex;flex-direction:column;height:100%;background:#fff}.search-header{display:flex;justify-content:space-between;align-items:center;padding:16px;border-bottom:1px solid #e0e0e0}.search-header h3{margin:0;font-size:18px;font-weight:500}.search-input-container{padding:16px;border-bottom:1px solid #e0e0e0}.search-field{width:100%;margin-bottom:8px}.filters{padding:16px;background:#f5f5f5;display:flex;flex-direction:column;gap:12px}.search-results{flex:1;overflow-y:auto;padding:16px}.loading{display:flex;justify-content:center;padding:32px}.no-results{text-align:center;color:#666;padding:32px}.result-item{padding:12px;border-bottom:1px solid #e0e0e0;cursor:pointer;transition:background .2s}.result-item:hover{background:#f5f5f5}.result-header{display:flex;justify-content:space-between;margin-bottom:4px;font-size:14px}.timestamp{color:#666;font-size:12px}.result-content{font-size:14px;color:#333;line-height:1.4}.result-content ::ng-deep mark{background-color:#ffeb3b;padding:2px 4px;border-radius:2px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatInputModule }, { kind: "directive", type: i7$1.MatInput, selector: "input[matInput], textarea[matInput], select[matNativeControl],      input[matNativeControl], textarea[matNativeControl]", inputs: ["disabled", "id", "placeholder", "name", "required", "type", "errorStateMatcher", "aria-describedby", "value", "readonly"], exportAs: ["matInput"] }, { kind: "component", type: i8.MatFormField, selector: "mat-form-field", inputs: ["hideRequiredMarker", "color", "floatLabel", "appearance", "subscriptSizing", "hintLabel"], exportAs: ["matFormField"] }, { kind: "directive", type: i8.MatLabel, selector: "mat-label" }, { kind: "directive", type: i8.MatPrefix, selector: "[matPrefix], [matIconPrefix], [matTextPrefix]", inputs: ["matTextPrefix"] }, { kind: "directive", type: i8.MatSuffix, selector: "[matSuffix], [matIconSuffix], [matTextSuffix]", inputs: ["matTextSuffix"] }, { kind: "ngmodule", type: MatFormFieldModule }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i9.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }, { kind: "ngmodule", type: MatDatepickerModule }, { kind: "component", type: i10.MatDatepicker, selector: "mat-datepicker", exportAs: ["matDatepicker"] }, { kind: "directive", type: i10.MatDatepickerInput, selector: "input[matDatepicker]", inputs: ["matDatepicker", "min", "max", "matDatepickerFilter"], exportAs: ["matDatepickerInput"] }, { kind: "component", type: i10.MatDatepickerToggle, selector: "mat-datepicker-toggle", inputs: ["for", "tabIndex", "aria-label", "disabled", "disableRipple"], exportAs: ["matDatepickerToggle"] }, { kind: "ngmodule", type: MatNativeDateModule }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: SearchPanelComponent, decorators: [{
             type: Component,

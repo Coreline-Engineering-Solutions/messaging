@@ -3,7 +3,7 @@ import { Observable } from 'rxjs';
 import { AuthService } from './auth.service';
 import { MessagingApiService } from './messaging-api.service';
 import { MessagingWebSocketService } from './messaging-websocket.service';
-import { InboxItem, Message, Contact, ChatWindow, SidebarSide } from '../models/messaging.models';
+import { InboxItem, Message, MessageReplyPreview, Contact, ChatWindow, SidebarSide } from '../models/messaging.models';
 import * as i0 from "@angular/core";
 export declare class MessagingStoreService implements OnDestroy {
     private auth;
@@ -26,8 +26,11 @@ export declare class MessagingStoreService implements OnDestroy {
     private panelFloating$;
     private notificationVolume$;
     private notificationsMuted$;
+    private messageTextScale$;
+    private codeTextScale$;
     private toast$;
     private removedGroupIds$;
+    private mentionConversationIds$;
     readonly inbox: Observable<InboxItem[]>;
     readonly messagesMap: Observable<Map<string, Message[]>>;
     readonly openChats: Observable<ChatWindow[]>;
@@ -51,11 +54,14 @@ export declare class MessagingStoreService implements OnDestroy {
     readonly panelFloating: Observable<boolean>;
     readonly notificationVolume: Observable<number>;
     readonly notificationsMuted: Observable<boolean>;
+    readonly messageTextScale: Observable<number>;
+    readonly codeTextScale: Observable<number>;
     readonly toast: Observable<{
         message: string;
         type: 'info' | 'success' | 'error';
     }>;
     readonly removedGroupIds: Observable<Set<string>>;
+    readonly mentionConversationIds: Observable<Set<string>>;
     private wsSub;
     private destroy$;
     private pollTimer;
@@ -88,7 +94,11 @@ export declare class MessagingStoreService implements OnDestroy {
     setPanelFloating(isFloating: boolean): void;
     setNotificationVolume(volume: number): void;
     setNotificationsMuted(muted: boolean): void;
+    setMessageTextScale(scale: number): void;
+    setCodeTextScale(scale: number): void;
     testNotificationSound(): void;
+    prepareOutgoingMessageContent(content: string, replyTo?: Message | null): string;
+    createReplyPreview(message: Message): MessageReplyPreview;
     showToast(message: string, type?: 'info' | 'success' | 'error', durationMs?: number): void;
     getSidebarSide(): SidebarSide;
     loadInbox(): void;
@@ -98,7 +108,10 @@ export declare class MessagingStoreService implements OnDestroy {
     markGroupRemoved(conversationId: string): void;
     exitRemovedGroup(conversationId: string): void;
     loadMessages(conversationId: string, beforeMessageId?: string, skipReactionHydration?: boolean): void;
-    sendMessage(conversationId: string | null, content: string, messageType?: 'TEXT' | 'IMAGE' | 'SYSTEM'): void;
+    sendMessage(conversationId: string | null, content: string, messageType?: 'TEXT' | 'IMAGE' | 'SYSTEM', options?: {
+        replyTo?: Message | null;
+        mentions?: string[];
+    }): void;
     openDirectConversation(recipientContactId: string, displayName: string): void;
     sendDirectMessage(recipientContactId: string, content: string): void;
     createGroupConversation(participantIds: string[], name: string, callbacks?: {
@@ -141,6 +154,13 @@ export declare class MessagingStoreService implements OnDestroy {
     private updateInboxPreview;
     /** First non-empty text field from API / WS objects (POST bodies often omit `content`). */
     private coalesceMessageText;
+    private parseReplyContent;
+    private replyBodyText;
+    private replyExcerpt;
+    private currentMentionTokens;
+    private messageTextMentionsCurrentUser;
+    private messageMentionsCurrentUser;
+    private setConversationMention;
     private messageLooksLikeMedia;
     /** Same logical message_id can appear twice when WS beats HTTP temp replacement — keep first row. */
     private dedupeMessagesByIdKeepFirst;

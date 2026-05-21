@@ -44,6 +44,12 @@ import { InboxItem } from '../../models/messaging.models';
             </div>
             <div class="info-bottom">
               <span class="conv-preview">{{ item.last_message_preview || 'No messages yet' }}</span>
+              <span
+                *ngIf="item.has_mention"
+                class="mention-badge"
+                matTooltip="You were mentioned"
+                matTooltipPosition="above"
+              >&#64;</span>
               <span *ngIf="item.unread_count > 0" class="unread-badge">
                 {{ item.unread_count > 99 ? '99+' : item.unread_count }}
               </span>
@@ -105,6 +111,54 @@ import { InboxItem } from '../../models/messaging.models';
               (change)="previewNotificationSound()"
             />
           </div>
+
+          <div class="settings-card">
+            <div class="settings-header">
+              <div class="settings-icon display-icon">
+                <mat-icon>text_fields</mat-icon>
+              </div>
+              <div>
+                <h4>Display Size</h4>
+                <p>Adjust message text and programming block sizes.</p>
+              </div>
+            </div>
+
+            <label class="volume-label" for="messaging-message-size-slider">
+              Message size
+              <span>{{ (messageTextScale * 100) | number:'1.0-0' }}%</span>
+            </label>
+            <input
+              id="messaging-message-size-slider"
+              type="range"
+              min="0.8"
+              max="1.5"
+              step="0.05"
+              class="settings-volume"
+              [(ngModel)]="messageTextScale"
+              (ngModelChange)="onMessageTextScaleChange($event)"
+            />
+            <div class="settings-preview message-preview" [style.font-size.px]="13 * messageTextScale">
+              This is how normal message text will appear in chat.
+            </div>
+
+            <label class="volume-label" for="messaging-code-size-slider">
+              Programming size
+              <span>{{ (codeTextScale * 100) | number:'1.0-0' }}%</span>
+            </label>
+            <input
+              id="messaging-code-size-slider"
+              type="range"
+              min="0.8"
+              max="1.5"
+              step="0.05"
+              class="settings-volume"
+              [(ngModel)]="codeTextScale"
+              (ngModelChange)="onCodeTextScaleChange($event)"
+            />
+            <pre class="settings-preview code-preview" [style.font-size.px]="12 * codeTextScale"><code>SELECT ticket_ref, status
+FROM logging.ticket
+WHERE status = 'Open';</code></pre>
+          </div>
         </div>
       </div>
 
@@ -114,40 +168,50 @@ import { InboxItem } from '../../models/messaging.models';
           class="inbox-tab"
           [class.active]="activeTab === 'all'"
           (click)="setActiveTab('all')"
+          matTooltip="All"
+          matTooltipPosition="above"
         >
-          All
+          <mat-icon>forum</mat-icon>
         </button>
         <button
           type="button"
           class="inbox-tab"
           [class.active]="activeTab === 'direct'"
           (click)="setActiveTab('direct')"
+          matTooltip="Chats"
+          matTooltipPosition="above"
         >
-          Chats
+          <mat-icon>chat</mat-icon>
         </button>
         <button
           type="button"
           class="inbox-tab"
           [class.active]="activeTab === 'groups'"
           (click)="setActiveTab('groups')"
+          matTooltip="Groups"
+          matTooltipPosition="above"
         >
-          Groups
+          <mat-icon>groups</mat-icon>
         </button>
         <button
           type="button"
           class="inbox-tab"
           [class.active]="activeTab === 'projects'"
           (click)="setActiveTab('projects')"
+          matTooltip="Projects"
+          matTooltipPosition="above"
         >
-          Projects
+          <mat-icon>workspaces</mat-icon>
         </button>
         <button
           type="button"
           class="inbox-tab"
           [class.active]="activeTab === 'settings'"
           (click)="setActiveTab('settings')"
+          matTooltip="Settings"
+          matTooltipPosition="above"
         >
-          Settings
+          <mat-icon>settings</mat-icon>
         </button>
       </div>
 
@@ -224,15 +288,20 @@ import { InboxItem } from '../../models/messaging.models';
       background: rgba(255, 255, 255, 0.06);
       color: rgba(255, 255, 255, 0.72);
       border-radius: 999px;
-      padding: 7px 4px;
-      font-size: clamp(9px, 3.1cqw, 11px);
+      padding: 6px 4px;
       font-weight: 600;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
       cursor: pointer;
-      text-align: center;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+
+    .inbox-tab mat-icon {
+      font-size: clamp(17px, 6cqw, 21px);
+      width: clamp(17px, 6cqw, 21px);
+      height: clamp(17px, 6cqw, 21px);
+      line-height: clamp(17px, 6cqw, 21px);
     }
 
     .inbox-tab:hover {
@@ -355,6 +424,7 @@ import { InboxItem } from '../../models/messaging.models';
       display: flex;
       justify-content: space-between;
       align-items: center;
+      gap: 6px;
     }
 
     .conv-preview {
@@ -390,6 +460,23 @@ import { InboxItem } from '../../models/messaging.models';
       flex-shrink: 0;
     }
 
+    .mention-badge {
+      width: 20px;
+      height: 20px;
+      border-radius: 999px;
+      background: rgba(127, 180, 255, 0.2);
+      border: 1px solid rgba(127, 180, 255, 0.55);
+      color: #bfdbfe;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 800;
+      flex-shrink: 0;
+      margin-left: 6px;
+      box-shadow: 0 0 0 2px rgba(127, 180, 255, 0.06);
+    }
+
     .empty-state {
       display: flex;
       flex-direction: column;
@@ -418,6 +505,9 @@ import { InboxItem } from '../../models/messaging.models';
     .settings-panel {
       padding: 16px;
       color: #fff;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
     }
 
     .settings-card {
@@ -448,6 +538,14 @@ import { InboxItem } from '../../models/messaging.models';
 
     .settings-icon mat-icon {
       color: #bfdbfe;
+    }
+
+    .settings-icon.display-icon {
+      background: rgba(134, 239, 172, 0.14);
+    }
+
+    .settings-icon.display-icon mat-icon {
+      color: #bbf7d0;
     }
 
     .settings-header h4 {
@@ -493,6 +591,32 @@ import { InboxItem } from '../../models/messaging.models';
       width: 100%;
       accent-color: #7fb4ff;
       cursor: pointer;
+      margin-bottom: 12px;
+    }
+
+    .settings-preview {
+      margin: 0 0 16px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.06);
+      color: #f5f7ff;
+      box-sizing: border-box;
+    }
+
+    .message-preview {
+      padding: 9px 11px;
+      line-height: 1.35;
+    }
+
+    .code-preview {
+      padding: 10px 11px;
+      overflow: hidden;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      color: #dbeafe;
+      background: #061827;
+      margin-bottom: 0;
     }
 
     .context-menu {
@@ -547,6 +671,8 @@ export class InboxListComponent implements OnInit, OnDestroy {
   activeTab: 'all' | 'direct' | 'groups' | 'projects' | 'settings' = 'all';
   notificationVolume = 0.35;
   notificationsMuted = false;
+  messageTextScale = 1;
+  codeTextScale = 1;
   contextMenu: { x: number; y: number; item: InboxItem } | null = null;
   private readonly tabStorageKey = 'messaging_inbox_active_tab';
   private sub!: Subscription;
@@ -559,6 +685,8 @@ export class InboxListComponent implements OnInit, OnDestroy {
     this.sub.add(this.store.inbox.subscribe((items) => (this.inbox = items)));
     this.sub.add(this.store.notificationVolume.subscribe((volume) => (this.notificationVolume = volume)));
     this.sub.add(this.store.notificationsMuted.subscribe((muted) => (this.notificationsMuted = muted)));
+    this.sub.add(this.store.messageTextScale.subscribe((scale) => (this.messageTextScale = scale)));
+    this.sub.add(this.store.codeTextScale.subscribe((scale) => (this.codeTextScale = scale)));
   }
 
   ngOnDestroy(): void {
@@ -617,6 +745,14 @@ export class InboxListComponent implements OnInit, OnDestroy {
     if (!this.notificationsMuted && this.notificationVolume > 0) {
       this.store.testNotificationSound();
     }
+  }
+
+  onMessageTextScaleChange(value: number | string): void {
+    this.store.setMessageTextScale(Number(value));
+  }
+
+  onCodeTextScaleChange(value: number | string): void {
+    this.store.setCodeTextScale(Number(value));
   }
 
   openConversation(item: InboxItem): void {

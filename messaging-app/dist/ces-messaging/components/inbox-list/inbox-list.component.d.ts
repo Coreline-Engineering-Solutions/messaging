@@ -9,6 +9,8 @@ export declare class InboxListComponent implements OnInit, OnDestroy {
     activeTab: 'all' | 'direct' | 'groups' | 'projects' | 'settings';
     notificationVolume: number;
     notificationsMuted: boolean;
+    messageTextScale: number;
+    codeTextScale: number;
     contextMenu: {
         x: number;
         y: number;
@@ -26,6 +28,8 @@ export declare class InboxListComponent implements OnInit, OnDestroy {
     toggleNotificationsMuted(): void;
     onNotificationVolumeChange(value: number | string): void;
     previewNotificationSound(): void;
+    onMessageTextScaleChange(value: number | string): void;
+    onCodeTextScaleChange(value: number | string): void;
     openConversation(item: InboxItem): void;
     onNewConversation(): void;
     onCreateGroup(): void;

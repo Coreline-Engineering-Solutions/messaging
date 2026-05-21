@@ -2,6 +2,7 @@ import {
   Component, OnInit, OnDestroy, ViewChild, ElementRef, AfterViewChecked, ChangeDetectorRef,
   Output, EventEmitter,
 } from '@angular/core';
+import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { CommonModule } from '@angular/common';
 import { MatIconModule } from '@angular/material/icon';
 import { MatButtonModule } from '@angular/material/button';
@@ -9,10 +10,11 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { Subscription, combineLatest } from 'rxjs';
 import { MessagingStoreService } from '../../services/messaging-store.service';
+import { MessagingApiService } from '../../services/messaging-api.service';
 import { MessagingFileService } from '../../services/messaging-file.service';
 import { AuthService } from '../../services/auth.service';
-import { Contact, Message, Attachment, getContactDisplayName, getMessageSenderName } from '../../models/messaging.models';
-import { MessageInputComponent, MessagePayload } from '../message-input/message-input.component';
+import { Contact, ConversationParticipant, Message, Attachment, getContactDisplayName, getMessageSenderName } from '../../models/messaging.models';
+import { MentionOption, MessageInputComponent, MessagePayload, ReplyPreview } from '../message-input/message-input.component';
 
 @Component({
   selector: 'app-chat-thread',
@@ -25,6 +27,8 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
     <div
       class="chat-thread"
       [class.drag-over]="threadDragOver"
+      [style.--message-text-scale]="messageTextScale"
+      [style.--code-text-scale]="codeTextScale"
       (dragenter)="onThreadDragEnter($event)"
       (dragover)="onThreadDragOver($event)"
       (dragleave)="onThreadDragLeave($event)"
@@ -99,6 +103,13 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
                 {{ getSenderName(msg) }}
               </div>
               <div class="message-bubble" [class.own-bubble]="isOwnMessage(msg)" (mouseenter)="hoveredMessageId = msg.message_id" (mouseleave)="hoveredMessageId = null">
+                <div *ngIf="getReplyPreview(msg) as reply" class="reply-context">
+                  <mat-icon>reply</mat-icon>
+                  <div>
+                    <span>{{ reply.senderName }}</span>
+                    <p>{{ reply.content }}</p>
+                  </div>
+                </div>
                 <!-- ATTACHMENTS ───────────────────────────────── -->
                 <div *ngIf="hasFileAttachment(msg)" class="attachments-list">
                   <div *ngFor="let attachment of getRenderableAttachments(msg); trackBy: trackByAttachment" class="attachment-item">
@@ -173,8 +184,48 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
                     </ng-template>
                   </div>
                 </div>
+                <div
+                  *ngIf="hasFileAttachment(msg) && getMessageCaption(msg)"
+                  class="attachment-caption"
+                >
+                  <div *ngIf="isCodeContent(getMessageCaption(msg)); else nonCodeCaption" class="code-message-wrap attachment-render-block">
+                    <button type="button" class="render-copy-btn" (click)="copyTextValue(getMessageCaption(msg), $event)" title="Copy code">
+                      <mat-icon>content_copy</mat-icon>
+                    </button>
+                    <pre class="code-message"><code [innerHTML]="getHighlightedCodeContent(getMessageCaption(msg))"></code></pre>
+                    <span class="code-language">{{ getCodeLanguageContent(getMessageCaption(msg)) }}</span>
+                  </div>
+                  <ng-template #nonCodeCaption>
+                    <div *ngIf="isMarkdownContent(getMessageCaption(msg)); else plainCaption" class="md-message-wrap attachment-render-block">
+                      <button type="button" class="render-copy-btn" (click)="copyTextValue(getMessageCaption(msg), $event)" title="Copy markdown">
+                        <mat-icon>content_copy</mat-icon>
+                      </button>
+                      <div class="md-message" [innerHTML]="getMarkdownHtmlContent(getMessageCaption(msg))"></div>
+                      <span class="md-language">md</span>
+                    </div>
+                    <ng-template #plainCaption>
+                      <div
+                        class="text-content"
+                        [class.preformatted-text]="isPreformattedContent(getMessageCaption(msg))"
+                      >
+                        {{ getMessageCaption(msg) }}
+                      </div>
+                    </ng-template>
+                  </ng-template>
+                </div>
                 <ng-container *ngIf="msg.message_type === 'TEXT' && !hasFileAttachment(msg)">
+                  <div *ngIf="isCodeText(msg); else nonCodeTextMessage" class="code-message-wrap">
+                    <button type="button" class="render-copy-btn" (click)="copyCode(msg, $event)" title="Copy code">
+                      <mat-icon>content_copy</mat-icon>
+                    </button>
+                    <pre class="code-message"><code [innerHTML]="getHighlightedCode(msg)"></code></pre>
+                    <span class="code-language">{{ getCodeLanguage(msg) }}</span>
+                  </div>
+                  <ng-template #nonCodeTextMessage>
                   <div *ngIf="isTableText(msg); else plainTextMessage" class="table-message-wrap">
+                    <button type="button" class="render-copy-btn" (click)="copyMessageText(msg, $event)" title="Copy table">
+                      <mat-icon>content_copy</mat-icon>
+                    </button>
                     <table class="pasted-table">
                       <tbody>
                         <tr *ngFor="let row of getTableRows(msg); let rowIndex = index">
@@ -189,12 +240,22 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
                     </table>
                   </div>
                   <ng-template #plainTextMessage>
-                    <div
-                      class="text-content"
-                      [class.preformatted-text]="isPreformattedText(msg)"
-                    >
-                      {{ msg.content }}
+                    <div *ngIf="isMarkdownText(msg); else rawTextMessage" class="md-message-wrap">
+                      <button type="button" class="render-copy-btn" (click)="copyMessageText(msg, $event)" title="Copy markdown">
+                        <mat-icon>content_copy</mat-icon>
+                      </button>
+                      <div class="md-message" [innerHTML]="getMarkdownHtml(msg)"></div>
+                      <span class="md-language">md</span>
                     </div>
+                    <ng-template #rawTextMessage>
+                      <div
+                        class="text-content"
+                        [class.preformatted-text]="isPreformattedText(msg)"
+                      >
+                        {{ getMessageBody(msg) }}
+                      </div>
+                    </ng-template>
+                  </ng-template>
                   </ng-template>
                 </ng-container>
                 <div class="message-meta">
@@ -212,6 +273,16 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
                     matTooltipPosition="above"
                   >done</mat-icon>
                 </div>
+                <button
+                  *ngIf="isGroup"
+                  type="button"
+                  class="reply-message-btn"
+                  (click)="startReply(msg, $event)"
+                  matTooltip="Reply"
+                  matTooltipPosition="above"
+                >
+                  <mat-icon>reply</mat-icon>
+                </button>
                 <div *ngIf="hoveredMessageId === msg.message_id" class="quick-reactions">
                   <button
                     *ngFor="let emoji of quickEmojis"
@@ -250,8 +321,12 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       <app-message-input
         *ngIf="!isRemovedFromGroup"
         [conversationId]="conversationId"
+        [replyTo]="replyToMessage ? getComposeReplyPreview(replyToMessage) : null"
+        [enableMentions]="isGroup"
+        [mentionOptions]="mentionOptions"
         (messageSent)="onSendMessage($event)"
         (messageWithFiles)="onSendWithFiles($event)"
+        (replyCancelled)="clearReply()"
       ></app-message-input>
     </div>
 
@@ -267,6 +342,8 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       height: 100%;
       background: #041322;
       position: relative;
+      container-type: inline-size;
+      --attachment-thumb-size: clamp(120px, 48cqw, 180px);
     }
 
     .chat-thread.drag-over {
@@ -509,7 +586,7 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
     .message-bubble {
       padding: 8px 14px 7px;
       border-radius: 14px;
-      font-size: 13px;
+      font-size: calc(clamp(11px, 3.4cqw, 13px) * var(--message-text-scale, 1));
       line-height: 1.32;
       word-break: break-word;
       color: #f5f7ff;
@@ -530,6 +607,47 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
     }
 
+    .reply-context {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 7px;
+      padding: 7px 9px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.08);
+      border-left: 3px solid rgba(127, 180, 255, 0.78);
+      max-width: min(68cqw, 420px);
+    }
+
+    .reply-context mat-icon {
+      color: #bfdbfe;
+      font-size: 16px;
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+    }
+
+    .reply-context div {
+      min-width: 0;
+    }
+
+    .reply-context span {
+      display: block;
+      color: #bfdbfe;
+      font-size: 11px;
+      font-weight: 700;
+      margin-bottom: 2px;
+    }
+
+    .reply-context p {
+      margin: 0;
+      color: rgba(255, 255, 255, 0.78);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     .text-content {
       white-space: pre-wrap;
       tab-size: 4;
@@ -537,24 +655,157 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
 
     .text-content.preformatted-text {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-      font-size: 12px;
+      font-size: calc(clamp(10px, 3.1cqw, 12px) * var(--code-text-scale, 1));
       line-height: 1.45;
       overflow-x: auto;
-      max-width: min(72vw, 520px);
+      max-width: min(72cqw, 520px);
+      scrollbar-width: none;
+      -ms-overflow-style: none;
     }
 
+    .text-content.preformatted-text::-webkit-scrollbar {
+      display: none;
+    }
+
+    .attachment-caption {
+      margin-top: 8px;
+      width: var(--attachment-thumb-size);
+      max-width: var(--attachment-thumb-size);
+      box-sizing: border-box;
+    }
+
+    .attachment-caption .text-content {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      max-width: 100%;
+    }
+
+    .attachment-render-block {
+      width: 100%;
+      max-width: 100%;
+    }
+
+    .code-message-wrap {
+      position: relative;
+      max-width: min(76cqw, 560px);
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: #061827;
+    }
+
+    .render-copy-btn {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      z-index: 2;
+      width: 26px;
+      height: 26px;
+      border: none;
+      border-radius: 7px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      background: rgba(7, 29, 48, 0.82);
+      color: rgba(255, 255, 255, 0.78);
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.12s, background 0.12s, color 0.12s;
+    }
+
+    .code-message-wrap:hover .render-copy-btn,
+    .table-message-wrap:hover .render-copy-btn,
+    .md-message-wrap:hover .render-copy-btn,
+    .render-copy-btn:focus {
+      opacity: 1;
+    }
+
+    .render-copy-btn:hover {
+      background: rgba(127, 180, 255, 0.22);
+      color: #fff;
+    }
+
+    .render-copy-btn mat-icon {
+      font-size: 16px;
+      width: 16px;
+      height: 16px;
+      line-height: 16px;
+    }
+
+    .code-message {
+      margin: 0;
+      padding: 12px 42px 28px 12px;
+      overflow-x: auto;
+      color: #dbeafe;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: calc(clamp(10px, 3.1cqw, 12px) * var(--code-text-scale, 1));
+      line-height: 1.45;
+      white-space: pre;
+      tab-size: 2;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    .code-message::-webkit-scrollbar {
+      display: none;
+    }
+
+    .code-language {
+      position: absolute;
+      right: 8px;
+      bottom: 6px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(127, 180, 255, 0.16);
+      color: #bfdbfe;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      pointer-events: none;
+    }
+
+    .md-language {
+      position: absolute;
+      right: 8px;
+      bottom: 6px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(134, 239, 172, 0.14);
+      color: #bbf7d0;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      pointer-events: none;
+    }
+
+    :host ::ng-deep .code-token-keyword { color: #93c5fd; font-weight: 700; }
+    :host ::ng-deep .code-token-string { color: #86efac; }
+    :host ::ng-deep .code-token-number { color: #fbbf24; }
+    :host ::ng-deep .code-token-comment { color: #94a3b8; font-style: italic; }
+    :host ::ng-deep .code-token-function { color: #c4b5fd; }
+
     .table-message-wrap {
-      max-width: min(76vw, 560px);
+      position: relative;
+      max-width: min(76cqw, 560px);
       overflow-x: auto;
       border-radius: 9px;
       border: 1px solid rgba(255, 255, 255, 0.16);
       background: rgba(255, 255, 255, 0.04);
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    .table-message-wrap::-webkit-scrollbar {
+      display: none;
     }
 
     .pasted-table {
       border-collapse: collapse;
       min-width: 100%;
-      font-size: 12px;
+      font-size: calc(clamp(10px, 3.1cqw, 12px) * var(--code-text-scale, 1));
       line-height: 1.35;
       color: #f5f7ff;
     }
@@ -582,6 +833,88 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
     .pasted-table th:last-child,
     .pasted-table td:last-child {
       border-right: none;
+    }
+
+    .md-message-wrap {
+      position: relative;
+      max-width: min(76cqw, 560px);
+      overflow-x: auto;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.05);
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    .md-message-wrap::-webkit-scrollbar {
+      display: none;
+    }
+
+    .md-message {
+      padding: 10px 42px 28px 12px;
+      color: #f5f7ff;
+      font-size: calc(clamp(11px, 3.4cqw, 13px) * var(--message-text-scale, 1));
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    :host ::ng-deep .md-message h1,
+    :host ::ng-deep .md-message h2,
+    :host ::ng-deep .md-message h3 {
+      margin: 8px 0 6px;
+      color: #fff;
+      line-height: 1.25;
+    }
+
+    :host ::ng-deep .md-message h1 { font-size: 18px; }
+    :host ::ng-deep .md-message h2 { font-size: 16px; }
+    :host ::ng-deep .md-message h3 { font-size: 14px; }
+
+    :host ::ng-deep .md-message p {
+      margin: 6px 0;
+    }
+
+    :host ::ng-deep .md-message ul,
+    :host ::ng-deep .md-message ol {
+      margin: 6px 0;
+      padding-left: 20px;
+    }
+
+    :host ::ng-deep .md-message blockquote {
+      margin: 8px 0;
+      padding-left: 10px;
+      border-left: 3px solid rgba(127, 180, 255, 0.55);
+      color: rgba(255, 255, 255, 0.78);
+    }
+
+    :host ::ng-deep .md-message code {
+      padding: 1px 5px;
+      border-radius: 5px;
+      background: rgba(0, 0, 0, 0.25);
+      color: #bfdbfe;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+
+    :host ::ng-deep .md-message pre {
+      margin: 8px 0;
+      padding: 9px;
+      border-radius: 8px;
+      overflow-x: auto;
+      background: #061827;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    :host ::ng-deep .md-message pre::-webkit-scrollbar {
+      display: none;
+    }
+
+    :host ::ng-deep .md-message pre code {
+      padding: 0;
+      background: transparent;
+      color: #dbeafe;
+      white-space: pre;
     }
 
     .image-message {
@@ -810,6 +1143,45 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       opacity: 1;
     }
 
+    .reply-message-btn {
+      position: absolute;
+      right: -10px;
+      bottom: -10px;
+      width: 24px;
+      height: 24px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 999px;
+      background: #071d30;
+      color: rgba(255, 255, 255, 0.78);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      cursor: pointer;
+      opacity: 0;
+      transform: scale(0.92);
+      transition: opacity 0.12s, transform 0.12s, background 0.12s, color 0.12s;
+      z-index: 3;
+    }
+
+    .message-bubble:hover .reply-message-btn,
+    .reply-message-btn:focus {
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    .reply-message-btn:hover {
+      background: rgba(127, 180, 255, 0.22);
+      color: #fff;
+    }
+
+    .reply-message-btn mat-icon {
+      font-size: 15px;
+      width: 15px;
+      height: 15px;
+      line-height: 15px;
+    }
+
     .quick-reactions {
       position: absolute;
       top: -18px;
@@ -923,8 +1295,12 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   conversationName = '';
   isGroup = false;
   isRemovedFromGroup = false;
+  messageTextScale = 1;
+  codeTextScale = 1;
   loading = false;
   myContactId: string | null = null;
+  replyToMessage: Message | null = null;
+  mentionOptions: MentionOption[] = [];
 
   conversationId: string | null = null;
   private sub!: Subscription;
@@ -944,12 +1320,15 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   private mediaQueue: string[] = [];
   private activeMediaRequests = 0;
   private readonly maxMediaRequests = 2;
+  private lastMentionConversationId: string | null = null;
 
   constructor(
     private store: MessagingStoreService,
+    private api: MessagingApiService,
     private auth: AuthService,
     private fileService: MessagingFileService,
     private cdr: ChangeDetectorRef,
+    private sanitizer: DomSanitizer,
   ) {}
 
   ngOnInit(): void {
@@ -964,17 +1343,26 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
       this.store.visibleContacts,
       this.store.loadingMessages,
       this.store.removedGroupIds,
-    ]).subscribe(([convId, msgMap, chats, contacts, loading, removedGroupIds]) => {
+      this.store.messageTextScale,
+      this.store.codeTextScale,
+    ]).subscribe(([convId, msgMap, chats, contacts, loading, removedGroupIds, messageTextScale, codeTextScale]) => {
       this.loading = loading;
       this.visibleContacts = contacts || [];
+      this.messageTextScale = messageTextScale;
+      this.codeTextScale = codeTextScale;
+      if (this.isGroup && this.conversationId && this.mentionOptions.length === 0) {
+        this.refreshMentionOptions();
+      }
 
       if (convId && convId !== this.conversationId) {
         this.conversationId = convId;
         this.resetMediaQueue();
+        this.clearReply();
         this.shouldScrollToBottom = true;
         const chat = chats.find((c) => c.conversationId === convId);
         this.conversationName = chat?.name || 'Chat';
         this.isGroup = chat?.isGroup || false;
+        this.refreshMentionOptions();
       }
 
       if (this.conversationId) {
@@ -1026,9 +1414,121 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
     }
   }
 
+  startReply(message: Message, event?: Event): void {
+    event?.stopPropagation();
+    if (!this.isGroup || this.isSystemMessage(message)) return;
+    this.replyToMessage = message;
+    this.messageInput?.focus();
+  }
+
+  clearReply(): void {
+    this.replyToMessage = null;
+  }
+
+  getReplyPreview(message: Message): ReplyPreview | null {
+    const reply = message.reply_to;
+    if (!reply) return null;
+    return {
+      senderName: reply.sender_name || 'Message',
+      content: this.truncateReplyText(reply.content || 'Attachment'),
+    };
+  }
+
+  getComposeReplyPreview(message: Message): ReplyPreview {
+    return {
+      senderName: this.getSenderName(message),
+      content: this.truncateReplyText(this.getMessageBody(message) || this.getAttachmentName(message)),
+    };
+  }
+
+  getMessageBody(message: Message): string {
+    return String(message.content || '');
+  }
+
+  private truncateReplyText(value: string): string {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    return text.length > 120 ? `${text.slice(0, 117)}...` : text || 'Attachment';
+  }
+
+  private refreshMentionOptions(): void {
+    if (!this.isGroup || !this.conversationId) {
+      this.mentionOptions = [];
+      this.lastMentionConversationId = null;
+      return;
+    }
+
+    const convId = this.conversationId;
+    if (this.lastMentionConversationId === convId && this.mentionOptions.length > 0) return;
+    this.lastMentionConversationId = convId;
+
+    this.api.getConversationParticipants(convId).subscribe({
+      next: (members) => {
+        const options = members
+          .filter((member) => String(member.contact_id) !== String(this.auth.contactId || ''))
+          .map((member) => this.participantToMentionOption(member))
+          .filter((option): option is MentionOption => !!option);
+        this.mentionOptions = options.length ? options : this.contactsToMentionOptions();
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.mentionOptions = this.contactsToMentionOptions();
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  private participantToMentionOption(member: ConversationParticipant): MentionOption | null {
+    const token = this.toMentionToken(member.username || member.email || String(member.contact_id));
+    if (!token) return null;
+    return {
+      contactId: String(member.contact_id),
+      label: member.username || member.email || `Contact ${member.contact_id}`,
+      token,
+    };
+  }
+
+  private contactsToMentionOptions(): MentionOption[] {
+    return this.visibleContacts
+      .filter((contact) => String(contact.contact_id) !== String(this.auth.contactId || ''))
+      .map((contact) => {
+        const label = getContactDisplayName(contact);
+        return {
+          contactId: String(contact.contact_id),
+          label,
+          token: this.toMentionToken(contact.username || contact.email?.split('@')[0] || label),
+        };
+      })
+      .filter((option) => !!option.token);
+  }
+
+  private toMentionToken(value: string): string {
+    return String(value || '')
+      .trim()
+      .replace(/^@/, '')
+      .replace(/@.*$/, '')
+      .replace(/[^a-zA-Z0-9._-]/g, '')
+      .slice(0, 32);
+  }
+
+  private getMentionIdsFromContent(content: string): string[] {
+    if (!this.isGroup || !content || !this.mentionOptions.length) return [];
+    const mentionedTokens = new Set(
+      Array.from(content.matchAll(/(^|[^a-zA-Z0-9._-])@([a-zA-Z0-9._-]+)/g))
+        .map((match) => match[2].toLowerCase())
+    );
+    return this.mentionOptions
+      .filter((option) => mentionedTokens.has(option.token.toLowerCase()))
+      .map((option) => option.contactId);
+  }
+
   onSendMessage(content: string): void {
     if (this.isRemovedFromGroup) return;
-    this.store.sendMessage(this.conversationId, content);
+    const mentions = this.getMentionIdsFromContent(content);
+    this.store.sendMessage(this.conversationId, content, 'TEXT', {
+      replyTo: this.replyToMessage,
+      mentions,
+    });
+    this.clearReply();
     this.shouldScrollToBottom = true;
   }
 
@@ -1056,11 +1556,19 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
         this.fileService.prewarmCache(fileIds);
 
         // Step 3: Send the message with the real file_ids.
+        const messageText = payload.text || filenames.join(', ');
+        const outgoingText = this.store.prepareOutgoingMessageContent(messageText, this.replyToMessage);
+        const replyTo = this.replyToMessage ? {
+          message_id: String(this.replyToMessage.message_id || ''),
+          sender_name: this.getSenderName(this.replyToMessage),
+          content: this.truncateReplyText(this.getMessageBody(this.replyToMessage) || this.getAttachmentName(this.replyToMessage)),
+        } : undefined;
+        const mentions = this.getMentionIdsFromContent(messageText);
         this.fileService
           .sendMessageWithAttachments(
             this.conversationId!,
             this.auth.contactId!,
-            payload.text || filenames.join(', '),
+            outgoingText,
             fileIds,
             filenames,
             mimeTypes
@@ -1082,7 +1590,9 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
                 sender_id: this.auth.contactId!,
                 sender_name: 'You',
                 message_type: isImg ? 'IMAGE' : 'FILE',
-                content: payload.text || filenames.join(', '),
+                content: messageText,
+                reply_to: replyTo,
+                mentions,
                 media_url: firstId,
                 created_at: new Date().toISOString(),
                 is_read: false,
@@ -1095,6 +1605,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
                 })),
               };
               this.store.appendOptimisticMessage(optimistic);
+              this.clearReply();
               this.cdr.markForCheck();
             },
             error: () => {
@@ -1195,8 +1706,286 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   }
 
   isPreformattedText(msg: Message): boolean {
-    const content = String(msg.content || '');
+    return this.isPreformattedContent(this.getMessageBody(msg));
+  }
+
+  isPreformattedContent(content: string): boolean {
     return content.includes('\t') || content.includes('\n') || / {2,}/.test(content);
+  }
+
+  getMessageCaption(msg: Message): string {
+    const content = this.getMessageBody(msg).trim();
+    if (!content) return '';
+
+    const attachmentNames = this.getRenderableAttachments(msg)
+      .map((attachment) => String(attachment.filename || '').trim())
+      .filter(Boolean);
+    if (!attachmentNames.length) return content;
+
+    const namesText = attachmentNames.join(', ');
+    if (content === namesText || attachmentNames.includes(content)) return '';
+    return content;
+  }
+
+  isCodeText(msg: Message): boolean {
+    return this.isCodeContent(this.getMessageBody(msg), msg);
+  }
+
+  isCodeContent(value: string, msg?: Message): boolean {
+    const content = value.trim();
+    if (!content || (msg ? this.isTableText(msg) : this.isTableContent(content))) return false;
+    if (this.looksLikeMarkdown(content) && !this.isSingleFencedCodeBlock(content)) return false;
+    if (/^```[\s\S]*```$/.test(content)) return true;
+    return this.detectCodeLanguage(content) !== null;
+  }
+
+  isMarkdownText(msg: Message): boolean {
+    return this.isMarkdownContent(this.getMessageBody(msg), msg);
+  }
+
+  isMarkdownContent(value: string, msg?: Message): boolean {
+    const content = value.trim();
+    if (!content || (msg ? this.isTableText(msg) : this.isTableContent(content)) || this.isSingleFencedCodeBlock(content)) return false;
+    return this.looksLikeMarkdown(content);
+  }
+
+  getCodeLanguage(msg: Message): string {
+    return this.getCodeLanguageContent(this.getMessageBody(msg));
+  }
+
+  getCodeLanguageContent(content: string): string {
+    const parsed = this.parseCodeBlock(content);
+    return parsed.language || this.detectCodeLanguage(parsed.code) || 'code';
+  }
+
+  getHighlightedCode(msg: Message): SafeHtml {
+    return this.getHighlightedCodeContent(this.getMessageBody(msg));
+  }
+
+  getHighlightedCodeContent(content: string): SafeHtml {
+    const parsed = this.parseCodeBlock(content);
+    const language = parsed.language || this.detectCodeLanguage(parsed.code) || 'code';
+    const escaped = this.escapeHtml(parsed.code);
+    const highlighted = this.highlightCode(escaped, language);
+    return this.sanitizer.bypassSecurityTrustHtml(highlighted);
+  }
+
+  getMarkdownHtml(msg: Message): SafeHtml {
+    return this.getMarkdownHtmlContent(this.getMessageBody(msg));
+  }
+
+  getMarkdownHtmlContent(content: string): SafeHtml {
+    return this.sanitizer.bypassSecurityTrustHtml(this.renderMarkdown(content));
+  }
+
+  copyCode(msg: Message, event: MouseEvent): void {
+    event.stopPropagation();
+    const content = this.getMessageBody(msg);
+    const parsed = this.parseCodeBlock(content);
+    this.copyText(parsed.code || content);
+  }
+
+  copyMessageText(msg: Message, event: MouseEvent): void {
+    event.stopPropagation();
+    this.copyText(this.getMessageBody(msg));
+  }
+
+  copyTextValue(text: string, event: MouseEvent): void {
+    event.stopPropagation();
+    this.copyText(text);
+  }
+
+  private parseCodeBlock(content: string): { language: string; code: string } {
+    const trimmed = content.trim();
+    const match = trimmed.match(/^```([a-zA-Z0-9_+-]*)\s*\n?([\s\S]*?)```$/);
+    if (!match) return { language: '', code: content };
+    return { language: (match[1] || '').toLowerCase(), code: match[2] || '' };
+  }
+
+  private isSingleFencedCodeBlock(content: string): boolean {
+    return /^```[a-zA-Z0-9_+-]*\s*\n?[\s\S]*?```$/.test(content.trim());
+  }
+
+  private looksLikeMarkdown(content: string): boolean {
+    return /(^#{1,6}\s)|(^[-*]\s)|(^\d+\.\s)|(^>\s)|(\*\*[^*]+\*\*)|(`[^`]+`)|(\[[^\]]+\]\([^)]+\))|(^---$)|(^-\s\[[ x]\]\s)|(^```[a-zA-Z0-9_+-]*\s*$)/m.test(content);
+  }
+
+  private detectCodeLanguage(code: string): string | null {
+    const trimmed = code.trim();
+    if (!trimmed.includes('\n') && trimmed.length < 40) return null;
+    if (/^\s*(select|with|insert|update|delete|create|alter|drop)\b/i.test(trimmed)) return 'sql';
+    if (/\b(function|const|let|var|=>|console\.log|import\s+.*from)\b/.test(trimmed)) return 'javascript';
+    if (/\b(def|import|from|print|class)\b/.test(trimmed) && /:\s*$|^\s{4}/m.test(trimmed)) return 'python';
+    if (/<\/?[a-z][\s\S]*>/i.test(trimmed)) return 'html';
+    if (/[{};]/.test(trimmed) && /[:=]/.test(trimmed)) return 'code';
+    return null;
+  }
+
+  private highlightCode(escapedCode: string, language: string): string {
+    const protectedTokens: string[] = [];
+    const protect = (value: string, regex: RegExp, className: string): string =>
+      value.replace(regex, (match) => {
+        const token = `__CODE_TOKEN_${protectedTokens.length}__`;
+        protectedTokens.push(`<span class="${className}">${match}</span>`);
+        return token;
+      });
+
+    let highlighted = escapedCode;
+
+    if (language === 'sql') {
+      highlighted = protect(highlighted, /(--.*)$/gm, 'code-token-comment');
+      highlighted = protect(highlighted, /(&quot;.*?&quot;|&#39;.*?&#39;|`.*?`)/g, 'code-token-string');
+      highlighted = highlighted.replace(/\b(SELECT|FROM|WHERE|JOIN|LEFT|RIGHT|INNER|OUTER|ON|GROUP BY|ORDER BY|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|ALTER|DROP|AND|OR|NULL|IS|NOT|AS|LIMIT)\b/gi, '<span class="code-token-keyword">$1</span>');
+      highlighted = highlighted.replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="code-token-number">$1</span>');
+      return this.restoreCodeTokens(highlighted, protectedTokens);
+    }
+
+    highlighted = protect(highlighted, /(\/\/.*|#.*)$/gm, 'code-token-comment');
+    highlighted = protect(highlighted, /(&quot;.*?&quot;|&#39;.*?&#39;|`.*?`)/g, 'code-token-string');
+    highlighted = highlighted.replace(/\b(function|const|let|var|return|if|else|for|while|class|import|from|export|async|await|def|print|try|catch|new|true|false|null|None)\b/g, '<span class="code-token-keyword">$1</span>');
+    highlighted = highlighted.replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="code-token-number">$1</span>');
+    highlighted = highlighted.replace(/\b([a-zA-Z_$][\w$]*)(?=\()/g, '<span class="code-token-function">$1</span>');
+    return this.restoreCodeTokens(highlighted, protectedTokens);
+  }
+
+  private restoreCodeTokens(value: string, protectedTokens: string[]): string {
+    return protectedTokens.reduce(
+      (html, token, index) => html.replace(new RegExp(`__CODE_TOKEN_${index}__`, 'g'), token),
+      value
+    );
+  }
+
+  private renderMarkdown(raw: string): string {
+    const codeBlocks: string[] = [];
+    const withoutCode = raw.replace(/```([a-zA-Z0-9_+-]*)\s*\n?([\s\S]*?)```/g, (_match, lang, code) => {
+      const language = String(lang || 'code').toLowerCase();
+      const token = `__MD_CODE_${codeBlocks.length}__`;
+      codeBlocks.push(
+        `<pre><code data-language="${this.escapeHtml(language)}">${this.escapeHtml(String(code || ''))}</code></pre>`
+      );
+      return token;
+    });
+
+    const lines = withoutCode.split(/\r?\n/);
+    const html: string[] = [];
+    let listType: 'ul' | 'ol' | null = null;
+
+    const closeList = () => {
+      if (listType) {
+        html.push(`</${listType}>`);
+        listType = null;
+      }
+    };
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+
+      if (!trimmed) {
+        closeList();
+        continue;
+      }
+
+      const tokenMatch = trimmed.match(/^__MD_CODE_(\d+)__$/);
+      if (tokenMatch) {
+        closeList();
+        html.push(codeBlocks[Number(tokenMatch[1])] || '');
+        continue;
+      }
+
+      const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+      if (heading) {
+        closeList();
+        html.push(`<h${heading[1].length}>${this.renderMarkdownInline(heading[2])}</h${heading[1].length}>`);
+        continue;
+      }
+
+      if (/^---+$/.test(trimmed)) {
+        closeList();
+        html.push('<hr>');
+        continue;
+      }
+
+      const unordered = trimmed.match(/^[-*]\s+(?:\[[ x]\]\s+)?(.+)$/i);
+      if (unordered) {
+        if (listType !== 'ul') {
+          closeList();
+          html.push('<ul>');
+          listType = 'ul';
+        }
+        html.push(`<li>${this.renderMarkdownInline(unordered[1])}</li>`);
+        continue;
+      }
+
+      const ordered = trimmed.match(/^\d+\.\s+(.+)$/);
+      if (ordered) {
+        if (listType !== 'ol') {
+          closeList();
+          html.push('<ol>');
+          listType = 'ol';
+        }
+        html.push(`<li>${this.renderMarkdownInline(ordered[1])}</li>`);
+        continue;
+      }
+
+      const quote = trimmed.match(/^>\s+(.+)$/);
+      if (quote) {
+        closeList();
+        html.push(`<blockquote>${this.renderMarkdownInline(quote[1])}</blockquote>`);
+        continue;
+      }
+
+      closeList();
+      html.push(`<p>${this.renderMarkdownInline(trimmed)}</p>`);
+    }
+
+    closeList();
+    return html.join('');
+  }
+
+  private renderMarkdownInline(value: string): string {
+    let html = this.escapeHtml(value);
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    return html;
+  }
+
+  private copyText(text: string): void {
+    if (!text) return;
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => this.store.showToast('Copied to clipboard', 'success', 1600),
+        () => this.fallbackCopyText(text)
+      );
+      return;
+    }
+    this.fallbackCopyText(text);
+  }
+
+  private fallbackCopyText(text: string): void {
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      this.store.showToast('Copied to clipboard', 'success', 1600);
+    } catch {
+      this.store.showToast('Could not copy', 'error', 2200);
+    }
+  }
+
+  private escapeHtml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   isTableText(msg: Message): boolean {
@@ -1204,8 +1993,17 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
     return rows.length >= 2 && rows.some((row) => row.length >= 2);
   }
 
+  private isTableContent(content: string): boolean {
+    const rows = this.getTableRowsFromContent(content);
+    return rows.length >= 2 && rows.some((row) => row.length >= 2);
+  }
+
   getTableRows(msg: Message): string[][] {
-    const content = String(msg.content || '').trim();
+    return this.getTableRowsFromContent(this.getMessageBody(msg));
+  }
+
+  private getTableRowsFromContent(value: string): string[][] {
+    const content = value.trim();
     if (!content.includes('\t')) return [];
 
     const rows = content
@@ -1398,9 +2196,9 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
           raw?.filename ??
           raw?.file_name ??
           raw?.name ??
-          'File'
+          (msg.message_type === 'IMAGE' ? 'Image' : 'File')
         ),
-        mime_type: raw?.mime_type ?? raw?.mimeType,
+        mime_type: raw?.mime_type ?? raw?.mimeType ?? (msg.message_type === 'IMAGE' ? 'image/*' : undefined),
         size_bytes: raw?.size_bytes ?? raw?.sizeBytes,
         url: url || undefined,
       });
@@ -1425,8 +2223,8 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
           ids.forEach((id, idx) => {
             add({
               file_id: id,
-              filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
-              mime_type: mimeTypes[idx],
+              filename: filenames[idx] || filenames[0] || (msg.message_type === 'IMAGE' ? `Image ${idx + 1}` : `Attachment ${idx + 1}`),
+              mime_type: mimeTypes[idx] || (msg.message_type === 'IMAGE' ? 'image/*' : undefined),
             });
           });
         }
@@ -1441,8 +2239,8 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
     ids.forEach((id, idx) => {
       add({
         file_id: id,
-        filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
-        mime_type: mimeTypes[idx] || anyMsg?.mime_type || anyMsg?.attachment_mime_type,
+        filename: filenames[idx] || filenames[0] || (msg.message_type === 'IMAGE' ? `Image ${idx + 1}` : `Attachment ${idx + 1}`),
+        mime_type: mimeTypes[idx] || anyMsg?.mime_type || anyMsg?.attachment_mime_type || (msg.message_type === 'IMAGE' ? 'image/*' : undefined),
       });
     });
 
@@ -1491,11 +2289,11 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
       anyMsg?.attachment_id ||
       anyMsg?.attachment_ids?.[0] ||
       (!mediaIsDirectUrl && !mediaIsStructured && mu ? mu : undefined);
-    const mime = anyMsg?.mime_type || anyMsg?.attachment_mime_type;
+    const mime = anyMsg?.mime_type || anyMsg?.attachment_mime_type || (msg.message_type === 'IMAGE' ? 'image/*' : undefined);
     const explicitFilename = anyMsg?.filename || anyMsg?.file_name;
     const filename =
       explicitFilename ||
-      (fileId || mime || msg.message_type !== 'TEXT' ? msg.content : '');
+      (msg.message_type === 'IMAGE' ? 'Image' : msg.message_type === 'FILE' ? 'File' : '');
     if (fileId || explicitFilename || mime || msg.message_type === 'FILE' || msg.message_type === 'IMAGE') {
       return {
         file_id: String(fileId || ''),
@@ -1512,7 +2310,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
     if (mime.startsWith('image/')) return true;
     const name = this.getFilenameLike(msg, attachment);
     if (/\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)$/i.test(name)) return true;
-    return !attachment && msg.message_type === 'IMAGE';
+    return msg.message_type === 'IMAGE';
   }
 
   /** Returns the cached data URL for a message's media, or null and triggers background load. */

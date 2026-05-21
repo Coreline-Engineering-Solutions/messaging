@@ -20,6 +20,17 @@ export interface MessagePayload {
   files: File[];
 }
 
+export interface ReplyPreview {
+  senderName: string;
+  content: string;
+}
+
+export interface MentionOption {
+  contactId: string;
+  label: string;
+  token: string;
+}
+
 @Component({
   selector: 'app-message-input',
   standalone: true,
@@ -36,6 +47,17 @@ export interface MessagePayload {
         <span></span>
       </div>
 
+      <div *ngIf="replyTo" class="reply-compose-preview">
+        <mat-icon>reply</mat-icon>
+        <div class="reply-compose-text">
+          <span>Replying to {{ replyTo.senderName }}</span>
+          <p>{{ replyTo.content }}</p>
+        </div>
+        <button type="button" class="reply-cancel-btn" (click)="replyCancelled.emit()" title="Cancel reply">
+          <mat-icon>close</mat-icon>
+        </button>
+      </div>
+
       <!-- File previews -->
       <div *ngIf="selectedFiles.length > 0" class="file-previews">
         <div *ngFor="let file of selectedFiles; let i = index" class="file-chip">
@@ -46,6 +68,20 @@ export interface MessagePayload {
             <mat-icon>close</mat-icon>
           </button>
         </div>
+      </div>
+
+      <div *ngIf="mentionSuggestions.length > 0" class="mention-suggestions">
+        <button
+          type="button"
+          *ngFor="let option of mentionSuggestions"
+          class="mention-suggestion"
+          (mousedown)="$event.preventDefault()"
+          (click)="insertMention(option)"
+        >
+          <span class="mention-avatar">&#64;</span>
+          <span>{{ option.label }}</span>
+          <small>&#64;{{ option.token }}</small>
+        </button>
       </div>
 
       <div class="input-wrapper">
@@ -65,7 +101,9 @@ export interface MessagePayload {
           (ngModelChange)="onTextChange($event)"
           (input)="autoResize()"
           (paste)="onPaste($event)"
-          (keydown.enter)="onEnter($event)"
+          (click)="updateMentionSuggestions()"
+          (keyup)="updateMentionSuggestions()"
+          (keydown)="onKeydown($event)"
           placeholder="Type a message..."
           rows="1"
           class="message-textarea"
@@ -124,6 +162,117 @@ export interface MessagePayload {
       margin-bottom: 8px;
       max-height: 80px;
       overflow-y: auto;
+    }
+
+    .reply-compose-preview {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: rgba(127, 180, 255, 0.12);
+      border-left: 3px solid rgba(127, 180, 255, 0.8);
+      color: #fff;
+    }
+
+    .reply-compose-preview > mat-icon {
+      color: #bfdbfe;
+      font-size: 18px;
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+    }
+
+    .reply-compose-text {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .reply-compose-text span {
+      display: block;
+      font-size: 11px;
+      font-weight: 700;
+      color: #bfdbfe;
+      margin-bottom: 2px;
+    }
+
+    .reply-compose-text p {
+      margin: 0;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.78);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .reply-cancel-btn {
+      width: 24px;
+      height: 24px;
+      border: none;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.8);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .reply-cancel-btn mat-icon {
+      font-size: 16px;
+      width: 16px;
+      height: 16px;
+    }
+
+    .mention-suggestions {
+      margin-bottom: 8px;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #071d30;
+      border: 1px solid rgba(127, 180, 255, 0.22);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+    }
+
+    .mention-suggestion {
+      width: 100%;
+      border: none;
+      background: transparent;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .mention-suggestion:hover,
+    .mention-suggestion:focus {
+      background: rgba(127, 180, 255, 0.14);
+      outline: none;
+    }
+
+    .mention-avatar {
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      background: rgba(127, 180, 255, 0.22);
+      color: #bfdbfe;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 800;
+      flex-shrink: 0;
+    }
+
+    .mention-suggestion small {
+      margin-left: auto;
+      color: rgba(255, 255, 255, 0.52);
+      font-size: 11px;
     }
 
     .file-chip {
@@ -223,7 +372,7 @@ export interface MessagePayload {
       max-height: 180px;
       padding: 7px 0;
       color: #fff;
-      overflow-y: auto;
+      overflow-y: hidden;
       box-sizing: border-box;
     }
 
@@ -255,14 +404,19 @@ export interface MessagePayload {
 })
 export class MessageInputComponent implements OnChanges, AfterViewInit, OnDestroy {
   @Input() conversationId: string | null = null;
+  @Input() replyTo: ReplyPreview | null = null;
+  @Input() enableMentions = false;
+  @Input() mentionOptions: MentionOption[] = [];
   @Output() messageSent = new EventEmitter<string>();
   @Output() messageWithFiles = new EventEmitter<MessagePayload>();
+  @Output() replyCancelled = new EventEmitter<void>();
   @ViewChild('fileInput') fileInput!: ElementRef<HTMLInputElement>;
   @ViewChild('messageTextarea') messageTextarea!: ElementRef<HTMLTextAreaElement>;
 
   messageText = '';
   selectedFiles: File[] = [];
   textareaHeight = 36;
+  mentionSuggestions: MentionOption[] = [];
   private readonly draftPrefix = 'messaging_draft_';
   private lastConversationId: string | null = null;
   private resizing = false;
@@ -270,6 +424,9 @@ export class MessageInputComponent implements OnChanges, AfterViewInit, OnDestro
   private resizeStartHeight = 0;
   private readonly minTextareaHeight = 36;
   private readonly maxTextareaHeight = 180;
+  private manualTextareaHeight = this.minTextareaHeight;
+  private activeMentionStart = -1;
+  private activeMentionEnd = -1;
   private boundResizeMove = this.onResizeMove.bind(this);
   private boundResizeEnd = this.onResizeEnd.bind(this);
 
@@ -310,6 +467,8 @@ export class MessageInputComponent implements OnChanges, AfterViewInit, OnDestro
 
     this.messageText = '';
     this.selectedFiles = [];
+    this.mentionSuggestions = [];
+    this.manualTextareaHeight = this.minTextareaHeight;
     this.clearDraft(this.conversationId);
     if (this.fileInput) this.fileInput.nativeElement.value = '';
     this.queueAutoResize();
@@ -318,10 +477,26 @@ export class MessageInputComponent implements OnChanges, AfterViewInit, OnDestro
   onTextChange(value: string): void {
     this.messageText = value;
     this.persistDraft(this.conversationId, value);
+    this.updateMentionSuggestions();
     this.queueAutoResize();
   }
 
   onPaste(event: ClipboardEvent): void {
+    const clipboardItems = Array.from(event.clipboardData?.items || []);
+    const imageFiles = clipboardItems
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => !!file)
+      .map((file) => this.nameClipboardImage(file));
+
+    if (imageFiles.length > 0) {
+      this.addFiles(imageFiles);
+      const text = event.clipboardData?.getData('text/plain') || '';
+      if (!text.trim()) {
+        event.preventDefault();
+      }
+    }
+
     const html = event.clipboardData?.getData('text/html') || '';
     if (!html || !/<table[\s>]/i.test(html)) return;
 
@@ -335,11 +510,14 @@ export class MessageInputComponent implements OnChanges, AfterViewInit, OnDestro
   autoResize(): void {
     const el = this.messageTextarea?.nativeElement;
     if (!el) return;
+    el.style.height = 'auto';
     const nextHeight = Math.min(
-      Math.max(el.scrollHeight, this.minTextareaHeight),
-      Math.max(this.textareaHeight, this.minTextareaHeight)
+      Math.max(el.scrollHeight, this.manualTextareaHeight, this.minTextareaHeight),
+      this.maxTextareaHeight
     );
-    this.textareaHeight = Math.min(nextHeight, this.maxTextareaHeight);
+    this.textareaHeight = nextHeight;
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = nextHeight >= this.maxTextareaHeight ? 'auto' : 'hidden';
   }
 
   onResizeStart(event: MouseEvent): void {
@@ -356,10 +534,12 @@ export class MessageInputComponent implements OnChanges, AfterViewInit, OnDestro
   private onResizeMove(event: MouseEvent): void {
     if (!this.resizing) return;
     const dy = this.resizeStartY - event.clientY;
-    this.textareaHeight = Math.max(
+    const nextHeight = Math.max(
       this.minTextareaHeight,
       Math.min(this.maxTextareaHeight, this.resizeStartHeight + dy)
     );
+    this.manualTextareaHeight = nextHeight;
+    this.textareaHeight = nextHeight;
   }
 
   private onResizeEnd(): void {
@@ -433,6 +613,81 @@ export class MessageInputComponent implements OnChanges, AfterViewInit, OnDestro
     setTimeout(() => {
       textarea.selectionStart = textarea.selectionEnd = start + text.length;
     });
+  }
+
+  private nameClipboardImage(file: File): File {
+    const extension = file.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+    const filename = `clipboard-image-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`;
+    return new File([file], filename, { type: file.type || 'image/png', lastModified: Date.now() });
+  }
+
+  focus(): void {
+    setTimeout(() => this.messageTextarea?.nativeElement?.focus());
+  }
+
+  updateMentionSuggestions(): void {
+    if (!this.enableMentions || !this.mentionOptions.length) {
+      this.mentionSuggestions = [];
+      return;
+    }
+
+    const textarea = this.messageTextarea?.nativeElement;
+    const caret = textarea?.selectionStart ?? this.messageText.length;
+    const beforeCaret = this.messageText.slice(0, caret);
+    const match = beforeCaret.match(/(^|\s)@([a-zA-Z0-9._-]{0,32})$/);
+    if (!match) {
+      this.mentionSuggestions = [];
+      this.activeMentionStart = -1;
+      this.activeMentionEnd = -1;
+      return;
+    }
+
+    const query = (match[2] || '').toLowerCase();
+    this.activeMentionEnd = caret;
+    this.activeMentionStart = caret - query.length - 1;
+    this.mentionSuggestions = this.mentionOptions
+      .filter((option) =>
+        option.token.toLowerCase().includes(query) ||
+        option.label.toLowerCase().includes(query)
+      )
+      .slice(0, 5);
+  }
+
+  insertMention(option: MentionOption): void {
+    if (this.activeMentionStart < 0) return;
+    const start = this.activeMentionStart;
+    const end = this.activeMentionEnd >= start ? this.activeMentionEnd : this.messageText.length;
+    const mentionText = `@${option.token} `;
+    const next = `${this.messageText.slice(0, start)}${mentionText}${this.messageText.slice(end)}`;
+    this.onTextChange(next);
+    this.mentionSuggestions = [];
+    setTimeout(() => {
+      const textarea = this.messageTextarea?.nativeElement;
+      if (!textarea) return;
+      const caret = start + mentionText.length;
+      textarea.focus();
+      textarea.selectionStart = textarea.selectionEnd = caret;
+      this.queueAutoResize();
+    });
+  }
+
+  onKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape' && this.mentionSuggestions.length > 0) {
+      this.mentionSuggestions = [];
+      event.preventDefault();
+      return;
+    }
+
+    if (event.key === 'Enter' && this.mentionSuggestions.length > 0) {
+      event.preventDefault();
+      this.insertMention(this.mentionSuggestions[0]);
+      return;
+    }
+
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      this.send();
+    }
   }
 
   onEnter(event: Event): void {

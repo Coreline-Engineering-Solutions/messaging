@@ -4,15 +4,29 @@ export interface MessagePayload {
     text: string;
     files: File[];
 }
+export interface ReplyPreview {
+    senderName: string;
+    content: string;
+}
+export interface MentionOption {
+    contactId: string;
+    label: string;
+    token: string;
+}
 export declare class MessageInputComponent implements OnChanges, AfterViewInit, OnDestroy {
     conversationId: string | null;
+    replyTo: ReplyPreview | null;
+    enableMentions: boolean;
+    mentionOptions: MentionOption[];
     messageSent: EventEmitter<string>;
     messageWithFiles: EventEmitter<MessagePayload>;
+    replyCancelled: EventEmitter<void>;
     fileInput: ElementRef<HTMLInputElement>;
     messageTextarea: ElementRef<HTMLTextAreaElement>;
     messageText: string;
     selectedFiles: File[];
     textareaHeight: number;
+    mentionSuggestions: MentionOption[];
     private readonly draftPrefix;
     private lastConversationId;
     private resizing;
@@ -20,6 +34,9 @@ export declare class MessageInputComponent implements OnChanges, AfterViewInit, 
     private resizeStartHeight;
     private readonly minTextareaHeight;
     private readonly maxTextareaHeight;
+    private manualTextareaHeight;
+    private activeMentionStart;
+    private activeMentionEnd;
     private boundResizeMove;
     private boundResizeEnd;
     ngOnChanges(changes: SimpleChanges): void;
@@ -40,6 +57,11 @@ export declare class MessageInputComponent implements OnChanges, AfterViewInit, 
     private clearDraft;
     private htmlTableToText;
     private insertTextAtCursor;
+    private nameClipboardImage;
+    focus(): void;
+    updateMentionSuggestions(): void;
+    insertMention(option: MentionOption): void;
+    onKeydown(event: KeyboardEvent): void;
     onEnter(event: Event): void;
     onFilesSelected(event: Event): void;
     addFiles(files: File[]): void;
@@ -47,5 +69,5 @@ export declare class MessageInputComponent implements OnChanges, AfterViewInit, 
     getFileIcon(file: File): string;
     formatSize(bytes: number): string;
     static ɵfac: i0.ɵɵFactoryDeclaration<MessageInputComponent, never>;
-    static ɵcmp: i0.ɵɵComponentDeclaration<MessageInputComponent, "app-message-input", never, { "conversationId": { "alias": "conversationId"; "required": false; }; }, { "messageSent": "messageSent"; "messageWithFiles": "messageWithFiles"; }, never, never, true, never>;
+    static ɵcmp: i0.ɵɵComponentDeclaration<MessageInputComponent, "app-message-input", never, { "conversationId": { "alias": "conversationId"; "required": false; }; "replyTo": { "alias": "replyTo"; "required": false; }; "enableMentions": { "alias": "enableMentions"; "required": false; }; "mentionOptions": { "alias": "mentionOptions"; "required": false; }; }, { "messageSent": "messageSent"; "messageWithFiles": "messageWithFiles"; "replyCancelled": "replyCancelled"; }, never, never, true, never>;
 }

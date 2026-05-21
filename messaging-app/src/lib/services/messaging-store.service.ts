@@ -7,6 +7,7 @@ import { MessagingWebSocketService } from './messaging-websocket.service';
 import {
   InboxItem,
   Message,
+  MessageReplyPreview,
   Attachment,
   Contact,
   ChatWindow,
@@ -42,8 +43,15 @@ export class MessagingStoreService implements OnDestroy {
   private notificationsMuted$ = new BehaviorSubject<boolean>(
     localStorage.getItem('messaging_notifications_muted') === 'true'
   );
+  private messageTextScale$ = new BehaviorSubject<number>(
+    Number(localStorage.getItem('messaging_message_text_scale') ?? '1')
+  );
+  private codeTextScale$ = new BehaviorSubject<number>(
+    Number(localStorage.getItem('messaging_code_text_scale') ?? '1')
+  );
   private toast$ = new BehaviorSubject<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
   private removedGroupIds$ = new BehaviorSubject<Set<string>>(new Set());
+  private mentionConversationIds$ = new BehaviorSubject<Set<string>>(new Set());
 
   // ── Public observables ──
   readonly inbox = this.inbox$.asObservable();
@@ -63,8 +71,11 @@ export class MessagingStoreService implements OnDestroy {
   readonly panelFloating = this.panelFloating$.asObservable();
   readonly notificationVolume = this.notificationVolume$.asObservable();
   readonly notificationsMuted = this.notificationsMuted$.asObservable();
+  readonly messageTextScale = this.messageTextScale$.asObservable();
+  readonly codeTextScale = this.codeTextScale$.asObservable();
   readonly toast = this.toast$.asObservable();
   readonly removedGroupIds = this.removedGroupIds$.asObservable();
+  readonly mentionConversationIds = this.mentionConversationIds$.asObservable();
 
   private wsSub: Subscription | null = null;
   private destroy$ = new Subject<void>();
@@ -117,6 +128,7 @@ export class MessagingStoreService implements OnDestroy {
     this.deletingConversationIds.clear();
     this.removalToastShown.clear();
     this.removedGroupIds$.next(new Set());
+    this.mentionConversationIds$.next(new Set());
     this.toast$.next(null);
   }
 
@@ -220,8 +232,39 @@ export class MessagingStoreService implements OnDestroy {
     localStorage.setItem('messaging_notifications_muted', String(muted));
   }
 
+  setMessageTextScale(scale: number): void {
+    const normalized = Math.max(0.8, Math.min(1.5, Number(scale)));
+    this.messageTextScale$.next(normalized);
+    localStorage.setItem('messaging_message_text_scale', String(normalized));
+  }
+
+  setCodeTextScale(scale: number): void {
+    const normalized = Math.max(0.8, Math.min(1.5, Number(scale)));
+    this.codeTextScale$.next(normalized);
+    localStorage.setItem('messaging_code_text_scale', String(normalized));
+  }
+
   testNotificationSound(): void {
     this.playSoftNotificationSound(true);
+  }
+
+  prepareOutgoingMessageContent(content: string, replyTo?: Message | null): string {
+    const body = String(content || '').trim();
+    if (!replyTo) return body;
+    const reply = this.createReplyPreview(replyTo);
+    const sender = (reply.sender_name || 'message').replace(/\]/g, '').trim();
+    const excerpt = this.replyExcerpt(reply.content || '');
+    return `[Reply to ${sender}]\n> ${excerpt}\n\n${body}`;
+  }
+
+  createReplyPreview(message: Message): MessageReplyPreview {
+    return {
+      message_id: String(message.message_id || ''),
+      sender_name: getMessageSenderName(message) !== 'Unknown'
+        ? getMessageSenderName(message)
+        : this.getContactNameById(message.sender_id),
+      content: this.replyExcerpt(String(message.content || '')),
+    };
   }
 
   showToast(message: string, type: 'info' | 'success' | 'error' = 'info', durationMs = 3000): void {
@@ -249,11 +292,16 @@ export class MessagingStoreService implements OnDestroy {
       next: (items) => {
         const mapped = items.map(item => {
           const isGroup = item.is_group === true || (item.is_group as any) === 'True';
+          const conversationId = String(item.conversation_id);
+          const preview = this.replyBodyText(item.last_message_preview || '');
+          const hasMention =
+            this.mentionConversationIds$.value.has(conversationId) ||
+            (Number(item.unread_count || 0) > 0 && this.messageTextMentionsCurrentUser(preview));
           
           if (!isGroup && !item.name && item.other_participant_name) {
-            return { ...item, name: item.other_participant_name, is_group: false };
+            return { ...item, name: item.other_participant_name, last_message_preview: preview, is_group: false, has_mention: hasMention };
           }
-          return { ...item, is_group: isGroup };
+          return { ...item, last_message_preview: preview, is_group: isGroup, has_mention: hasMention };
         }).filter(item =>
           !this.deletingConversationIds.has(String(item.conversation_id)) &&
           !this.removedGroupIds$.value.has(String(item.conversation_id))
@@ -409,7 +457,12 @@ export class MessagingStoreService implements OnDestroy {
     });
   }
 
-  sendMessage(conversationId: string | null, content: string, messageType: 'TEXT' | 'IMAGE' | 'SYSTEM' = 'TEXT'): void {
+  sendMessage(
+    conversationId: string | null,
+    content: string,
+    messageType: 'TEXT' | 'IMAGE' | 'SYSTEM' = 'TEXT',
+    options?: { replyTo?: Message | null; mentions?: string[] }
+  ): void {
     const contactId = this.auth.contactId;
     if (!contactId) return;
 
@@ -424,6 +477,8 @@ export class MessagingStoreService implements OnDestroy {
 
     if (!conversationId) return;
 
+    const outgoingContent = this.prepareOutgoingMessageContent(content, options?.replyTo || null);
+    const replyTo = options?.replyTo ? this.createReplyPreview(options.replyTo) : undefined;
     const tempMessageId = 'temp-' + Date.now();
     const optimistic: Message = {
       message_id: tempMessageId,
@@ -432,18 +487,20 @@ export class MessagingStoreService implements OnDestroy {
       sender_name: 'You',
       message_type: messageType,
       content,
+      reply_to: replyTo,
+      mentions: options?.mentions,
       created_at: new Date().toISOString(),
       is_read: false,
     };
     this.appendMessage(optimistic);
 
-    this.api.sendMessage(conversationId, contactId, content, messageType).subscribe({
+    this.api.sendMessage(conversationId, contactId, outgoingContent, messageType).subscribe({
       next: (res) => {
         const realId = res?.message_id ?? res?.id ?? res?.messageId;
         if (realId == null || String(realId).startsWith('temp-')) {
           return;
         }
-        const pickedContent = this.coalesceMessageText(res, optimistic.content);
+        const pickedContent = this.coalesceMessageText(res, outgoingContent || optimistic.content);
         const merged = this.normalizeMessageShape({
           ...optimistic,
           ...res,
@@ -451,6 +508,8 @@ export class MessagingStoreService implements OnDestroy {
           conversation_id: conversationId,
           message_type: messageType === 'SYSTEM' ? 'SYSTEM' : res?.message_type ?? optimistic.message_type,
           content: pickedContent,
+          reply_to: replyTo ?? res?.reply_to,
+          mentions: options?.mentions ?? res?.mentions,
         });
         const map = new Map(this.messagesMap$.value);
         const msgs = [...(map.get(conversationId) || [])];
@@ -570,10 +629,11 @@ export class MessagingStoreService implements OnDestroy {
     this.api.markConversationRead(conversationId, contactId).subscribe({
       next: () => {
         const items = this.inbox$.value.map((item) =>
-          item.conversation_id === conversationId ? { ...item, unread_count: 0 } : item
+          item.conversation_id === conversationId ? { ...item, unread_count: 0, has_mention: false } : item
         );
         this.inbox$.next(items);
         this.recalcUnread(items);
+        this.setConversationMention(conversationId, false);
       },
       error: () => {},
     });
@@ -904,6 +964,7 @@ export class MessagingStoreService implements OnDestroy {
     }
 
     const isFromOther = String(message.sender_id) !== myContactId;
+    const mentionsMe = isFromOther && this.messageMentionsCurrentUser(message);
 
     const duplicateIdx = existing.findIndex(
       (m) =>
@@ -932,6 +993,9 @@ export class MessagingStoreService implements OnDestroy {
     if (this.activeConversationId$.value !== message.conversation_id) {
       if (isFromOther && !isDuplicate) {
         this.incrementUnread(message.conversation_id);
+        if (mentionsMe) {
+          this.setConversationMention(message.conversation_id, true);
+        }
       }
     } else {
       this.markAsRead(message.conversation_id);
@@ -999,10 +1063,12 @@ export class MessagingStoreService implements OnDestroy {
     const preview = text || '[Image]';
     const items = this.inbox$.value.map((item) => {
       if (item.conversation_id === message.conversation_id) {
+        const mentioned = item.has_mention || this.mentionConversationIds$.value.has(String(item.conversation_id));
         return {
           ...item,
           last_message_preview: preview,
           last_message_at: message.created_at,
+          has_mention: mentioned,
         };
       }
       return item;
@@ -1020,6 +1086,77 @@ export class MessagingStoreService implements OnDestroy {
       if (c != null && typeof c !== 'object' && String(c).trim()) return String(c).trim();
     }
     return typeof fallback === 'string' ? fallback : String(fallback ?? '');
+  }
+
+  private parseReplyContent(content: string): { reply: MessageReplyPreview; body: string } | null {
+    const value = String(content || '');
+    const match = value.match(/^\[Reply to ([^\]]+)\]\n> ([^\n]*)\n\n([\s\S]*)$/);
+    if (!match) return null;
+    return {
+      reply: {
+        sender_name: match[1].trim(),
+        content: match[2].trim(),
+      },
+      body: match[3],
+    };
+  }
+
+  private replyBodyText(content: string): string {
+    return this.parseReplyContent(content)?.body ?? String(content || '');
+  }
+
+  private replyExcerpt(content: string): string {
+    const parsed = this.parseReplyContent(content);
+    const base = (parsed?.body ?? content).replace(/\s+/g, ' ').trim();
+    return base.length > 120 ? `${base.slice(0, 117)}...` : base || 'Attachment';
+  }
+
+  private currentMentionTokens(): string[] {
+    const current = this.auth.currentContact;
+    const values = [
+      current?.username,
+      current?.email?.split('@')[0],
+      current?.first_name,
+      current?.last_name,
+      current?.email,
+    ];
+    return values
+      .map((value) => String(value || '').trim().toLowerCase())
+      .filter(Boolean)
+      .map((value) => value.replace(/^@/, ''));
+  }
+
+  private messageTextMentionsCurrentUser(content: string): boolean {
+    const tokens = this.currentMentionTokens();
+    if (!tokens.length) return false;
+    const mentions = Array.from(String(content || '').matchAll(/(^|[^a-zA-Z0-9._-])@([a-zA-Z0-9._-]+)/g))
+      .map((match) => match[2].toLowerCase());
+    return mentions.some((mention) => tokens.includes(mention));
+  }
+
+  private messageMentionsCurrentUser(message: Message): boolean {
+    const myId = String(this.auth.contactId || '');
+    const explicitMentions = Array.isArray(message.mentions)
+      ? message.mentions.map((id) => String(id))
+      : [];
+    return (!!myId && explicitMentions.includes(myId)) ||
+      this.messageTextMentionsCurrentUser(String(message.content || ''));
+  }
+
+  private setConversationMention(conversationId: string, hasMention: boolean): void {
+    const id = String(conversationId || '');
+    if (!id) return;
+    const next = new Set(this.mentionConversationIds$.value);
+    if (hasMention) {
+      next.add(id);
+    } else {
+      next.delete(id);
+    }
+    this.mentionConversationIds$.next(next);
+    const items = this.inbox$.value.map((item) =>
+      String(item.conversation_id) === id ? { ...item, has_mention: hasMention } : item
+    );
+    this.inbox$.next(items);
   }
 
   private messageLooksLikeMedia(m: Message): boolean {
@@ -1079,6 +1216,14 @@ export class MessagingStoreService implements OnDestroy {
       pinned_at: raw?.pinned_at,
       pinned_by: raw?.pinned_by,
     };
+
+    const parsedReply = this.parseReplyContent(String(base.content || ''));
+    if (parsedReply) {
+      base.content = parsedReply.body;
+      base.reply_to = raw?.reply_to ?? raw?.replyTo ?? parsedReply.reply;
+    } else {
+      base.reply_to = raw?.reply_to ?? raw?.replyTo;
+    }
 
     const uuidRe =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -1222,8 +1367,6 @@ export class MessagingStoreService implements OnDestroy {
       ? [String(raw.filename)]
       : raw?.file_name
       ? [String(raw.file_name)]
-      : base.content && !uuidRe.test(contentTrim)
-      ? [String(base.content)]
       : [];
 
     const mimeTypes: string[] = toStringArray(raw?.mime_types).length
@@ -1231,12 +1374,12 @@ export class MessagingStoreService implements OnDestroy {
       : toStringArray(raw?.mimeTypes);
 
     if (attachmentIds.length > 0 || filenames.length > 0) {
-      const fallbackMime = raw?.mime_type ?? raw?.attachment_mime_type;
+      const fallbackMime = raw?.mime_type ?? raw?.attachment_mime_type ?? (base.message_type === 'IMAGE' ? 'image/*' : undefined);
       const urlFallback = raw?.file_url ?? raw?.url ?? raw?.media_url ?? raw?.mediaUrl;
       const ids = attachmentIds.length > 0 ? attachmentIds : [];
       const built: Attachment[] = ids.map((id, idx) => ({
         file_id: id,
-        filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
+        filename: filenames[idx] || filenames[0] || (base.message_type === 'IMAGE' ? `Image ${idx + 1}` : `Attachment ${idx + 1}`),
         mime_type: mimeTypes[idx] || fallbackMime,
         url: urlFallback,
       }));
