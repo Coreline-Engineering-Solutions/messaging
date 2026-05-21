@@ -15,18 +15,6 @@ import { InboxItem } from '../../models/messaging.models';
   imports: [CommonModule, FormsModule, MatIconModule, MatButtonModule, MatRippleModule, MatTooltipModule],
   template: `
     <div class="inbox-container">
-      <div class="inbox-header">
-        <h3>Messages</h3>
-        <div class="header-actions">
-          <button mat-icon-button class="hdr-btn" (click)="onNewConversation()" matTooltip="New conversation" matTooltipPosition="below">
-            <mat-icon>edit_square</mat-icon>
-          </button>
-          <button mat-icon-button class="hdr-btn" (click)="onCreateGroup()" matTooltip="Create group" matTooltipPosition="below">
-            <mat-icon>group_add</mat-icon>
-          </button>
-        </div>
-      </div>
-
       <div class="search-bar">
         <mat-icon class="search-icon">search</mat-icon>
         <input
@@ -99,45 +87,10 @@ import { InboxItem } from '../../models/messaging.models';
       background: transparent;
     }
 
-    .inbox-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 16px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-    }
-
-    .inbox-header h3 {
-      margin: 0;
-      font-size: 20px;
-      font-weight: 700;
-      color: #fff;
-    }
-
-    .header-actions {
-      display: flex;
-      gap: 4px;
-    }
-
-    .hdr-btn {
-      border-radius: 6px !important;
-      transition: background 0.15s, box-shadow 0.15s;
-    }
-
-    .hdr-btn:hover {
-      background: rgba(255, 255, 255, 0.15) !important;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    }
-
-    .hdr-btn mat-icon {
-      font-size: 20px;
-      color: rgba(255, 255, 255, 0.9);
-    }
-
     .search-bar {
       display: flex;
       align-items: center;
-      margin: 4px 16px 8px;
+      margin: 8px 16px;
       padding: 8px 12px;
       background: transparent;
       border-radius: 10px;

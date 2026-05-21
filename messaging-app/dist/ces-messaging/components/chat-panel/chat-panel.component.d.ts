@@ -64,6 +64,9 @@ export declare class ChatPanelComponent implements OnInit, OnDestroy {
     private onLbResizeMove;
     private onLbResizeEnd;
     toggleSide(): void;
+    openNewConversation(): void;
+    openGroupManager(): void;
+    getStatusTooltip(): string;
     close(): void;
     toggleFloat(): void;
     onResizeStart(event: MouseEvent): void;

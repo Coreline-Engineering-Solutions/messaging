@@ -48,16 +48,37 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
         (mousedown)="isFloating && onFloatDragStart($event)"
       >
         <div class="header-left">
-          <svg class="ces-logo-sm" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-            <path d="M 15 20 Q 15 15 20 15 L 80 15 Q 85 15 85 20 L 85 60 Q 85 65 80 65 L 35 65 L 20 80 L 20 65 Q 15 65 15 60 Z"
-                  fill="none" stroke="white" stroke-width="3"/>
-            <g transform="translate(50, 40) scale(0.35)">
-              <path d="M 0,-30 L 25,-15 L 25,15 L 0,30 L -25,15 L -25,-15 Z" fill="white"/>
-            </g>
-          </svg>
-          <span class="header-title">CES Messenger</span>
+          <span
+            class="status-dot"
+            [class.connected]="wsStatus === 'authenticated'"
+            [class.connecting]="wsStatus === 'connecting'"
+            [class.disconnected]="wsStatus === 'disconnected'"
+            [matTooltip]="getStatusTooltip()"
+            matTooltipPosition="below"
+          ></span>
+          <span class="header-title">Messages</span>
         </div>
         <div class="header-actions">
+          <button
+            *ngIf="activeView === 'inbox'"
+            mat-icon-button
+            class="hdr-btn"
+            (click)="openNewConversation()"
+            matTooltip="New conversation"
+            matTooltipPosition="below"
+          >
+            <mat-icon>edit_square</mat-icon>
+          </button>
+          <button
+            *ngIf="activeView === 'inbox'"
+            mat-icon-button
+            class="hdr-btn"
+            (click)="openGroupManager()"
+            matTooltip="Create group"
+            matTooltipPosition="below"
+          >
+            <mat-icon>group_add</mat-icon>
+          </button>
           <!-- Side-swap (sidebar mode only) -->
           <button *ngIf="!isFloating" mat-icon-button class="hdr-btn" (click)="toggleSide()"
             [matTooltip]="'Move to ' + (side === 'right' ? 'left' : 'right')" matTooltipPosition="below">
@@ -86,14 +107,6 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
         ></app-chat-thread>
         <app-new-conversation *ngIf="activeView === 'new-conversation'"></app-new-conversation>
         <app-group-manager *ngIf="activeView === 'group-manager'"></app-group-manager>
-      </div>
-
-      <!-- Status bar -->
-      <div class="ws-status" [class.connected]="wsStatus === 'authenticated'" [class.connecting]="wsStatus === 'connecting'">
-        <div class="status-dot"></div>
-        <span *ngIf="wsStatus === 'authenticated'">Connected</span>
-        <span *ngIf="wsStatus === 'connecting'">Connecting...</span>
-        <span *ngIf="wsStatus === 'disconnected'">Disconnected</span>
       </div>
 
       <!-- Resize corner (floating mode only) -->
@@ -196,22 +209,19 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 12px 12px 12px 16px;
+      padding: 8px 10px 8px 14px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.15);
       flex-shrink: 0;
       position: relative;
       z-index: 2;
+      min-height: 48px;
     }
 
     .header-left {
       display: flex;
       align-items: center;
-      gap: 10px;
-    }
-
-    .ces-logo-sm {
-      width: 28px;
-      height: 28px;
+      gap: 8px;
+      min-width: 0;
     }
 
     .header-title {
@@ -219,6 +229,7 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
       font-weight: 700;
       color: #fff;
       letter-spacing: 0.3px;
+      white-space: nowrap;
     }
 
     .header-actions {
@@ -265,32 +276,27 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
       overflow: hidden;
     }
 
-    /* ── Status bar ── */
-    .ws-status {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 16px;
-      font-size: 11px;
-      color: rgba(255, 255, 255, 0.6);
-      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.4);
       flex-shrink: 0;
     }
 
-    .status-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: rgba(255, 255, 255, 0.4);
-    }
-
-    .ws-status.connected .status-dot {
+    .status-dot.connected {
       background: #22c55e;
+      box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
     }
 
-    .ws-status.connecting .status-dot {
+    .status-dot.connecting {
       background: #f59e0b;
       animation: blink 1s infinite;
+    }
+
+    .status-dot.disconnected {
+      background: #ef4444;
+      box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.14);
     }
 
     @keyframes blink {
@@ -613,6 +619,20 @@ export class ChatPanelComponent implements OnInit, OnDestroy {
 
   toggleSide(): void {
     this.store.toggleSidebarSide();
+  }
+
+  openNewConversation(): void {
+    this.store.setView('new-conversation');
+  }
+
+  openGroupManager(): void {
+    this.store.setView('group-manager');
+  }
+
+  getStatusTooltip(): string {
+    if (this.wsStatus === 'authenticated') return 'Connected';
+    if (this.wsStatus === 'connecting') return 'Connecting';
+    return 'Disconnected';
   }
 
   close(): void {

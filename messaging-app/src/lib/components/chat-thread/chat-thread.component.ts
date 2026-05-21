@@ -131,9 +131,7 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
                     </ng-container>
 
                     <ng-template #nonImageAttachment>
-                      <div class="file-message">
-                        <mat-icon class="file-msg-icon">{{ getFileIcon(msg, attachment) }}</mat-icon>
-                        <span class="file-msg-name">{{ getAttachmentName(msg, attachment) }}</span>
+                      <div class="file-message attachment-thumb">
                         <button
                           type="button"
                           class="file-download-btn"
@@ -141,6 +139,18 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
                           title="Download file"
                         >
                           <mat-icon class="file-download-icon">download</mat-icon>
+                        </button>
+                        <mat-icon class="file-msg-icon">{{ getFileIcon(msg, attachment) }}</mat-icon>
+                        <span class="file-msg-name" [title]="getAttachmentName(msg, attachment)">
+                          {{ getAttachmentName(msg, attachment) }}
+                        </span>
+                        <button
+                          type="button"
+                          class="file-download-link"
+                          (click)="downloadAttachment(msg, attachment, $event)"
+                          title="Download file"
+                        >
+                          Download
                         </button>
                       </div>
                     </ng-template>
@@ -198,6 +208,10 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
 
   `,
   styles: [`
+    :host {
+      --attachment-thumb-size: 180px;
+    }
+
     .chat-thread {
       display: flex;
       flex-direction: column;
@@ -387,16 +401,20 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       position: relative;
       display: inline-block;
       line-height: 0;
+      width: var(--attachment-thumb-size);
+      height: var(--attachment-thumb-size);
+      overflow: hidden;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.08);
     }
 
     .media-img {
-      max-width: 220px;
-      max-height: 280px;
-      border-radius: 10px;
+      width: 100%;
+      height: 100%;
+      border-radius: inherit;
       display: block;
       cursor: zoom-in;
       object-fit: cover;
-      transition: opacity 0.15s;
     }
 
     .attachment-actions {
@@ -463,9 +481,12 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
     .media-placeholder {
       display: flex;
       align-items: center;
+      justify-content: center;
       gap: 8px;
-      min-width: 80px;
-      min-height: 44px;
+      width: var(--attachment-thumb-size);
+      height: var(--attachment-thumb-size);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.08);
       color: rgba(255,255,255,0.6);
       font-size: 11px;
     }
@@ -493,6 +514,19 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       padding: 4px 0;
     }
 
+    .attachment-thumb.file-message {
+      position: relative;
+      width: var(--attachment-thumb-size);
+      height: var(--attachment-thumb-size);
+      padding: 12px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.08);
+      flex-direction: column;
+      justify-content: center;
+      box-sizing: border-box;
+      overflow: hidden;
+    }
+
     .file-download {
       display: inline-flex;
       align-items: center;
@@ -503,16 +537,25 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
     }
 
     .file-msg-icon {
-      font-size: 20px;
-      width: 20px;
-      height: 20px;
+      font-size: 42px;
+      width: 42px;
+      height: 42px;
       color: rgba(255, 255, 255, 0.8);
+      flex-shrink: 0;
     }
 
     .file-msg-name {
       font-size: 13px;
       color: #fff;
-      word-break: break-all;
+      line-height: 1.2;
+      max-width: 100%;
+      overflow: hidden;
+      text-align: center;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      word-break: break-word;
     }
 
     .file-download-icon {
@@ -527,7 +570,20 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       width: 24px;
       height: 24px;
       flex-shrink: 0;
-      margin-left: auto;
+      position: absolute;
+      right: 6px;
+      top: 6px;
+    }
+
+    .file-download-link {
+      border: none;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.16);
+      color: #fff;
+      cursor: pointer;
+      font-size: 11px;
+      padding: 4px 10px;
+      margin-top: 4px;
     }
 
     .message-meta {
