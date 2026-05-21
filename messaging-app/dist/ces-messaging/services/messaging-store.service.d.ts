@@ -24,6 +24,10 @@ export declare class MessagingStoreService implements OnDestroy {
     private panelSize$;
     private wasOpenBeforeDrag$;
     private panelFloating$;
+    private notificationVolume$;
+    private notificationsMuted$;
+    private toast$;
+    private removedGroupIds$;
     readonly inbox: Observable<InboxItem[]>;
     readonly messagesMap: Observable<Map<string, Message[]>>;
     readonly openChats: Observable<ChatWindow[]>;
@@ -45,10 +49,20 @@ export declare class MessagingStoreService implements OnDestroy {
     readonly wasOpenBeforeDrag: Observable<boolean>;
     readonly sidebarSide: Observable<SidebarSide>;
     readonly panelFloating: Observable<boolean>;
+    readonly notificationVolume: Observable<number>;
+    readonly notificationsMuted: Observable<boolean>;
+    readonly toast: Observable<{
+        message: string;
+        type: 'info' | 'success' | 'error';
+    }>;
+    readonly removedGroupIds: Observable<Set<string>>;
     private wsSub;
     private destroy$;
     private pollTimer;
     private groupSettings$;
+    private deletingConversationIds;
+    private removalToastShown;
+    private toastTimer;
     readonly groupSettings: Observable<{
         conversationId: string;
         name: string;
@@ -72,23 +86,39 @@ export declare class MessagingStoreService implements OnDestroy {
     setView(view: 'inbox' | 'chat' | 'new-conversation' | 'group-manager' | 'conversation-settings'): void;
     toggleSidebarSide(): void;
     setPanelFloating(isFloating: boolean): void;
+    setNotificationVolume(volume: number): void;
+    setNotificationsMuted(muted: boolean): void;
+    testNotificationSound(): void;
+    showToast(message: string, type?: 'info' | 'success' | 'error', durationMs?: number): void;
     getSidebarSide(): SidebarSide;
     loadInbox(): void;
     loadVisibleContacts(): void;
     openConversation(conversationId: string, name: string, isGroup?: boolean): void;
     closeChat(conversationId: string): void;
+    markGroupRemoved(conversationId: string): void;
+    exitRemovedGroup(conversationId: string): void;
     loadMessages(conversationId: string, beforeMessageId?: string, skipReactionHydration?: boolean): void;
-    sendMessage(conversationId: string | null, content: string, messageType?: 'TEXT' | 'IMAGE'): void;
+    sendMessage(conversationId: string | null, content: string, messageType?: 'TEXT' | 'IMAGE' | 'SYSTEM'): void;
     openDirectConversation(recipientContactId: string, displayName: string): void;
     sendDirectMessage(recipientContactId: string, content: string): void;
-    createGroupConversation(participantIds: string[], name: string): void;
+    createGroupConversation(participantIds: string[], name: string, callbacks?: {
+        success?: () => void;
+        error?: () => void;
+    }): void;
     openGroupSettings(conversationId: string, name: string): void;
     clearGroupSettings(): void;
     markAsRead(conversationId: string): void;
-    manageGroup(action: 'create' | 'add' | 'remove' | 'rename', conversationId?: string, groupName?: string, participantContactIds?: string[]): void;
+    manageGroup(action: 'create' | 'add' | 'remove' | 'rename', conversationId?: string, groupName?: string, participantContactIds?: string[], callbacks?: {
+        success?: () => void;
+        error?: () => void;
+    }): void;
     deleteConversation(conversationId: string): void;
     clearConversation(conversationId: string): void;
-    deleteGroup(conversationId: string): void;
+    deleteGroup(conversationId: string, callbacks?: {
+        success?: () => void;
+        error?: () => void;
+    }): void;
+    private removeConversationFromUi;
     addReaction(messageId: string, emoji: string): void;
     removeReaction(messageId: string, emoji: string): void;
     getActiveConversationId(): string | null;
@@ -120,8 +150,11 @@ export declare class MessagingStoreService implements OnDestroy {
      * Supports legacy and current field names returned by API/WS payloads.
      */
     private normalizeMessageShape;
+    private playSoftNotificationSound;
     private playNotificationSound;
     private recalcUnread;
+    private getContactNameById;
+    private detectGroupRemovalForCurrentUser;
     private hydrateReactionsForConversation;
     private refreshMessageReactions;
     private normalizeReactionRows;

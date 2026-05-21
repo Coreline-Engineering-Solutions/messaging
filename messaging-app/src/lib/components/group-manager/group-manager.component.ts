@@ -121,18 +121,41 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
           class="create-btn"
         >
           <mat-icon>{{ isEditMode ? 'save' : 'group_add' }}</mat-icon>
-          <ng-container *ngIf="!isEditMode">Create Group ({{ selectedContacts.length + 1 }} members)</ng-container>
+          <ng-container *ngIf="!isEditMode && !creatingGroup">Create Group ({{ selectedContacts.length + 1 }} members)</ng-container>
+          <ng-container *ngIf="!isEditMode && creatingGroup">Creating group...</ng-container>
           <ng-container *ngIf="isEditMode">Save Changes</ng-container>
         </button>
         <button
           *ngIf="isEditMode"
           mat-stroked-button
           class="delete-btn"
-          (click)="onDelete()"
+          [disabled]="deletingGroup"
+          (click)="requestDeleteGroup()"
         >
-          <mat-icon>delete</mat-icon>
-          Delete Group
+          <mat-icon>logout</mat-icon>
+          {{ deletingGroup ? 'Exiting group...' : 'Exit Group' }}
         </button>
+      </div>
+
+      <div *ngIf="showDeleteConfirm" class="confirm-overlay">
+        <div class="confirm-card">
+          <div class="confirm-icon">
+            <mat-icon>warning</mat-icon>
+          </div>
+          <div class="confirm-copy">
+            <h4>Exit group?</h4>
+            <p>Are you sure you want to exit "{{ groupName.trim() || 'this group' }}"?</p>
+          </div>
+          <div class="confirm-actions">
+            <button mat-stroked-button class="confirm-cancel" [disabled]="deletingGroup" (click)="cancelDeleteGroup()">
+              Cancel
+            </button>
+            <button mat-raised-button class="confirm-delete" [disabled]="deletingGroup" (click)="confirmDeleteGroup()">
+              <mat-icon>logout</mat-icon>
+              {{ deletingGroup ? 'Exiting...' : 'Exit Group' }}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   `,
@@ -141,6 +164,7 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
       display: flex;
       flex-direction: column;
       height: 100%;
+      position: relative;
     }
 
     .header {
@@ -408,6 +432,86 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
     }
 
     .delete-btn mat-icon { margin-right: 8px; }
+
+    .confirm-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 10;
+      display: flex;
+      align-items: flex-end;
+      padding: 16px;
+      background: rgba(4, 19, 34, 0.62);
+      backdrop-filter: blur(3px);
+      box-sizing: border-box;
+    }
+
+    .confirm-card {
+      width: 100%;
+      padding: 16px;
+      border-radius: 14px;
+      background: #0c1f35;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+      color: #fff;
+    }
+
+    .confirm-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: rgba(248, 113, 113, 0.14);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 10px;
+    }
+
+    .confirm-icon mat-icon {
+      color: #f87171;
+    }
+
+    .confirm-copy h4 {
+      margin: 0 0 6px;
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .confirm-copy p {
+      margin: 0;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .confirm-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .confirm-cancel,
+    .confirm-delete {
+      flex: 1;
+      border-radius: 10px;
+      font-weight: 600;
+    }
+
+    .confirm-cancel {
+      color: #fff !important;
+      border-color: rgba(255, 255, 255, 0.25) !important;
+    }
+
+    .confirm-delete {
+      background: rgba(220, 38, 38, 0.9) !important;
+      color: #fff !important;
+    }
+
+    .confirm-delete mat-icon {
+      margin-right: 6px;
+      font-size: 18px;
+      width: 18px;
+      height: 18px;
+    }
   `],
 })
 export class GroupManagerComponent implements OnInit, OnDestroy {
@@ -421,6 +525,9 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
   editingConversationId: string | null = null;
   creatorContactId: string | null = null;
   loadingMembers = false;
+  creatingGroup = false;
+  deletingGroup = false;
+  showDeleteConfirm = false;
   private subs: Subscription[] = [];
 
   constructor(
@@ -445,6 +552,7 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
           this.groupName = settings.name;
           this.originalGroupName = settings.name;
           this.selectedContacts = [];
+          this.showDeleteConfirm = false;
           this.loadCurrentMembers(settings.conversationId);
         } else {
           this.isEditMode = false;
@@ -453,6 +561,7 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
           this.originalGroupName = '';
           this.selectedContacts = [];
           this.currentMembers = [];
+          this.showDeleteConfirm = false;
         }
       })
     );
@@ -500,6 +609,7 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
   }
 
   get canSubmit(): boolean {
+    if (this.creatingGroup) return false;
     if (!this.groupName.trim()) return false;
     if (this.isEditMode) {
       return this.groupName.trim() !== this.originalGroupName || this.selectedContacts.length > 0;
@@ -529,8 +639,11 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
     if (!this.editingConversationId) return;
     
     if (confirm(`Remove ${this.getMemberName(member)} from this group?`)) {
-      this.store.manageGroup('remove', this.editingConversationId, undefined, [member.contact_id]);
-      this.currentMembers = this.currentMembers.filter(m => m.contact_id !== member.contact_id);
+      this.store.manageGroup('remove', this.editingConversationId, undefined, [member.contact_id], {
+        success: () => {
+          this.currentMembers = this.currentMembers.filter(m => m.contact_id !== member.contact_id);
+        },
+      });
     }
   }
 
@@ -548,17 +661,35 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
       this.store.clearGroupSettings();
       this.store.setView('chat');
     } else {
+      this.creatingGroup = true;
       const ids = this.selectedContacts.map((c) => c.contact_id);
-      this.store.createGroupConversation(ids, this.groupName.trim());
-      this.store.setView('chat');
+      this.store.createGroupConversation(ids, this.groupName.trim(), {
+        error: () => {
+          this.creatingGroup = false;
+        },
+      });
     }
   }
 
-  onDelete(): void {
-    if (this.editingConversationId) {
-      this.store.deleteGroup(this.editingConversationId);
-      this.store.clearGroupSettings();
-      this.goBack();
+  requestDeleteGroup(): void {
+    if (!this.editingConversationId || this.deletingGroup) return;
+    this.showDeleteConfirm = true;
+  }
+
+  cancelDeleteGroup(): void {
+    if (this.deletingGroup) return;
+    this.showDeleteConfirm = false;
+  }
+
+  confirmDeleteGroup(): void {
+    if (this.editingConversationId && !this.deletingGroup) {
+      this.deletingGroup = true;
+      this.store.deleteGroup(this.editingConversationId, {
+        error: () => {
+          this.deletingGroup = false;
+          this.showDeleteConfirm = false;
+        },
+      });
     }
   }
 

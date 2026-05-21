@@ -1,4 +1,15 @@
-import { Component, EventEmitter, Output, ViewChild, ElementRef } from '@angular/core';
+import {
+  AfterViewInit,
+  Component,
+  ElementRef,
+  EventEmitter,
+  Input,
+  OnChanges,
+  OnDestroy,
+  Output,
+  SimpleChanges,
+  ViewChild,
+} from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MatIconModule } from '@angular/material/icon';
@@ -17,6 +28,14 @@ export interface MessagePayload {
     <div
       class="message-input-container"
     >
+      <div
+        class="input-resize-handle"
+        title="Drag up to expand message box"
+        (mousedown)="onResizeStart($event)"
+      >
+        <span></span>
+      </div>
+
       <!-- File previews -->
       <div *ngIf="selectedFiles.length > 0" class="file-previews">
         <div *ngFor="let file of selectedFiles; let i = index" class="file-chip">
@@ -41,11 +60,16 @@ export interface MessagePayload {
           (change)="onFilesSelected($event)"
         />
         <textarea
-          [(ngModel)]="messageText"
+          #messageTextarea
+          [ngModel]="messageText"
+          (ngModelChange)="onTextChange($event)"
+          (input)="autoResize()"
+          (paste)="onPaste($event)"
           (keydown.enter)="onEnter($event)"
           placeholder="Type a message..."
           rows="1"
           class="message-textarea"
+          [style.height.px]="textareaHeight"
         ></textarea>
         <button
           mat-icon-button
@@ -65,6 +89,32 @@ export interface MessagePayload {
       border-top: 1px solid rgba(255, 255, 255, 0.15);
       background: transparent;
       position: relative;
+    }
+
+    .input-resize-handle {
+      position: absolute;
+      top: -5px;
+      left: 0;
+      right: 0;
+      height: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: ns-resize;
+      z-index: 2;
+    }
+
+    .input-resize-handle span {
+      width: 42px;
+      height: 3px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.22);
+      transition: background 0.15s, width 0.15s;
+    }
+
+    .input-resize-handle:hover span {
+      width: 56px;
+      background: rgba(255, 255, 255, 0.42);
     }
 
     .file-previews {
@@ -122,7 +172,7 @@ export interface MessagePayload {
 
     .input-wrapper {
       display: flex;
-      align-items: center;
+      align-items: flex-end;
       gap: 4px;
       background: rgba(255, 255, 255, 0.1);
       border-radius: 24px;
@@ -169,9 +219,12 @@ export interface MessagePayload {
       font-size: 14px;
       font-family: inherit;
       line-height: 1.5;
-      max-height: 100px;
-      padding: 6px 0;
+      min-height: 24px;
+      max-height: 180px;
+      padding: 7px 0;
       color: #fff;
+      overflow-y: auto;
+      box-sizing: border-box;
     }
 
     .message-textarea::placeholder {
@@ -200,13 +253,46 @@ export interface MessagePayload {
 
   `],
 })
-export class MessageInputComponent {
+export class MessageInputComponent implements OnChanges, AfterViewInit, OnDestroy {
+  @Input() conversationId: string | null = null;
   @Output() messageSent = new EventEmitter<string>();
   @Output() messageWithFiles = new EventEmitter<MessagePayload>();
   @ViewChild('fileInput') fileInput!: ElementRef<HTMLInputElement>;
+  @ViewChild('messageTextarea') messageTextarea!: ElementRef<HTMLTextAreaElement>;
 
   messageText = '';
   selectedFiles: File[] = [];
+  textareaHeight = 36;
+  private readonly draftPrefix = 'messaging_draft_';
+  private lastConversationId: string | null = null;
+  private resizing = false;
+  private resizeStartY = 0;
+  private resizeStartHeight = 0;
+  private readonly minTextareaHeight = 36;
+  private readonly maxTextareaHeight = 180;
+  private boundResizeMove = this.onResizeMove.bind(this);
+  private boundResizeEnd = this.onResizeEnd.bind(this);
+
+  ngOnChanges(changes: SimpleChanges): void {
+    if (!changes['conversationId']) return;
+    if (this.lastConversationId && this.lastConversationId !== this.conversationId) {
+      this.persistDraft(this.lastConversationId, this.messageText);
+    }
+    this.lastConversationId = this.conversationId;
+    this.messageText = this.loadDraft(this.conversationId);
+    this.queueAutoResize();
+  }
+
+  ngAfterViewInit(): void {
+    this.queueAutoResize();
+  }
+
+  ngOnDestroy(): void {
+    document.removeEventListener('mousemove', this.boundResizeMove);
+    document.removeEventListener('mouseup', this.boundResizeEnd);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }
 
   get canSend(): boolean {
     return this.messageText.trim().length > 0 || this.selectedFiles.length > 0;
@@ -224,7 +310,129 @@ export class MessageInputComponent {
 
     this.messageText = '';
     this.selectedFiles = [];
+    this.clearDraft(this.conversationId);
     if (this.fileInput) this.fileInput.nativeElement.value = '';
+    this.queueAutoResize();
+  }
+
+  onTextChange(value: string): void {
+    this.messageText = value;
+    this.persistDraft(this.conversationId, value);
+    this.queueAutoResize();
+  }
+
+  onPaste(event: ClipboardEvent): void {
+    const html = event.clipboardData?.getData('text/html') || '';
+    if (!html || !/<table[\s>]/i.test(html)) return;
+
+    const tableText = this.htmlTableToText(html);
+    if (!tableText) return;
+
+    event.preventDefault();
+    this.insertTextAtCursor(tableText);
+  }
+
+  autoResize(): void {
+    const el = this.messageTextarea?.nativeElement;
+    if (!el) return;
+    const nextHeight = Math.min(
+      Math.max(el.scrollHeight, this.minTextareaHeight),
+      Math.max(this.textareaHeight, this.minTextareaHeight)
+    );
+    this.textareaHeight = Math.min(nextHeight, this.maxTextareaHeight);
+  }
+
+  onResizeStart(event: MouseEvent): void {
+    event.preventDefault();
+    this.resizing = true;
+    this.resizeStartY = event.clientY;
+    this.resizeStartHeight = this.textareaHeight;
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', this.boundResizeMove);
+    document.addEventListener('mouseup', this.boundResizeEnd);
+  }
+
+  private onResizeMove(event: MouseEvent): void {
+    if (!this.resizing) return;
+    const dy = this.resizeStartY - event.clientY;
+    this.textareaHeight = Math.max(
+      this.minTextareaHeight,
+      Math.min(this.maxTextareaHeight, this.resizeStartHeight + dy)
+    );
+  }
+
+  private onResizeEnd(): void {
+    if (!this.resizing) return;
+    this.resizing = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    document.removeEventListener('mousemove', this.boundResizeMove);
+    document.removeEventListener('mouseup', this.boundResizeEnd);
+  }
+
+  private queueAutoResize(): void {
+    setTimeout(() => this.autoResize());
+  }
+
+  private draftKey(conversationId: string): string {
+    return `${this.draftPrefix}${conversationId}`;
+  }
+
+  private loadDraft(conversationId: string | null): string {
+    if (!conversationId) return '';
+    return localStorage.getItem(this.draftKey(conversationId)) || '';
+  }
+
+  private persistDraft(conversationId: string | null, value: string): void {
+    if (!conversationId) return;
+    const key = this.draftKey(conversationId);
+    if (value.trim()) {
+      localStorage.setItem(key, value);
+    } else {
+      localStorage.removeItem(key);
+    }
+  }
+
+  private clearDraft(conversationId: string | null): void {
+    if (!conversationId) return;
+    localStorage.removeItem(this.draftKey(conversationId));
+  }
+
+  private htmlTableToText(html: string): string {
+    try {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const table = doc.querySelector('table');
+      if (!table) return '';
+
+      const rows = Array.from(table.querySelectorAll('tr'));
+      return rows
+        .map((row) =>
+          Array.from(row.querySelectorAll('th,td'))
+            .map((cell) => (cell.textContent || '').replace(/\s+/g, ' ').trim())
+            .join('\t')
+        )
+        .filter(Boolean)
+        .join('\n');
+    } catch {
+      return '';
+    }
+  }
+
+  private insertTextAtCursor(text: string): void {
+    const textarea = this.messageTextarea?.nativeElement;
+    if (!textarea) {
+      this.onTextChange(`${this.messageText}${text}`);
+      return;
+    }
+
+    const start = textarea.selectionStart ?? this.messageText.length;
+    const end = textarea.selectionEnd ?? this.messageText.length;
+    const next = `${this.messageText.slice(0, start)}${text}${this.messageText.slice(end)}`;
+    this.onTextChange(next);
+    setTimeout(() => {
+      textarea.selectionStart = textarea.selectionEnd = start + text.length;
+    });
   }
 
   onEnter(event: Event): void {

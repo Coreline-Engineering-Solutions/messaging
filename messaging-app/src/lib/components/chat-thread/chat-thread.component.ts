@@ -38,7 +38,7 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
           <span class="chat-name">{{ conversationName }}</span>
         </div>
         <div class="header-actions">
-          <button *ngIf="isGroup" mat-icon-button class="hdr-btn" (click)="onGroupSettings()" matTooltip="Group settings" matTooltipPosition="below">
+          <button *ngIf="isGroup && !isRemovedFromGroup" mat-icon-button class="hdr-btn" (click)="onGroupSettings()" matTooltip="Group settings" matTooltipPosition="below">
             <mat-icon>settings</mat-icon>
           </button>
         </div>
@@ -50,13 +50,22 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
           <span>Drop files anywhere in this chat</span>
         </div>
 
-        <div *ngIf="loading" class="loading-indicator">
+        <div *ngIf="isRemovedFromGroup" class="removed-group-state">
+          <mat-icon>block</mat-icon>
+          <h4>You were removed from this group</h4>
+          <p>Messages, attachments, and group settings are no longer available.</p>
+          <button type="button" mat-raised-button class="removed-exit-btn" (click)="exitRemovedGroup()">
+            Exit Group
+          </button>
+        </div>
+
+        <div *ngIf="!isRemovedFromGroup && loading" class="loading-indicator">
           <mat-spinner diameter="24"></mat-spinner>
           <span>Loading messages...</span>
         </div>
 
         <button
-          *ngIf="messages.length >= 50 && !loading"
+          *ngIf="!isRemovedFromGroup && messages.length >= 50 && !loading"
           mat-stroked-button
           class="load-more-btn"
           (click)="loadOlder()"
@@ -64,7 +73,7 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
           Load older messages
         </button>
 
-        <div class="messages-list">
+        <div *ngIf="!isRemovedFromGroup" class="messages-list">
           <ng-container *ngFor="let msg of messages; let i = index">
             <div
               *ngIf="shouldShowDateSeparator(i)"
@@ -74,7 +83,15 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
             </div>
 
             <div
-              class="message-bubble-row"
+              *ngIf="isSystemMessage(msg); else chatMessage"
+              class="system-message-row"
+            >
+              <span class="system-message-text">{{ msg.content }}</span>
+            </div>
+
+            <ng-template #chatMessage>
+              <div
+                class="message-bubble-row"
               [class.own]="isOwnMessage(msg)"
               [class.other]="!isOwnMessage(msg)"
             >
@@ -156,16 +173,44 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
                     </ng-template>
                   </div>
                 </div>
-                <div
-                  *ngIf="msg.message_type === 'TEXT' && !hasFileAttachment(msg)"
-                  class="text-content"
-                >
-                  {{ msg.content }}
-                </div>
+                <ng-container *ngIf="msg.message_type === 'TEXT' && !hasFileAttachment(msg)">
+                  <div *ngIf="isTableText(msg); else plainTextMessage" class="table-message-wrap">
+                    <table class="pasted-table">
+                      <tbody>
+                        <tr *ngFor="let row of getTableRows(msg); let rowIndex = index">
+                          <ng-container *ngFor="let cell of row">
+                            <th *ngIf="rowIndex === 0; else tableCell">{{ cell }}</th>
+                            <ng-template #tableCell>
+                              <td>{{ cell }}</td>
+                            </ng-template>
+                          </ng-container>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <ng-template #plainTextMessage>
+                    <div
+                      class="text-content"
+                      [class.preformatted-text]="isPreformattedText(msg)"
+                    >
+                      {{ msg.content }}
+                    </div>
+                  </ng-template>
+                </ng-container>
                 <div class="message-meta">
                   <span class="msg-time">{{ formatTime(msg.created_at) }}</span>
-                  <mat-icon *ngIf="isOwnMessage(msg) && msg.is_read" class="read-icon">done_all</mat-icon>
-                  <mat-icon *ngIf="isOwnMessage(msg) && !msg.is_read" class="read-icon unread">done</mat-icon>
+                  <mat-icon
+                    *ngIf="isOwnMessage(msg) && isMessageRead(msg)"
+                    class="read-icon read"
+                    [matTooltip]="getReadTooltip(msg)"
+                    matTooltipPosition="above"
+                  >done_all</mat-icon>
+                  <mat-icon
+                    *ngIf="isOwnMessage(msg) && !isMessageRead(msg)"
+                    class="read-icon unread"
+                    matTooltip="Sent"
+                    matTooltipPosition="above"
+                  >done</mat-icon>
                 </div>
                 <div *ngIf="hoveredMessageId === msg.message_id" class="quick-reactions">
                   <button
@@ -186,21 +231,25 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
                     [matTooltip]="getReactorTooltip(r)"
                     matTooltipPosition="above"
                   >
-                    {{ r.emoji }} {{ r.count }}
+                    <span class="reaction-emoji">{{ r.emoji }}</span>
+                    <span class="reaction-count">{{ r.count }}</span>
                   </button>
                 </div>
               </div>
-            </div>
+              </div>
+            </ng-template>
           </ng-container>
         </div>
 
-        <div *ngIf="messages.length === 0 && !loading" class="empty-chat">
+        <div *ngIf="!isRemovedFromGroup && messages.length === 0 && !loading" class="empty-chat">
           <mat-icon>chat_bubble_outline</mat-icon>
           <p>No messages yet. Say hello!</p>
         </div>
       </div>
 
       <app-message-input
+        *ngIf="!isRemovedFromGroup"
+        [conversationId]="conversationId"
         (messageSent)="onSendMessage($event)"
         (messageWithFiles)="onSendWithFiles($event)"
       ></app-message-input>
@@ -279,12 +328,19 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
 
     .header-actions {
       display: flex;
+      align-items: center;
       gap: 0;
     }
 
     .header-actions button {
       width: 32px;
       height: 32px;
+      min-width: 32px !important;
+      padding: 0 !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      --mdc-icon-button-state-layer-size: 32px;
     }
 
     .hdr-btn {
@@ -295,6 +351,22 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
     .hdr-btn:hover {
       background: rgba(255, 255, 255, 0.15) !important;
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    }
+
+    .hdr-btn mat-icon {
+      font-size: 20px;
+      width: 20px;
+      height: 20px;
+      line-height: 20px;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    :host ::ng-deep .hdr-btn .mat-mdc-button-touch-target {
+      width: 32px !important;
+      height: 32px !important;
     }
 
     .messages-area {
@@ -318,6 +390,51 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       padding: 12px;
       color: rgba(255, 255, 255, 0.7);
       font-size: 13px;
+    }
+
+    .removed-group-state {
+      height: 100%;
+      min-height: 260px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      gap: 10px;
+      padding: 32px 24px;
+      color: rgba(255, 255, 255, 0.78);
+      box-sizing: border-box;
+    }
+
+    .removed-group-state mat-icon {
+      width: 44px;
+      height: 44px;
+      font-size: 44px;
+      color: #f87171;
+      margin-bottom: 4px;
+    }
+
+    .removed-group-state h4 {
+      margin: 0;
+      color: #fff;
+      font-size: 17px;
+      font-weight: 700;
+    }
+
+    .removed-group-state p {
+      margin: 0 0 8px;
+      max-width: 280px;
+      font-size: 13px;
+      line-height: 1.4;
+      color: rgba(255, 255, 255, 0.62);
+    }
+
+    .removed-exit-btn {
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.18) !important;
+      color: #fff !important;
+      font-weight: 700;
+      padding: 0 18px;
     }
 
     .load-more-btn {
@@ -369,6 +486,26 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
     }
 
+    .system-message-row {
+      align-self: center;
+      max-width: 88%;
+      margin: 8px auto;
+      text-align: center;
+    }
+
+    .system-message-text {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 5px 11px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.09);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: rgba(255, 255, 255, 0.72);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
     .message-bubble {
       padding: 8px 14px 7px;
       border-radius: 14px;
@@ -391,6 +528,60 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       background: #0a3d62;
       border-bottom-right-radius: 5px;
       box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    }
+
+    .text-content {
+      white-space: pre-wrap;
+      tab-size: 4;
+    }
+
+    .text-content.preformatted-text {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-x: auto;
+      max-width: min(72vw, 520px);
+    }
+
+    .table-message-wrap {
+      max-width: min(76vw, 560px);
+      overflow-x: auto;
+      border-radius: 9px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .pasted-table {
+      border-collapse: collapse;
+      min-width: 100%;
+      font-size: 12px;
+      line-height: 1.35;
+      color: #f5f7ff;
+    }
+
+    .pasted-table th,
+    .pasted-table td {
+      padding: 6px 9px;
+      border-right: 1px solid rgba(255, 255, 255, 0.12);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+      text-align: left;
+      white-space: pre-wrap;
+      vertical-align: top;
+    }
+
+    .pasted-table th {
+      background: rgba(255, 255, 255, 0.1);
+      font-weight: 700;
+    }
+
+    .pasted-table tr:last-child td,
+    .pasted-table tr:last-child th {
+      border-bottom: none;
+    }
+
+    .pasted-table th:last-child,
+    .pasted-table td:last-child {
+      border-right: none;
     }
 
     .image-message {
@@ -609,8 +800,14 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       opacity: 0.7;
     }
 
+    .read-icon.read {
+      color: #60a5fa;
+      opacity: 1;
+    }
+
     .read-icon.unread {
-      opacity: 0.4;
+      color: rgba(218, 224, 250, 0.5);
+      opacity: 1;
     }
 
     .quick-reactions {
@@ -673,11 +870,15 @@ import { MessageInputComponent, MessagePayload } from '../message-input/message-
       background: rgba(255,255,255,0.08);
       border: 1px solid rgba(255,255,255,0.2);
       border-radius: 999px;
-      padding: 1px 7px;
+      padding: 2px 7px;
       font-size: 11px;
       color: #f2f6ff;
       cursor: pointer;
       transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      max-width: 180px;
     }
 
     .reaction-chip:hover {
@@ -721,10 +922,11 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   visibleContacts: Contact[] = [];
   conversationName = '';
   isGroup = false;
+  isRemovedFromGroup = false;
   loading = false;
   myContactId: string | null = null;
 
-  private conversationId: string | null = null;
+  conversationId: string | null = null;
   private sub!: Subscription;
   private shouldScrollToBottom = true;
 
@@ -761,7 +963,8 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
       this.store.openChats,
       this.store.visibleContacts,
       this.store.loadingMessages,
-    ]).subscribe(([convId, msgMap, chats, contacts, loading]) => {
+      this.store.removedGroupIds,
+    ]).subscribe(([convId, msgMap, chats, contacts, loading, removedGroupIds]) => {
       this.loading = loading;
       this.visibleContacts = contacts || [];
 
@@ -783,6 +986,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
         // Pre-warm media cache for any image/file messages visible
         this.prewarmMedia(this.messages);
       }
+      this.isRemovedFromGroup = !!this.conversationId && removedGroupIds.has(String(this.conversationId));
     });
   }
 
@@ -816,17 +1020,20 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   }
 
   onGroupSettings(): void {
+    if (this.isRemovedFromGroup) return;
     if (this.conversationId) {
       this.store.openGroupSettings(this.conversationId, this.conversationName);
     }
   }
 
   onSendMessage(content: string): void {
+    if (this.isRemovedFromGroup) return;
     this.store.sendMessage(this.conversationId, content);
     this.shouldScrollToBottom = true;
   }
 
   onSendWithFiles(payload: MessagePayload): void {
+    if (this.isRemovedFromGroup) return;
     if (!this.conversationId || !this.auth.contactId) return;
     this.uploading = true;
 
@@ -878,7 +1085,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
                 content: payload.text || filenames.join(', '),
                 media_url: firstId,
                 created_at: new Date().toISOString(),
-                is_read: true,
+                is_read: false,
                 attachments: fileIds.map((id, idx) => ({
                   file_id: id,
                   filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
@@ -910,6 +1117,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   onScroll(): void {}
 
   onThreadDragEnter(event: DragEvent): void {
+    if (this.isRemovedFromGroup) return;
     if (!this.dragHasFiles(event)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -918,6 +1126,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   }
 
   onThreadDragOver(event: DragEvent): void {
+    if (this.isRemovedFromGroup) return;
     if (!this.dragHasFiles(event)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -936,6 +1145,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   }
 
   onThreadDrop(event: DragEvent): void {
+    if (this.isRemovedFromGroup) return;
     if (!this.dragHasFiles(event)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -947,6 +1157,12 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   private resetThreadDrag(): void {
     this.threadDragDepth = 0;
     this.threadDragOver = false;
+  }
+
+  exitRemovedGroup(): void {
+    if (this.conversationId) {
+      this.store.exitRemovedGroup(this.conversationId);
+    }
   }
 
   private dragHasFiles(event: DragEvent): boolean {
@@ -969,6 +1185,109 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
 
   isOwnMessage(msg: Message): boolean {
     return String(msg.sender_id) === String(this.myContactId);
+  }
+
+  isSystemMessage(msg: Message): boolean {
+    const content = String(msg.content || '').trim();
+    return msg.message_type === 'SYSTEM' ||
+      /^.+ added .+ to the group$/.test(content) ||
+      /^.+ removed .+ from the group$/.test(content);
+  }
+
+  isPreformattedText(msg: Message): boolean {
+    const content = String(msg.content || '');
+    return content.includes('\t') || content.includes('\n') || / {2,}/.test(content);
+  }
+
+  isTableText(msg: Message): boolean {
+    const rows = this.getTableRows(msg);
+    return rows.length >= 2 && rows.some((row) => row.length >= 2);
+  }
+
+  getTableRows(msg: Message): string[][] {
+    const content = String(msg.content || '').trim();
+    if (!content.includes('\t')) return [];
+
+    const rows = content
+      .split(/\r?\n/)
+      .map((line) => line.split('\t').map((cell) => cell.trim()))
+      .filter((row) => row.some((cell) => cell.length > 0));
+
+    const maxColumns = Math.max(0, ...rows.map((row) => row.length));
+    if (maxColumns < 2) return [];
+
+    return rows.map((row) => [
+      ...row,
+      ...Array.from({ length: maxColumns - row.length }, () => ''),
+    ]);
+  }
+
+  isMessageRead(msg: Message): boolean {
+    const value = msg.is_read;
+    return value === true || value === 'true' || value === 'True' || value === '1';
+  }
+
+  getReadTooltip(msg: Message): string {
+    if (!this.isGroup) return 'Read';
+
+    const names = this.getReadByNames(msg);
+    if (names.length > 0) {
+      return `Read by ${names.join(', ')}`;
+    }
+
+    return 'Read';
+  }
+
+  private getReadByNames(msg: Message): string[] {
+    const anyMsg = msg as any;
+    const rawNames = [
+      ...this.toReadArray(anyMsg.read_by_names),
+      ...this.toReadArray(anyMsg.readByNames),
+      ...this.toReadArray(anyMsg.reader_names),
+      ...this.toReadArray(anyMsg.readers),
+      ...this.toReadArray(anyMsg.read_by),
+      ...this.toReadArray(anyMsg.readBy),
+    ];
+
+    const names = rawNames
+      .map((entry) => this.readEntryToName(entry))
+      .filter((name): name is string => !!name && name !== 'You');
+
+    return Array.from(new Set(names));
+  }
+
+  private toReadArray(value: unknown): unknown[] {
+    if (!value) return [];
+    if (Array.isArray(value)) return value;
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) return [];
+      try {
+        const parsed = JSON.parse(trimmed);
+        return Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        return trimmed.includes(',') ? trimmed.split(',').map((v) => v.trim()) : [trimmed];
+      }
+    }
+    return [value];
+  }
+
+  private readEntryToName(entry: unknown): string | null {
+    if (entry == null) return null;
+    if (typeof entry === 'string' || typeof entry === 'number') {
+      const idOrName = String(entry).trim();
+      const contact = this.visibleContacts.find((c) => String(c.contact_id) === idOrName);
+      return contact ? getContactDisplayName(contact) : idOrName;
+    }
+    if (typeof entry === 'object') {
+      const obj = entry as any;
+      const explicit = obj.username || obj.name || obj.display_name || obj.displayName || obj.email;
+      if (explicit) return String(explicit);
+      if (obj.contact_id || obj.contactId) {
+        return this.readEntryToName(obj.contact_id || obj.contactId);
+      }
+    }
+    return null;
   }
 
   getSenderName(msg: Message): string {
@@ -1382,7 +1701,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   // ── Reactions ────────────────────────────────────────────────────────────
 
   onEmojiSelected(emoji: string, messageId: string): void {
-    this.store.addReaction(messageId, emoji);
+    this.toggleReaction(emoji, messageId);
   }
 
   toggleReaction(emoji: string, messageId: string): void {

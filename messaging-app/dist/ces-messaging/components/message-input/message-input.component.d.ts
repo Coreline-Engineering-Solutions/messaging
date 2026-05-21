@@ -1,17 +1,45 @@
-import { EventEmitter, ElementRef } from '@angular/core';
+import { AfterViewInit, ElementRef, EventEmitter, OnChanges, OnDestroy, SimpleChanges } from '@angular/core';
 import * as i0 from "@angular/core";
 export interface MessagePayload {
     text: string;
     files: File[];
 }
-export declare class MessageInputComponent {
+export declare class MessageInputComponent implements OnChanges, AfterViewInit, OnDestroy {
+    conversationId: string | null;
     messageSent: EventEmitter<string>;
     messageWithFiles: EventEmitter<MessagePayload>;
     fileInput: ElementRef<HTMLInputElement>;
+    messageTextarea: ElementRef<HTMLTextAreaElement>;
     messageText: string;
     selectedFiles: File[];
+    textareaHeight: number;
+    private readonly draftPrefix;
+    private lastConversationId;
+    private resizing;
+    private resizeStartY;
+    private resizeStartHeight;
+    private readonly minTextareaHeight;
+    private readonly maxTextareaHeight;
+    private boundResizeMove;
+    private boundResizeEnd;
+    ngOnChanges(changes: SimpleChanges): void;
+    ngAfterViewInit(): void;
+    ngOnDestroy(): void;
     get canSend(): boolean;
     send(): void;
+    onTextChange(value: string): void;
+    onPaste(event: ClipboardEvent): void;
+    autoResize(): void;
+    onResizeStart(event: MouseEvent): void;
+    private onResizeMove;
+    private onResizeEnd;
+    private queueAutoResize;
+    private draftKey;
+    private loadDraft;
+    private persistDraft;
+    private clearDraft;
+    private htmlTableToText;
+    private insertTextAtCursor;
     onEnter(event: Event): void;
     onFilesSelected(event: Event): void;
     addFiles(files: File[]): void;
@@ -19,5 +47,5 @@ export declare class MessageInputComponent {
     getFileIcon(file: File): string;
     formatSize(bytes: number): string;
     static ɵfac: i0.ɵɵFactoryDeclaration<MessageInputComponent, never>;
-    static ɵcmp: i0.ɵɵComponentDeclaration<MessageInputComponent, "app-message-input", never, {}, { "messageSent": "messageSent"; "messageWithFiles": "messageWithFiles"; }, never, never, true, never>;
+    static ɵcmp: i0.ɵɵComponentDeclaration<MessageInputComponent, "app-message-input", never, { "conversationId": { "alias": "conversationId"; "required": false; }; }, { "messageSent": "messageSent"; "messageWithFiles": "messageWithFiles"; }, never, never, true, never>;
 }

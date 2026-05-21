@@ -18,6 +18,9 @@ export declare class GroupManagerComponent implements OnInit, OnDestroy {
     editingConversationId: string | null;
     creatorContactId: string | null;
     loadingMembers: boolean;
+    creatingGroup: boolean;
+    deletingGroup: boolean;
+    showDeleteConfirm: boolean;
     private subs;
     constructor(store: MessagingStoreService, api: MessagingApiService, auth: AuthService);
     ngOnInit(): void;
@@ -32,7 +35,9 @@ export declare class GroupManagerComponent implements OnInit, OnDestroy {
     removeContact(contact: Contact): void;
     removeMember(member: ConversationParticipant): void;
     onSubmit(): void;
-    onDelete(): void;
+    requestDeleteGroup(): void;
+    cancelDeleteGroup(): void;
+    confirmDeleteGroup(): void;
     goBack(): void;
     static ɵfac: i0.ɵɵFactoryDeclaration<GroupManagerComponent, never>;
     static ɵcmp: i0.ɵɵComponentDeclaration<GroupManagerComponent, "app-group-manager", never, {}, {}, never, never, true, never>;

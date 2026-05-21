@@ -1,19 +1,19 @@
 import * as i0 from '@angular/core';
-import { InjectionToken, Inject, Injectable, Component, EventEmitter, ViewChild, Output, ViewEncapsulation, Input } from '@angular/core';
-import { BehaviorSubject, Subject, of, from, throwError, Observable, forkJoin, combineLatest, debounceTime } from 'rxjs';
+import { InjectionToken, Inject, Injectable, Component, EventEmitter, ViewChild, Output, Input, ViewEncapsulation } from '@angular/core';
+import { BehaviorSubject, Subject, of, from, throwError, Observable, forkJoin, combineLatest, Subscription, debounceTime } from 'rxjs';
 import { tap, concatMap, toArray, catchError, map } from 'rxjs/operators';
 import * as i1 from '@angular/common/http';
 import { HttpParams } from '@angular/common/http';
 import * as i1$1 from '@angular/common';
 import { CommonModule } from '@angular/common';
+import * as i3 from '@angular/forms';
+import { FormsModule } from '@angular/forms';
 import * as i5 from '@angular/material/icon';
 import { MatIconModule } from '@angular/material/icon';
 import * as i6 from '@angular/material/button';
 import { MatButtonModule } from '@angular/material/button';
 import * as i8 from '@angular/material/tooltip';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import * as i3 from '@angular/forms';
-import { FormsModule } from '@angular/forms';
 import * as i6$1 from '@angular/material/core';
 import { MatRippleModule, MatNativeDateModule } from '@angular/material/core';
 import * as i7 from '@angular/material/progress-spinner';
@@ -309,9 +309,7 @@ class MessagingApiService {
         });
     }
     deleteGroup(conversationId, contactId) {
-        return this.http.post(`${this.base}/groups/${conversationId}/delete`, {
-            contactId,
-        });
+        return this.manageGroup(contactId, 'remove', conversationId);
     }
     // ── Attachments ──
     uploadAttachment(file) {
@@ -844,6 +842,10 @@ class MessagingStoreService {
     panelSize$ = new BehaviorSubject({ width: 380, height: 560 });
     wasOpenBeforeDrag$ = new BehaviorSubject(false);
     panelFloating$ = new BehaviorSubject(false);
+    notificationVolume$ = new BehaviorSubject(Number(localStorage.getItem('messaging_notification_volume') ?? '0.35'));
+    notificationsMuted$ = new BehaviorSubject(localStorage.getItem('messaging_notifications_muted') === 'true');
+    toast$ = new BehaviorSubject(null);
+    removedGroupIds$ = new BehaviorSubject(new Set());
     // ── Public observables ──
     inbox = this.inbox$.asObservable();
     messagesMap = this.messagesMap$.asObservable();
@@ -860,10 +862,17 @@ class MessagingStoreService {
     wasOpenBeforeDrag = this.wasOpenBeforeDrag$.asObservable();
     sidebarSide = this.sidebarSide$.asObservable();
     panelFloating = this.panelFloating$.asObservable();
+    notificationVolume = this.notificationVolume$.asObservable();
+    notificationsMuted = this.notificationsMuted$.asObservable();
+    toast = this.toast$.asObservable();
+    removedGroupIds = this.removedGroupIds$.asObservable();
     wsSub = null;
     destroy$ = new Subject();
     pollTimer = null;
     groupSettings$ = new BehaviorSubject(null);
+    deletingConversationIds = new Set();
+    removalToastShown = new Set();
+    toastTimer = null;
     groupSettings = this.groupSettings$.asObservable();
     constructor(auth, api, wsService) {
         this.auth = auth;
@@ -885,6 +894,10 @@ class MessagingStoreService {
     }
     teardown() {
         this.stopPolling();
+        if (this.toastTimer) {
+            clearTimeout(this.toastTimer);
+            this.toastTimer = null;
+        }
         this.wsService.disconnect();
         this.wsSub?.unsubscribe();
         this.inbox$.next([]);
@@ -894,6 +907,10 @@ class MessagingStoreService {
         this.activeView$.next('inbox');
         this.activeConversationId$.next(null);
         this.totalUnread$.next(0);
+        this.deletingConversationIds.clear();
+        this.removalToastShown.clear();
+        this.removedGroupIds$.next(new Set());
+        this.toast$.next(null);
     }
     // ── Polling fallback (inbox only - messages rely on WebSocket) ──
     startPolling() {
@@ -969,6 +986,32 @@ class MessagingStoreService {
     setPanelFloating(isFloating) {
         this.panelFloating$.next(isFloating);
     }
+    setNotificationVolume(volume) {
+        const normalized = Math.max(0, Math.min(1, Number(volume)));
+        this.notificationVolume$.next(normalized);
+        localStorage.setItem('messaging_notification_volume', String(normalized));
+        if (normalized > 0 && this.notificationsMuted$.value) {
+            this.setNotificationsMuted(false);
+        }
+    }
+    setNotificationsMuted(muted) {
+        this.notificationsMuted$.next(muted);
+        localStorage.setItem('messaging_notifications_muted', String(muted));
+    }
+    testNotificationSound() {
+        this.playSoftNotificationSound(true);
+    }
+    showToast(message, type = 'info', durationMs = 3000) {
+        if (this.toastTimer) {
+            clearTimeout(this.toastTimer);
+            this.toastTimer = null;
+        }
+        this.toast$.next({ message, type });
+        this.toastTimer = setTimeout(() => {
+            this.toast$.next(null);
+            this.toastTimer = null;
+        }, durationMs);
+    }
     getSidebarSide() {
         return this.sidebarSide$.value;
     }
@@ -985,7 +1028,8 @@ class MessagingStoreService {
                         return { ...item, name: item.other_participant_name, is_group: false };
                     }
                     return { ...item, is_group: isGroup };
-                });
+                }).filter(item => !this.deletingConversationIds.has(String(item.conversation_id)) &&
+                    !this.removedGroupIds$.value.has(String(item.conversation_id)));
                 this.inbox$.next(mapped);
                 this.recalcUnread(mapped);
                 const ids = mapped.map((i) => i.conversation_id);
@@ -1032,11 +1076,7 @@ class MessagingStoreService {
             ]);
         }
         const existing = this.messagesMap$.value.get(conversationId);
-        if (existing && existing.length > 0) {
-            // Already cached — silent background refresh for new messages, skip reaction hydration
-            this.loadMessages(conversationId, undefined, true);
-        }
-        else {
+        if (!existing || existing.length === 0) {
             this.loadMessages(conversationId);
         }
         this.markAsRead(conversationId);
@@ -1045,10 +1085,33 @@ class MessagingStoreService {
     closeChat(conversationId) {
         const chats = this.openChats$.value.filter((c) => c.conversationId !== conversationId);
         this.openChats$.next(chats);
-        if (this.activeConversationId$.value === conversationId) {
+        if (String(this.activeConversationId$.value) === String(conversationId)) {
             this.activeConversationId$.next(null);
             this.activeView$.next('inbox');
         }
+    }
+    markGroupRemoved(conversationId) {
+        const id = String(conversationId);
+        if (!id || id === 'undefined')
+            return;
+        const next = new Set(this.removedGroupIds$.value);
+        next.add(id);
+        this.removedGroupIds$.next(next);
+        const items = this.inbox$.value.filter(i => String(i.conversation_id) !== id);
+        this.inbox$.next(items);
+        this.recalcUnread(items);
+        if (!this.removalToastShown.has(id)) {
+            this.removalToastShown.add(id);
+            this.showToast('You were removed from this group', 'info', 5000);
+        }
+    }
+    exitRemovedGroup(conversationId) {
+        const id = String(conversationId);
+        const next = new Set(this.removedGroupIds$.value);
+        next.delete(id);
+        this.removedGroupIds$.next(next);
+        this.removalToastShown.delete(id);
+        this.removeConversationFromUi(id);
     }
     // ── Messages ──
     loadMessages(conversationId, beforeMessageId, skipReactionHydration = false) {
@@ -1065,6 +1128,7 @@ class MessagingStoreService {
                 const existing = map.get(conversationId) || [];
                 const normalized = messages.map((m) => this.normalizeMessageShape(m));
                 const sorted = [...normalized].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+                sorted.forEach((m) => this.detectGroupRemovalForCurrentUser(m));
                 const existingById = new Map(existing.map(m => [String(m.message_id), m]));
                 if (beforeMessageId) {
                     // Prepend older messages, preserving existing reactions
@@ -1083,9 +1147,7 @@ class MessagingStoreService {
                     map.set(conversationId, merged);
                 }
                 this.messagesMap$.next(map);
-                if (!skipReactionHydration) {
-                    this.hydrateReactionsForConversation(conversationId, map.get(conversationId) || []);
-                }
+                this.hydrateReactionsForConversation(conversationId, map.get(conversationId) || [], skipReactionHydration);
                 this.loadingMessages$.next(false);
             },
             error: () => {
@@ -1116,7 +1178,7 @@ class MessagingStoreService {
             message_type: messageType,
             content,
             created_at: new Date().toISOString(),
-            is_read: true,
+            is_read: false,
         };
         this.appendMessage(optimistic);
         this.api.sendMessage(conversationId, contactId, content, messageType).subscribe({
@@ -1131,6 +1193,7 @@ class MessagingStoreService {
                     ...res,
                     message_id: String(realId),
                     conversation_id: conversationId,
+                    message_type: messageType === 'SYSTEM' ? 'SYSTEM' : res?.message_type ?? optimistic.message_type,
                     content: pickedContent,
                 });
                 const map = new Map(this.messagesMap$.value);
@@ -1187,25 +1250,34 @@ class MessagingStoreService {
             error: () => { },
         });
     }
-    createGroupConversation(participantIds, name) {
+    createGroupConversation(participantIds, name, callbacks) {
         const contactId = this.auth.contactId;
-        if (!contactId)
+        if (!contactId) {
+            callbacks?.error?.();
             return;
+        }
         const allParticipants = participantIds.includes(contactId)
             ? participantIds
             : [contactId, ...participantIds];
         this.api.createConversation(contactId, allParticipants, name).subscribe({
             next: (conv) => {
                 // Backend may return conversation_id, id, or conversationId
-                const convId = String(conv?.conversation_id || conv?.id || conv?.conversationId || '');
+                const convId = String(typeof conv === 'string' || typeof conv === 'number'
+                    ? conv
+                    : conv?.conversation_id || conv?.id || conv?.conversationId || '');
                 if (!convId) {
                     this.loadInbox();
+                    callbacks?.error?.();
                     return;
                 }
                 this.loadInbox();
+                this.clearGroupSettings();
                 this.openConversation(convId, name, true);
+                callbacks?.success?.();
             },
-            error: () => { },
+            error: () => {
+                callbacks?.error?.();
+            },
         });
     }
     openGroupSettings(conversationId, name) {
@@ -1231,13 +1303,47 @@ class MessagingStoreService {
         });
     }
     // ── Group management ──
-    manageGroup(action, conversationId, groupName, participantContactIds) {
+    manageGroup(action, conversationId, groupName, participantContactIds, callbacks) {
         const contactId = this.auth.contactId;
-        if (!contactId)
+        if (!contactId) {
+            callbacks?.error?.();
             return;
+        }
+        if (action === 'remove' && conversationId && participantContactIds?.length) {
+            const actorName = this.getContactNameById(contactId);
+            const noticeJobs = participantContactIds.map((id) => this.api.sendMessage(conversationId, contactId, `${actorName} removed ${this.getContactNameById(id)} from the group`, 'SYSTEM').pipe(catchError(() => of(null))));
+            const removeJobs = participantContactIds.map((id) => this.api.manageGroup(id, action, conversationId, groupName));
+            forkJoin(noticeJobs).subscribe({
+                next: () => {
+                    forkJoin(removeJobs).subscribe({
+                        next: () => {
+                            this.loadInbox();
+                            callbacks?.success?.();
+                        },
+                        error: () => {
+                            callbacks?.error?.();
+                        },
+                    });
+                },
+                error: () => {
+                    callbacks?.error?.();
+                },
+            });
+            return;
+        }
         this.api.manageGroup(contactId, action, conversationId, groupName, participantContactIds).subscribe({
-            next: () => this.loadInbox(),
-            error: () => { },
+            next: () => {
+                this.loadInbox();
+                if (action === 'add' && conversationId && participantContactIds?.length) {
+                    const addedNames = participantContactIds.map((id) => this.getContactNameById(id));
+                    const text = `${this.getContactNameById(contactId)} added ${addedNames.join(', ')} to the group`;
+                    this.sendMessage(conversationId, text, 'SYSTEM');
+                }
+                callbacks?.success?.();
+            },
+            error: () => {
+                callbacks?.error?.();
+            },
         });
     }
     // ── Delete / Clear ──
@@ -1279,26 +1385,57 @@ class MessagingStoreService {
             error: () => { },
         });
     }
-    deleteGroup(conversationId) {
+    deleteGroup(conversationId, callbacks) {
         const contactId = this.auth.contactId;
-        if (!contactId)
+        if (!contactId || this.deletingConversationIds.has(conversationId)) {
+            callbacks?.error?.();
             return;
+        }
+        const previousInbox = this.inbox$.value;
+        const previousMessagesMap = new Map(this.messagesMap$.value);
+        const previousOpenChats = this.openChats$.value;
+        const previousActiveConversationId = this.activeConversationId$.value;
+        const previousActiveView = this.activeView$.value;
+        const previousGroupSettings = this.groupSettings$.value;
+        this.deletingConversationIds.add(conversationId);
+        this.showToast('Exiting group...', 'info', 1500);
+        this.removeConversationFromUi(conversationId);
         this.api.deleteGroup(conversationId, contactId).subscribe({
             next: () => {
-                const items = this.inbox$.value.filter(i => i.conversation_id !== conversationId);
-                this.inbox$.next(items);
-                this.recalcUnread(items);
-                const map = new Map(this.messagesMap$.value);
-                map.delete(conversationId);
-                this.messagesMap$.next(map);
-                if (this.activeConversationId$.value === conversationId) {
-                    this.activeConversationId$.next(null);
-                    this.activeView$.next('inbox');
-                }
-                this.closeChat(conversationId);
+                this.deletingConversationIds.delete(conversationId);
+                this.showToast('Exited group', 'success');
+                callbacks?.success?.();
             },
-            error: () => { },
+            error: () => {
+                this.deletingConversationIds.delete(conversationId);
+                this.inbox$.next(previousInbox);
+                this.recalcUnread(previousInbox);
+                this.messagesMap$.next(previousMessagesMap);
+                this.openChats$.next(previousOpenChats);
+                this.groupSettings$.next(previousGroupSettings);
+                this.activeConversationId$.next(previousActiveConversationId);
+                this.activeView$.next(previousActiveView);
+                this.showToast('Could not exit group', 'error');
+                callbacks?.error?.();
+            },
         });
+    }
+    removeConversationFromUi(conversationId) {
+        const items = this.inbox$.value.filter(i => String(i.conversation_id) !== String(conversationId));
+        this.inbox$.next(items);
+        this.recalcUnread(items);
+        const map = new Map(this.messagesMap$.value);
+        map.delete(conversationId);
+        this.messagesMap$.next(map);
+        this.openChats$.next(this.openChats$.value.filter(c => String(c.conversationId) !== String(conversationId)));
+        if (String(this.activeConversationId$.value) === String(conversationId)) {
+            this.activeConversationId$.next(null);
+            this.activeView$.next('inbox');
+        }
+        const settings = this.groupSettings$.value;
+        if (settings?.conversationId === conversationId) {
+            this.clearGroupSettings();
+        }
     }
     // ── Reactions ──
     addReaction(messageId, emoji) {
@@ -1379,9 +1516,6 @@ class MessagingStoreService {
                 break;
             case 'conversation_updated':
                 this.loadInbox();
-                if (this.activeConversationId$.value) {
-                    this.loadMessages(this.activeConversationId$.value);
-                }
                 break;
             case 'group_updated':
                 this.handleGroupUpdated(this.wsEventPayload(msg));
@@ -1401,6 +1535,7 @@ class MessagingStoreService {
         if (!data)
             return;
         let message = this.normalizeMessageShape(data);
+        this.detectGroupRemovalForCurrentUser(message);
         const myContactId = String(this.auth.contactId ?? '');
         const convId = String(message.conversation_id ?? '');
         const existing = this.messagesMap$.value.get(convId) || [];
@@ -1455,7 +1590,7 @@ class MessagingStoreService {
         if (!isDuplicate) {
             this.appendMessage(message);
             if (isFromOther) {
-                this.playNotificationSound();
+                this.playSoftNotificationSound();
             }
             this.updateInboxPreview(message);
         }
@@ -1773,6 +1908,43 @@ class MessagingStoreService {
         }
         return base;
     }
+    playSoftNotificationSound(force = false) {
+        if (!force && this.notificationsMuted$.value)
+            return;
+        const volume = Math.max(0, Math.min(1, this.notificationVolume$.value));
+        if (volume <= 0 && !force)
+            return;
+        try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx)
+                return;
+            const ctx = new AudioCtx();
+            const master = ctx.createGain();
+            const outputGain = Math.max(volume, 0.001);
+            master.gain.setValueAtTime(0.0001, ctx.currentTime);
+            master.gain.exponentialRampToValueAtTime(outputGain, ctx.currentTime + 0.015);
+            master.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.42);
+            master.connect(ctx.destination);
+            const playTone = (frequency, start, duration) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(frequency, ctx.currentTime + start);
+                gain.gain.setValueAtTime(0.0001, ctx.currentTime + start);
+                gain.gain.exponentialRampToValueAtTime(0.55, ctx.currentTime + start + 0.025);
+                gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + duration);
+                osc.connect(gain);
+                gain.connect(master);
+                osc.start(ctx.currentTime + start);
+                osc.stop(ctx.currentTime + start + duration + 0.02);
+            };
+            playTone(740, 0, 0.18);
+            playTone(988, 0.12, 0.22);
+            window.setTimeout(() => ctx.close().catch(() => { }), 600);
+        }
+        catch {
+        }
+    }
     playNotificationSound() {
         try {
             const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIGGS57OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBQLSKDf8sFuIwUug8/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy2os7ChRgs+jsq1gVC0ig3/LBbiMFLoLP8tuJNwgYZLvs6KFQEQtMpeHxuWUcBTaN1fPOfS8FKH7M8tqLOwoUYLPo7KtYFQtIoN/ywW4jBS6Cz/LbiTcIGGS77OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBULSKDf8sFuIwUugs/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy2os7ChRgs+jsq1gVC0ig3/LBbiMFLoLP8tuJNwgYZLvs6KFQEQtMpeHxuWUcBTaN1fPOfS8FKH7M8tqLOwoUYLPo7KtYFQtIoN/ywW4jBS6Cz/LbiTcIGGS77OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBULSKDf8sFuIwUugs/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy2os7ChRgs+jsq1gVC0ig3/LBbiMFLoLP8tuJNwgYZLvs6KFQEQtMpeHxuWUcBTaN1fPOfS8FKH7M8tqLOwoUYLPo7KtYFQtIoN/ywW4jBS6Cz/LbiTcIGGS77OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBULSKDf8sFuIwUugs/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy2os7ChRgs+jsq1gVC0ig3/LBbiMFLoLP8tuJNwgYZLvs6KFQEQtMpeHxuWUcBTaN1fPOfS8FKH7M8tqLOwoUYLPo7KtYFQtIoN/ywW4jBS6Cz/LbiTcIGGS77OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBULSKDf8sFuIwUugs/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy2os7ChRgs+jsq1gVC0ig3/LBbiMFLoLP8tuJNwgYZLvs6KFQEQtMpeHxuWUcBTaN1fPOfS8FKH7M8tqLOwoUYLPo7KtYFQtIoN/ywW4jBS6Cz/LbiTcIGGS77OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBULSKDf8sFuIwUugs/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy');
@@ -1786,8 +1958,37 @@ class MessagingStoreService {
         const total = items.reduce((sum, i) => sum + Number(i.unread_count || 0), 0);
         this.totalUnread$.next(total);
     }
-    hydrateReactionsForConversation(conversationId, messages) {
-        const fetchable = messages.filter((m) => !!m.message_id && !String(m.message_id).startsWith('temp-'));
+    getContactNameById(contactId) {
+        const id = String(contactId);
+        if (id === String(this.auth.contactId || '') && this.auth.currentContact) {
+            return getContactDisplayName(this.auth.currentContact);
+        }
+        const contact = this.visibleContacts$.value.find((c) => String(c.contact_id) === id);
+        return contact ? getContactDisplayName(contact) : `User ${id}`;
+    }
+    detectGroupRemovalForCurrentUser(message) {
+        const content = String(message.content || '').trim();
+        const match = content.match(/^(.+) removed (.+) from the group$/);
+        if (!match)
+            return;
+        const myContact = this.auth.currentContact;
+        const myName = myContact ? getContactDisplayName(myContact).trim().toLowerCase() : '';
+        const removedName = match[2]?.trim().toLowerCase();
+        if (!myName || removedName !== myName)
+            return;
+        const convId = String(message.conversation_id || '');
+        if (convId) {
+            this.markGroupRemoved(convId);
+        }
+    }
+    hydrateReactionsForConversation(conversationId, messages, onlyMissing = false) {
+        const fetchable = messages.filter((m) => {
+            if (!m.message_id || String(m.message_id).startsWith('temp-'))
+                return false;
+            if (!onlyMissing)
+                return true;
+            return !Array.isArray(m.reactions) || m.reactions.length === 0;
+        });
         if (!fetchable.length)
             return;
         const jobs = fetchable.map((m) => this.api.getReactions(m.message_id).pipe(map((rows) => ({ messageId: m.message_id, reactions: this.normalizeReactionRows(rows) })), catchError(() => of({ messageId: m.message_id, reactions: [] }))));
@@ -1839,6 +2040,55 @@ class MessagingStoreService {
         const byEmoji = new Map();
         const myContactId = String(this.auth.contactId || '');
         const contacts = this.visibleContacts$.value;
+        const parseReactors = (value) => {
+            if (Array.isArray(value))
+                return value;
+            if (value && typeof value === 'object')
+                return [value];
+            if (typeof value !== 'string' || !value.trim())
+                return [];
+            const trimmed = value.trim();
+            if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                try {
+                    const parsed = JSON.parse(trimmed);
+                    return Array.isArray(parsed) ? parsed : [parsed];
+                }
+                catch {
+                    return [trimmed];
+                }
+            }
+            return trimmed.split(',').map((x) => x.trim()).filter(Boolean);
+        };
+        const displayNameForReactor = (reactor) => {
+            if (reactor == null)
+                return '';
+            if (typeof reactor === 'string') {
+                const trimmed = reactor.trim();
+                if (!trimmed)
+                    return '';
+                if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                    const parsed = parseReactors(trimmed);
+                    return parsed.map(displayNameForReactor).filter(Boolean).join(', ');
+                }
+                return trimmed;
+            }
+            const reactorId = String(reactor?.contact_id ?? reactor?.contactId ?? reactor?.id ?? '').trim();
+            if (reactorId && reactorId === myContactId)
+                return 'You';
+            const explicitName = String(reactor?.username ??
+                reactor?.name ??
+                reactor?.display_name ??
+                reactor?.displayName ??
+                reactor?.email ??
+                '').trim();
+            if (explicitName)
+                return explicitName;
+            if (reactorId) {
+                const contact = contacts.find(c => String(c.contact_id) === reactorId);
+                return contact ? getContactDisplayName(contact) : `User ${reactorId}`;
+            }
+            return '';
+        };
         for (const row of rows || []) {
             const emoji = String(row?.emoji || '').trim();
             if (!emoji)
@@ -1846,7 +2096,15 @@ class MessagingStoreService {
             const contactId = String(row?.contact_id ?? row?.contactId ?? '');
             const explicitHasReacted = row?.hasReacted ?? row?.has_reacted;
             const hasReacted = explicitHasReacted === true || (contactId && contactId === myContactId);
-            const countFromRow = Number(row?.count ?? row?.reaction_count ?? 0);
+            const rawReactors = row?.reactors ??
+                row?.reactor_names ??
+                row?.reactorNames ??
+                row?.reacted_by ??
+                row?.reactedBy ??
+                row?.users ??
+                [];
+            const reactorRows = parseReactors(rawReactors);
+            const countFromRow = Number(row?.count ?? row?.reaction_count ?? row?.reactionCount ?? reactorRows.length ?? 0);
             const existing = byEmoji.get(emoji) || { emoji, count: 0, hasReacted: false, reactors: [] };
             // Some APIs return one row per reaction; some return pre-aggregated count.
             existing.count += countFromRow > 0 ? countFromRow : 1;
@@ -1864,6 +2122,28 @@ class MessagingStoreService {
                 if (!existing.reactors.includes(name)) {
                     existing.reactors.push(name);
                 }
+            }
+            for (const reactor of reactorRows) {
+                const reactorId = String(typeof reactor === 'object'
+                    ? reactor?.contact_id ?? reactor?.contactId ?? reactor?.id ?? ''
+                    : '').trim();
+                const name = displayNameForReactor(reactor);
+                if (reactorId && reactorId === myContactId) {
+                    existing.hasReacted = true;
+                }
+                if (name && !existing.reactors.includes(name)) {
+                    existing.reactors.push(name);
+                }
+            }
+            const directName = String(row?.reactor_name ??
+                row?.reactorName ??
+                row?.contact_name ??
+                row?.contactName ??
+                row?.username ??
+                row?.email ??
+                '').trim();
+            if (directName && !existing.reactors.includes(directName)) {
+                existing.reactors.push(contactId === myContactId ? 'You' : directName);
             }
             byEmoji.set(emoji, existing);
         }
@@ -1883,15 +2163,19 @@ class MessagingStoreService {
                 if (rIdx >= 0) {
                     const current = nextReactions[rIdx];
                     if (!current.hasReacted) {
+                        const reactors = Array.isArray(current.reactors) ? [...current.reactors] : [];
+                        if (!reactors.includes('You'))
+                            reactors.unshift('You');
                         nextReactions[rIdx] = {
                             ...current,
                             hasReacted: true,
                             count: Number(current.count || 0) + 1,
+                            reactors,
                         };
                     }
                 }
                 else {
-                    nextReactions.push({ emoji, count: 1, hasReacted: true });
+                    nextReactions.push({ emoji, count: 1, hasReacted: true, reactors: ['You'] });
                 }
             }
             else {
@@ -1906,6 +2190,9 @@ class MessagingStoreService {
                             ...current,
                             hasReacted: false,
                             count: nextCount,
+                            reactors: Array.isArray(current.reactors)
+                                ? current.reactors.filter((name) => name !== 'You')
+                                : current.reactors,
                         };
                     }
                 }
@@ -2010,23 +2297,75 @@ class InboxListComponent {
     store;
     inbox = [];
     searchQuery = '';
+    activeTab = 'all';
+    notificationVolume = 0.35;
+    notificationsMuted = false;
     contextMenu = null;
+    tabStorageKey = 'messaging_inbox_active_tab';
     sub;
     constructor(store) {
         this.store = store;
     }
     ngOnInit() {
-        this.sub = this.store.inbox.subscribe((items) => (this.inbox = items));
+        this.activeTab = this.getSavedTab();
+        this.sub = new Subscription();
+        this.sub.add(this.store.inbox.subscribe((items) => (this.inbox = items)));
+        this.sub.add(this.store.notificationVolume.subscribe((volume) => (this.notificationVolume = volume)));
+        this.sub.add(this.store.notificationsMuted.subscribe((muted) => (this.notificationsMuted = muted)));
     }
     ngOnDestroy() {
         this.sub?.unsubscribe();
     }
     get filteredInbox() {
+        if (this.activeTab === 'projects' || this.activeTab === 'settings')
+            return [];
+        const tabbed = this.inbox.filter((item) => {
+            if (this.activeTab === 'direct')
+                return !item.is_group;
+            if (this.activeTab === 'groups')
+                return item.is_group;
+            return true;
+        });
         if (!this.searchQuery.trim())
-            return this.inbox;
+            return tabbed;
         const q = this.searchQuery.toLowerCase();
-        return this.inbox.filter((item) => (item.name || '').toLowerCase().includes(q) ||
+        return tabbed.filter((item) => (item.name || '').toLowerCase().includes(q) ||
             (item.last_message_preview || '').toLowerCase().includes(q));
+    }
+    get emptyStateText() {
+        if (this.searchQuery.trim())
+            return 'No matching conversations';
+        if (this.activeTab === 'direct')
+            return 'No chats yet';
+        if (this.activeTab === 'groups')
+            return 'No groups yet';
+        return 'No conversations yet';
+    }
+    setActiveTab(tab) {
+        this.activeTab = tab;
+        localStorage.setItem(this.tabStorageKey, tab);
+        this.contextMenu = null;
+    }
+    getSavedTab() {
+        const saved = localStorage.getItem(this.tabStorageKey);
+        return saved === 'direct' || saved === 'groups' || saved === 'projects' || saved === 'settings' || saved === 'all'
+            ? saved
+            : 'all';
+    }
+    toggleNotificationsMuted() {
+        const nextMuted = !this.notificationsMuted;
+        this.store.setNotificationsMuted(nextMuted);
+        if (!nextMuted && this.notificationVolume > 0) {
+            this.store.testNotificationSound();
+        }
+    }
+    onNotificationVolumeChange(value) {
+        this.store.setNotificationVolume(Number(value));
+    }
+    previewNotificationSound() {
+        if (!this.notificationsMuted && this.notificationVolume > 0) {
+            this.store.testNotificationSound();
+        }
     }
     openConversation(item) {
         this.store.openConversation(item.conversation_id, item.name || 'Chat', item.is_group);
@@ -2086,7 +2425,7 @@ class InboxListComponent {
     static ɵfac = i0.ɵɵngDeclareFactory({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: InboxListComponent, deps: [{ token: MessagingStoreService }], target: i0.ɵɵFactoryTarget.Component });
     static ɵcmp = i0.ɵɵngDeclareComponent({ minVersion: "14.0.0", version: "17.3.12", type: InboxListComponent, isStandalone: true, selector: "app-inbox-list", ngImport: i0, template: `
     <div class="inbox-container">
-      <div class="search-bar">
+      <div *ngIf="activeTab !== 'projects' && activeTab !== 'settings'" class="search-bar">
         <mat-icon class="search-icon">search</mat-icon>
         <input
           type="text"
@@ -2122,13 +2461,104 @@ class InboxListComponent {
           </div>
         </div>
 
-        <div *ngIf="filteredInbox.length === 0" class="empty-state">
-          <mat-icon>forum</mat-icon>
-          <p>{{ searchQuery ? 'No matching conversations' : 'No conversations yet' }}</p>
-          <button *ngIf="!searchQuery" mat-stroked-button color="primary" (click)="onNewConversation()">
+        <div *ngIf="filteredInbox.length === 0 && activeTab !== 'projects' && activeTab !== 'settings'" class="empty-state">
+          <mat-icon>{{ activeTab === 'groups' ? 'group' : 'forum' }}</mat-icon>
+          <p>{{ emptyStateText }}</p>
+          <button *ngIf="!searchQuery && activeTab !== 'groups'" mat-stroked-button color="primary" (click)="onNewConversation()">
             Start a conversation
           </button>
+          <button *ngIf="!searchQuery && activeTab === 'groups'" mat-stroked-button color="primary" (click)="onCreateGroup()">
+            Create a group
+          </button>
         </div>
+
+        <div *ngIf="activeTab === 'projects'" class="empty-state projects-state">
+          <mat-icon>workspaces</mat-icon>
+          <p>Coming soon</p>
+        </div>
+
+        <div *ngIf="activeTab === 'settings'" class="settings-panel">
+          <div class="settings-card">
+            <div class="settings-header">
+              <div class="settings-icon">
+                <mat-icon>{{ notificationsMuted || notificationVolume <= 0 ? 'volume_off' : 'volume_up' }}</mat-icon>
+              </div>
+              <div>
+                <h4>Notification Sound</h4>
+                <p>Control message alerts for this browser.</p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              mat-stroked-button
+              class="settings-toggle"
+              (click)="toggleNotificationsMuted()"
+            >
+              <mat-icon>{{ notificationsMuted ? 'volume_up' : 'volume_off' }}</mat-icon>
+              {{ notificationsMuted ? 'Unmute notifications' : 'Mute notifications' }}
+            </button>
+
+            <label class="volume-label" for="messaging-volume-slider">
+              Volume
+              <span>{{ (notificationVolume * 100) | number:'1.0-0' }}%</span>
+            </label>
+            <input
+              id="messaging-volume-slider"
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              class="settings-volume"
+              [(ngModel)]="notificationVolume"
+              (ngModelChange)="onNotificationVolumeChange($event)"
+              (change)="previewNotificationSound()"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div class="inbox-tabs" role="tablist" aria-label="Conversation filters">
+        <button
+          type="button"
+          class="inbox-tab"
+          [class.active]="activeTab === 'all'"
+          (click)="setActiveTab('all')"
+        >
+          All
+        </button>
+        <button
+          type="button"
+          class="inbox-tab"
+          [class.active]="activeTab === 'direct'"
+          (click)="setActiveTab('direct')"
+        >
+          Chats
+        </button>
+        <button
+          type="button"
+          class="inbox-tab"
+          [class.active]="activeTab === 'groups'"
+          (click)="setActiveTab('groups')"
+        >
+          Groups
+        </button>
+        <button
+          type="button"
+          class="inbox-tab"
+          [class.active]="activeTab === 'projects'"
+          (click)="setActiveTab('projects')"
+        >
+          Projects
+        </button>
+        <button
+          type="button"
+          class="inbox-tab"
+          [class.active]="activeTab === 'settings'"
+          (click)="setActiveTab('settings')"
+        >
+          Settings
+        </button>
       </div>
 
       <!-- Context Menu -->
@@ -2143,19 +2573,19 @@ class InboxListComponent {
           <span>Clear conversation</span>
         </div>
         <div class="ctx-item ctx-danger" (click)="deleteChat()">
-          <mat-icon>delete</mat-icon>
-          <span>{{ contextMenu.item.is_group ? 'Delete group' : 'Delete conversation' }}</span>
+          <mat-icon>{{ contextMenu.item.is_group ? 'logout' : 'delete' }}</mat-icon>
+          <span>{{ contextMenu.item.is_group ? 'Exit group' : 'Delete conversation' }}</span>
         </div>
       </div>
       <div *ngIf="contextMenu" class="ctx-backdrop" (click)="closeContextMenu()"></div>
     </div>
-  `, isInline: true, styles: [".inbox-container{display:flex;flex-direction:column;height:100%;background:transparent}.search-bar{display:flex;align-items:center;margin:8px 16px;padding:8px 12px;background:transparent;border-radius:10px}.search-icon{color:#ffffffb3;font-size:18px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#fff9}.conversation-list{flex:1;overflow-y:auto}.conversation-item{display:flex;align-items:center;padding:12px 16px;cursor:pointer;transition:background .15s;gap:12px}.conversation-item:hover{background:#ffffff1a}.conversation-item.has-unread{background:#ffffff26}.avatar{width:48px;height:48px;border-radius:50%;background:#0d2540;display:flex;align-items:center;justify-content:center;flex-shrink:0}.avatar mat-icon{color:#ffffffb3;font-size:24px}.group-avatar{background:#0a1f38}.group-avatar mat-icon{color:#ffffffb3}.conversation-info{flex:1;min-width:0}.info-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px}.conv-name{font-weight:600;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}.conv-time{font-size:11px;color:#ffffffb3;flex-shrink:0;margin-left:8px}.info-bottom{display:flex;justify-content:space-between;align-items:center}.conv-preview{font-size:13px;color:#ffffffb3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}.has-unread .conv-name{color:#fff}.has-unread .conv-preview{color:#ffffffe6;font-weight:500}.unread-badge{background:#1a5fa8;color:#fff;border-radius:10px;min-width:20px;height:20px;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;padding:0 6px;flex-shrink:0}.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;color:#9ca3af}.empty-state mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:12px}.empty-state p{margin:0 0 16px;font-size:14px}.context-menu{position:fixed;z-index:10001;background:#071d30;border-radius:8px;padding:4px 0;box-shadow:0 8px 24px #0000004d;min-width:200px}.ctx-item{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;color:#ffffffe6;font-size:13px;transition:background .15s}.ctx-item:hover{background:#ffffff1a}.ctx-item mat-icon{font-size:18px;width:18px;height:18px}.ctx-danger{color:#f87171}.ctx-danger:hover{background:#f8717126}.ctx-backdrop{position:fixed;inset:0;z-index:10000}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6$1.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }] });
+  `, isInline: true, styles: [".inbox-container{display:flex;flex-direction:column;height:100%;background:transparent;container-type:inline-size}.search-bar{display:flex;align-items:center;margin:8px 16px;padding:8px 12px;background:transparent;border-radius:10px}.search-icon{color:#ffffffb3;font-size:18px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#fff9}.inbox-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;padding:10px 16px 12px;border-top:1px solid rgba(255,255,255,.1);flex-shrink:0}.inbox-tab{min-width:0;border:1px solid rgba(255,255,255,.14);background:#ffffff0f;color:#ffffffb8;border-radius:999px;padding:7px 4px;font-size:clamp(9px,3.1cqw,11px);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;text-align:center;transition:background .15s,border-color .15s,color .15s}.inbox-tab:hover{background:#ffffff1f;color:#fff}.inbox-tab.active{background:#1a5fa859;border-color:#7fb4ff73;color:#fff}@container (max-width: 330px){.inbox-tabs{gap:3px;padding:8px 8px 10px}.inbox-tab{padding:6px 2px;letter-spacing:-.2px}}@container (max-width: 280px){.inbox-tabs{gap:2px;padding-left:6px;padding-right:6px}.inbox-tab{font-size:8.5px}}.conversation-list{flex:1;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}.conversation-list::-webkit-scrollbar{display:none}.conversation-item{display:flex;align-items:center;padding:12px 16px;cursor:pointer;transition:background .15s;gap:12px}.conversation-item:hover{background:#ffffff1a}.conversation-item.has-unread{background:#ffffff26}.avatar{width:48px;height:48px;border-radius:50%;background:#0d2540;display:flex;align-items:center;justify-content:center;flex-shrink:0}.avatar mat-icon{color:#ffffffb3;font-size:24px}.group-avatar{background:#0a1f38}.group-avatar mat-icon{color:#ffffffb3}.conversation-info{flex:1;min-width:0}.info-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px}.conv-name{font-weight:600;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}.conv-time{font-size:11px;color:#ffffffb3;flex-shrink:0;margin-left:8px}.info-bottom{display:flex;justify-content:space-between;align-items:center}.conv-preview{font-size:13px;color:#ffffffb3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}.has-unread .conv-name{color:#fff}.has-unread .conv-preview{color:#ffffffe6;font-weight:500}.unread-badge{background:#1a5fa8;color:#fff;border-radius:10px;min-width:20px;height:20px;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;padding:0 6px;flex-shrink:0}.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;color:#9ca3af}.empty-state mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:12px}.empty-state p{margin:0 0 16px;font-size:14px}.projects-state p{margin-bottom:0}.settings-panel{padding:16px;color:#fff}.settings-card{border-radius:14px;background:#ffffff12;border:1px solid rgba(255,255,255,.12);padding:16px;box-shadow:0 10px 28px #0000002e}.settings-header{display:flex;gap:12px;align-items:flex-start;margin-bottom:16px}.settings-icon{width:36px;height:36px;border-radius:10px;background:#1a5fa859;display:flex;align-items:center;justify-content:center;flex-shrink:0}.settings-icon mat-icon{color:#bfdbfe}.settings-header h4{margin:0 0 4px;font-size:15px;font-weight:700}.settings-header p{margin:0;color:#ffffffa6;font-size:12px;line-height:1.4}.settings-toggle{width:100%;justify-content:center;border-radius:10px;color:#fff!important;border-color:#fff3!important;margin-bottom:16px}.settings-toggle mat-icon{margin-right:8px;font-size:18px;width:18px;height:18px}.volume-label{display:flex;justify-content:space-between;align-items:center;color:#ffffffc7;font-size:12px;font-weight:600;margin-bottom:8px}.settings-volume{width:100%;accent-color:#7fb4ff;cursor:pointer}.context-menu{position:fixed;z-index:10001;background:#071d30;border-radius:8px;padding:4px 0;box-shadow:0 8px 24px #0000004d;min-width:200px}.ctx-item{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;color:#ffffffe6;font-size:13px;transition:background .15s}.ctx-item:hover{background:#ffffff1a}.ctx-item mat-icon{font-size:18px;width:18px;height:18px}.ctx-danger{color:#f87171}.ctx-danger:hover{background:#f8717126}.ctx-backdrop{position:fixed;inset:0;z-index:10000}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "pipe", type: i1$1.DecimalPipe, name: "number" }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.RangeValueAccessor, selector: "input[type=range][formControlName],input[type=range][formControl],input[type=range][ngModel]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6$1.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: InboxListComponent, decorators: [{
             type: Component,
             args: [{ selector: 'app-inbox-list', standalone: true, imports: [CommonModule, FormsModule, MatIconModule, MatButtonModule, MatRippleModule, MatTooltipModule], template: `
     <div class="inbox-container">
-      <div class="search-bar">
+      <div *ngIf="activeTab !== 'projects' && activeTab !== 'settings'" class="search-bar">
         <mat-icon class="search-icon">search</mat-icon>
         <input
           type="text"
@@ -2191,13 +2621,104 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
           </div>
         </div>
 
-        <div *ngIf="filteredInbox.length === 0" class="empty-state">
-          <mat-icon>forum</mat-icon>
-          <p>{{ searchQuery ? 'No matching conversations' : 'No conversations yet' }}</p>
-          <button *ngIf="!searchQuery" mat-stroked-button color="primary" (click)="onNewConversation()">
+        <div *ngIf="filteredInbox.length === 0 && activeTab !== 'projects' && activeTab !== 'settings'" class="empty-state">
+          <mat-icon>{{ activeTab === 'groups' ? 'group' : 'forum' }}</mat-icon>
+          <p>{{ emptyStateText }}</p>
+          <button *ngIf="!searchQuery && activeTab !== 'groups'" mat-stroked-button color="primary" (click)="onNewConversation()">
             Start a conversation
           </button>
+          <button *ngIf="!searchQuery && activeTab === 'groups'" mat-stroked-button color="primary" (click)="onCreateGroup()">
+            Create a group
+          </button>
         </div>
+
+        <div *ngIf="activeTab === 'projects'" class="empty-state projects-state">
+          <mat-icon>workspaces</mat-icon>
+          <p>Coming soon</p>
+        </div>
+
+        <div *ngIf="activeTab === 'settings'" class="settings-panel">
+          <div class="settings-card">
+            <div class="settings-header">
+              <div class="settings-icon">
+                <mat-icon>{{ notificationsMuted || notificationVolume <= 0 ? 'volume_off' : 'volume_up' }}</mat-icon>
+              </div>
+              <div>
+                <h4>Notification Sound</h4>
+                <p>Control message alerts for this browser.</p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              mat-stroked-button
+              class="settings-toggle"
+              (click)="toggleNotificationsMuted()"
+            >
+              <mat-icon>{{ notificationsMuted ? 'volume_up' : 'volume_off' }}</mat-icon>
+              {{ notificationsMuted ? 'Unmute notifications' : 'Mute notifications' }}
+            </button>
+
+            <label class="volume-label" for="messaging-volume-slider">
+              Volume
+              <span>{{ (notificationVolume * 100) | number:'1.0-0' }}%</span>
+            </label>
+            <input
+              id="messaging-volume-slider"
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              class="settings-volume"
+              [(ngModel)]="notificationVolume"
+              (ngModelChange)="onNotificationVolumeChange($event)"
+              (change)="previewNotificationSound()"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div class="inbox-tabs" role="tablist" aria-label="Conversation filters">
+        <button
+          type="button"
+          class="inbox-tab"
+          [class.active]="activeTab === 'all'"
+          (click)="setActiveTab('all')"
+        >
+          All
+        </button>
+        <button
+          type="button"
+          class="inbox-tab"
+          [class.active]="activeTab === 'direct'"
+          (click)="setActiveTab('direct')"
+        >
+          Chats
+        </button>
+        <button
+          type="button"
+          class="inbox-tab"
+          [class.active]="activeTab === 'groups'"
+          (click)="setActiveTab('groups')"
+        >
+          Groups
+        </button>
+        <button
+          type="button"
+          class="inbox-tab"
+          [class.active]="activeTab === 'projects'"
+          (click)="setActiveTab('projects')"
+        >
+          Projects
+        </button>
+        <button
+          type="button"
+          class="inbox-tab"
+          [class.active]="activeTab === 'settings'"
+          (click)="setActiveTab('settings')"
+        >
+          Settings
+        </button>
       </div>
 
       <!-- Context Menu -->
@@ -2212,21 +2733,52 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
           <span>Clear conversation</span>
         </div>
         <div class="ctx-item ctx-danger" (click)="deleteChat()">
-          <mat-icon>delete</mat-icon>
-          <span>{{ contextMenu.item.is_group ? 'Delete group' : 'Delete conversation' }}</span>
+          <mat-icon>{{ contextMenu.item.is_group ? 'logout' : 'delete' }}</mat-icon>
+          <span>{{ contextMenu.item.is_group ? 'Exit group' : 'Delete conversation' }}</span>
         </div>
       </div>
       <div *ngIf="contextMenu" class="ctx-backdrop" (click)="closeContextMenu()"></div>
     </div>
-  `, styles: [".inbox-container{display:flex;flex-direction:column;height:100%;background:transparent}.search-bar{display:flex;align-items:center;margin:8px 16px;padding:8px 12px;background:transparent;border-radius:10px}.search-icon{color:#ffffffb3;font-size:18px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#fff9}.conversation-list{flex:1;overflow-y:auto}.conversation-item{display:flex;align-items:center;padding:12px 16px;cursor:pointer;transition:background .15s;gap:12px}.conversation-item:hover{background:#ffffff1a}.conversation-item.has-unread{background:#ffffff26}.avatar{width:48px;height:48px;border-radius:50%;background:#0d2540;display:flex;align-items:center;justify-content:center;flex-shrink:0}.avatar mat-icon{color:#ffffffb3;font-size:24px}.group-avatar{background:#0a1f38}.group-avatar mat-icon{color:#ffffffb3}.conversation-info{flex:1;min-width:0}.info-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px}.conv-name{font-weight:600;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}.conv-time{font-size:11px;color:#ffffffb3;flex-shrink:0;margin-left:8px}.info-bottom{display:flex;justify-content:space-between;align-items:center}.conv-preview{font-size:13px;color:#ffffffb3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}.has-unread .conv-name{color:#fff}.has-unread .conv-preview{color:#ffffffe6;font-weight:500}.unread-badge{background:#1a5fa8;color:#fff;border-radius:10px;min-width:20px;height:20px;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;padding:0 6px;flex-shrink:0}.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;color:#9ca3af}.empty-state mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:12px}.empty-state p{margin:0 0 16px;font-size:14px}.context-menu{position:fixed;z-index:10001;background:#071d30;border-radius:8px;padding:4px 0;box-shadow:0 8px 24px #0000004d;min-width:200px}.ctx-item{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;color:#ffffffe6;font-size:13px;transition:background .15s}.ctx-item:hover{background:#ffffff1a}.ctx-item mat-icon{font-size:18px;width:18px;height:18px}.ctx-danger{color:#f87171}.ctx-danger:hover{background:#f8717126}.ctx-backdrop{position:fixed;inset:0;z-index:10000}\n"] }]
+  `, styles: [".inbox-container{display:flex;flex-direction:column;height:100%;background:transparent;container-type:inline-size}.search-bar{display:flex;align-items:center;margin:8px 16px;padding:8px 12px;background:transparent;border-radius:10px}.search-icon{color:#ffffffb3;font-size:18px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#fff9}.inbox-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;padding:10px 16px 12px;border-top:1px solid rgba(255,255,255,.1);flex-shrink:0}.inbox-tab{min-width:0;border:1px solid rgba(255,255,255,.14);background:#ffffff0f;color:#ffffffb8;border-radius:999px;padding:7px 4px;font-size:clamp(9px,3.1cqw,11px);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;text-align:center;transition:background .15s,border-color .15s,color .15s}.inbox-tab:hover{background:#ffffff1f;color:#fff}.inbox-tab.active{background:#1a5fa859;border-color:#7fb4ff73;color:#fff}@container (max-width: 330px){.inbox-tabs{gap:3px;padding:8px 8px 10px}.inbox-tab{padding:6px 2px;letter-spacing:-.2px}}@container (max-width: 280px){.inbox-tabs{gap:2px;padding-left:6px;padding-right:6px}.inbox-tab{font-size:8.5px}}.conversation-list{flex:1;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}.conversation-list::-webkit-scrollbar{display:none}.conversation-item{display:flex;align-items:center;padding:12px 16px;cursor:pointer;transition:background .15s;gap:12px}.conversation-item:hover{background:#ffffff1a}.conversation-item.has-unread{background:#ffffff26}.avatar{width:48px;height:48px;border-radius:50%;background:#0d2540;display:flex;align-items:center;justify-content:center;flex-shrink:0}.avatar mat-icon{color:#ffffffb3;font-size:24px}.group-avatar{background:#0a1f38}.group-avatar mat-icon{color:#ffffffb3}.conversation-info{flex:1;min-width:0}.info-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px}.conv-name{font-weight:600;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}.conv-time{font-size:11px;color:#ffffffb3;flex-shrink:0;margin-left:8px}.info-bottom{display:flex;justify-content:space-between;align-items:center}.conv-preview{font-size:13px;color:#ffffffb3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}.has-unread .conv-name{color:#fff}.has-unread .conv-preview{color:#ffffffe6;font-weight:500}.unread-badge{background:#1a5fa8;color:#fff;border-radius:10px;min-width:20px;height:20px;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;padding:0 6px;flex-shrink:0}.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;color:#9ca3af}.empty-state mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:12px}.empty-state p{margin:0 0 16px;font-size:14px}.projects-state p{margin-bottom:0}.settings-panel{padding:16px;color:#fff}.settings-card{border-radius:14px;background:#ffffff12;border:1px solid rgba(255,255,255,.12);padding:16px;box-shadow:0 10px 28px #0000002e}.settings-header{display:flex;gap:12px;align-items:flex-start;margin-bottom:16px}.settings-icon{width:36px;height:36px;border-radius:10px;background:#1a5fa859;display:flex;align-items:center;justify-content:center;flex-shrink:0}.settings-icon mat-icon{color:#bfdbfe}.settings-header h4{margin:0 0 4px;font-size:15px;font-weight:700}.settings-header p{margin:0;color:#ffffffa6;font-size:12px;line-height:1.4}.settings-toggle{width:100%;justify-content:center;border-radius:10px;color:#fff!important;border-color:#fff3!important;margin-bottom:16px}.settings-toggle mat-icon{margin-right:8px;font-size:18px;width:18px;height:18px}.volume-label{display:flex;justify-content:space-between;align-items:center;color:#ffffffc7;font-size:12px;font-weight:600;margin-bottom:8px}.settings-volume{width:100%;accent-color:#7fb4ff;cursor:pointer}.context-menu{position:fixed;z-index:10001;background:#071d30;border-radius:8px;padding:4px 0;box-shadow:0 8px 24px #0000004d;min-width:200px}.ctx-item{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;color:#ffffffe6;font-size:13px;transition:background .15s}.ctx-item:hover{background:#ffffff1a}.ctx-item mat-icon{font-size:18px;width:18px;height:18px}.ctx-danger{color:#f87171}.ctx-danger:hover{background:#f8717126}.ctx-backdrop{position:fixed;inset:0;z-index:10000}\n"] }]
         }], ctorParameters: () => [{ type: MessagingStoreService }] });
 
 class MessageInputComponent {
+    conversationId = null;
     messageSent = new EventEmitter();
     messageWithFiles = new EventEmitter();
     fileInput;
+    messageTextarea;
     messageText = '';
     selectedFiles = [];
+    textareaHeight = 36;
+    draftPrefix = 'messaging_draft_';
+    lastConversationId = null;
+    resizing = false;
+    resizeStartY = 0;
+    resizeStartHeight = 0;
+    minTextareaHeight = 36;
+    maxTextareaHeight = 180;
+    boundResizeMove = this.onResizeMove.bind(this);
+    boundResizeEnd = this.onResizeEnd.bind(this);
+    ngOnChanges(changes) {
+        if (!changes['conversationId'])
+            return;
+        if (this.lastConversationId && this.lastConversationId !== this.conversationId) {
+            this.persistDraft(this.lastConversationId, this.messageText);
+        }
+        this.lastConversationId = this.conversationId;
+        this.messageText = this.loadDraft(this.conversationId);
+        this.queueAutoResize();
+    }
+    ngAfterViewInit() {
+        this.queueAutoResize();
+    }
+    ngOnDestroy() {
+        document.removeEventListener('mousemove', this.boundResizeMove);
+        document.removeEventListener('mouseup', this.boundResizeEnd);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+    }
     get canSend() {
         return this.messageText.trim().length > 0 || this.selectedFiles.length > 0;
     }
@@ -2242,8 +2794,116 @@ class MessageInputComponent {
         }
         this.messageText = '';
         this.selectedFiles = [];
+        this.clearDraft(this.conversationId);
         if (this.fileInput)
             this.fileInput.nativeElement.value = '';
+        this.queueAutoResize();
+    }
+    onTextChange(value) {
+        this.messageText = value;
+        this.persistDraft(this.conversationId, value);
+        this.queueAutoResize();
+    }
+    onPaste(event) {
+        const html = event.clipboardData?.getData('text/html') || '';
+        if (!html || !/<table[\s>]/i.test(html))
+            return;
+        const tableText = this.htmlTableToText(html);
+        if (!tableText)
+            return;
+        event.preventDefault();
+        this.insertTextAtCursor(tableText);
+    }
+    autoResize() {
+        const el = this.messageTextarea?.nativeElement;
+        if (!el)
+            return;
+        const nextHeight = Math.min(Math.max(el.scrollHeight, this.minTextareaHeight), Math.max(this.textareaHeight, this.minTextareaHeight));
+        this.textareaHeight = Math.min(nextHeight, this.maxTextareaHeight);
+    }
+    onResizeStart(event) {
+        event.preventDefault();
+        this.resizing = true;
+        this.resizeStartY = event.clientY;
+        this.resizeStartHeight = this.textareaHeight;
+        document.body.style.cursor = 'ns-resize';
+        document.body.style.userSelect = 'none';
+        document.addEventListener('mousemove', this.boundResizeMove);
+        document.addEventListener('mouseup', this.boundResizeEnd);
+    }
+    onResizeMove(event) {
+        if (!this.resizing)
+            return;
+        const dy = this.resizeStartY - event.clientY;
+        this.textareaHeight = Math.max(this.minTextareaHeight, Math.min(this.maxTextareaHeight, this.resizeStartHeight + dy));
+    }
+    onResizeEnd() {
+        if (!this.resizing)
+            return;
+        this.resizing = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', this.boundResizeMove);
+        document.removeEventListener('mouseup', this.boundResizeEnd);
+    }
+    queueAutoResize() {
+        setTimeout(() => this.autoResize());
+    }
+    draftKey(conversationId) {
+        return `${this.draftPrefix}${conversationId}`;
+    }
+    loadDraft(conversationId) {
+        if (!conversationId)
+            return '';
+        return localStorage.getItem(this.draftKey(conversationId)) || '';
+    }
+    persistDraft(conversationId, value) {
+        if (!conversationId)
+            return;
+        const key = this.draftKey(conversationId);
+        if (value.trim()) {
+            localStorage.setItem(key, value);
+        }
+        else {
+            localStorage.removeItem(key);
+        }
+    }
+    clearDraft(conversationId) {
+        if (!conversationId)
+            return;
+        localStorage.removeItem(this.draftKey(conversationId));
+    }
+    htmlTableToText(html) {
+        try {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const table = doc.querySelector('table');
+            if (!table)
+                return '';
+            const rows = Array.from(table.querySelectorAll('tr'));
+            return rows
+                .map((row) => Array.from(row.querySelectorAll('th,td'))
+                .map((cell) => (cell.textContent || '').replace(/\s+/g, ' ').trim())
+                .join('\t'))
+                .filter(Boolean)
+                .join('\n');
+        }
+        catch {
+            return '';
+        }
+    }
+    insertTextAtCursor(text) {
+        const textarea = this.messageTextarea?.nativeElement;
+        if (!textarea) {
+            this.onTextChange(`${this.messageText}${text}`);
+            return;
+        }
+        const start = textarea.selectionStart ?? this.messageText.length;
+        const end = textarea.selectionEnd ?? this.messageText.length;
+        const next = `${this.messageText.slice(0, start)}${text}${this.messageText.slice(end)}`;
+        this.onTextChange(next);
+        setTimeout(() => {
+            textarea.selectionStart = textarea.selectionEnd = start + text.length;
+        });
     }
     onEnter(event) {
         const ke = event;
@@ -2291,10 +2951,18 @@ class MessageInputComponent {
         return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     }
     static ɵfac = i0.ɵɵngDeclareFactory({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: MessageInputComponent, deps: [], target: i0.ɵɵFactoryTarget.Component });
-    static ɵcmp = i0.ɵɵngDeclareComponent({ minVersion: "14.0.0", version: "17.3.12", type: MessageInputComponent, isStandalone: true, selector: "app-message-input", outputs: { messageSent: "messageSent", messageWithFiles: "messageWithFiles" }, viewQueries: [{ propertyName: "fileInput", first: true, predicate: ["fileInput"], descendants: true }], ngImport: i0, template: `
+    static ɵcmp = i0.ɵɵngDeclareComponent({ minVersion: "14.0.0", version: "17.3.12", type: MessageInputComponent, isStandalone: true, selector: "app-message-input", inputs: { conversationId: "conversationId" }, outputs: { messageSent: "messageSent", messageWithFiles: "messageWithFiles" }, viewQueries: [{ propertyName: "fileInput", first: true, predicate: ["fileInput"], descendants: true }, { propertyName: "messageTextarea", first: true, predicate: ["messageTextarea"], descendants: true }], usesOnChanges: true, ngImport: i0, template: `
     <div
       class="message-input-container"
     >
+      <div
+        class="input-resize-handle"
+        title="Drag up to expand message box"
+        (mousedown)="onResizeStart($event)"
+      >
+        <span></span>
+      </div>
+
       <!-- File previews -->
       <div *ngIf="selectedFiles.length > 0" class="file-previews">
         <div *ngFor="let file of selectedFiles; let i = index" class="file-chip">
@@ -2319,11 +2987,16 @@ class MessageInputComponent {
           (change)="onFilesSelected($event)"
         />
         <textarea
-          [(ngModel)]="messageText"
+          #messageTextarea
+          [ngModel]="messageText"
+          (ngModelChange)="onTextChange($event)"
+          (input)="autoResize()"
+          (paste)="onPaste($event)"
           (keydown.enter)="onEnter($event)"
           placeholder="Type a message..."
           rows="1"
           class="message-textarea"
+          [style.height.px]="textareaHeight"
         ></textarea>
         <button
           mat-icon-button
@@ -2336,7 +3009,7 @@ class MessageInputComponent {
       </div>
 
     </div>
-  `, isInline: true, styles: [".message-input-container{padding:8px 12px;border-top:1px solid rgba(255,255,255,.15);background:transparent;position:relative}.file-previews{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:80px;overflow-y:auto}.file-chip{display:flex;align-items:center;gap:4px;background:#ffffff26;border-radius:8px;padding:4px 4px 4px 8px;max-width:200px}.file-icon{font-size:16px;width:16px;height:16px;color:#fffc}.file-name{font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px}.file-size{font-size:10px;color:#ffffff80;flex-shrink:0}.file-remove{width:20px!important;height:20px!important}.file-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fff9}.input-wrapper{display:flex;align-items:center;gap:4px;background:#ffffff1a;border-radius:24px;padding:2px 4px}.attach-btn,.send-btn{flex-shrink:0;width:36px;height:36px;padding:0!important;margin:0;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:0!important}.attach-btn mat-icon,.send-btn mat-icon{color:#ffffffb3;font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}.send-btn mat-icon{color:#ffffffe6}.message-textarea{flex:1;border:none;outline:none;background:transparent;resize:none;font-size:14px;font-family:inherit;line-height:1.5;max-height:100px;padding:6px 0;color:#fff}.message-textarea::placeholder{color:#ffffff80}.send-btn:disabled mat-icon{color:#ffffff4d}:host ::ng-deep .attach-btn .mat-mdc-button-touch-target,:host ::ng-deep .send-btn .mat-mdc-button-touch-target{height:36px!important;width:36px!important}:host ::ng-deep .attach-btn .mdc-icon-button__icon,:host ::ng-deep .send-btn .mdc-icon-button__icon{display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }] });
+  `, isInline: true, styles: [".message-input-container{padding:8px 12px;border-top:1px solid rgba(255,255,255,.15);background:transparent;position:relative}.input-resize-handle{position:absolute;top:-5px;left:0;right:0;height:10px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;z-index:2}.input-resize-handle span{width:42px;height:3px;border-radius:999px;background:#ffffff38;transition:background .15s,width .15s}.input-resize-handle:hover span{width:56px;background:#ffffff6b}.file-previews{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:80px;overflow-y:auto}.file-chip{display:flex;align-items:center;gap:4px;background:#ffffff26;border-radius:8px;padding:4px 4px 4px 8px;max-width:200px}.file-icon{font-size:16px;width:16px;height:16px;color:#fffc}.file-name{font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px}.file-size{font-size:10px;color:#ffffff80;flex-shrink:0}.file-remove{width:20px!important;height:20px!important}.file-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fff9}.input-wrapper{display:flex;align-items:flex-end;gap:4px;background:#ffffff1a;border-radius:24px;padding:2px 4px}.attach-btn,.send-btn{flex-shrink:0;width:36px;height:36px;padding:0!important;margin:0;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:0!important}.attach-btn mat-icon,.send-btn mat-icon{color:#ffffffb3;font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}.send-btn mat-icon{color:#ffffffe6}.message-textarea{flex:1;border:none;outline:none;background:transparent;resize:none;font-size:14px;font-family:inherit;line-height:1.5;min-height:24px;max-height:180px;padding:7px 0;color:#fff;overflow-y:auto;box-sizing:border-box}.message-textarea::placeholder{color:#ffffff80}.send-btn:disabled mat-icon{color:#ffffff4d}:host ::ng-deep .attach-btn .mat-mdc-button-touch-target,:host ::ng-deep .send-btn .mat-mdc-button-touch-target{height:36px!important;width:36px!important}:host ::ng-deep .attach-btn .mdc-icon-button__icon,:host ::ng-deep .send-btn .mdc-icon-button__icon{display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: MessageInputComponent, decorators: [{
             type: Component,
@@ -2344,6 +3017,14 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
     <div
       class="message-input-container"
     >
+      <div
+        class="input-resize-handle"
+        title="Drag up to expand message box"
+        (mousedown)="onResizeStart($event)"
+      >
+        <span></span>
+      </div>
+
       <!-- File previews -->
       <div *ngIf="selectedFiles.length > 0" class="file-previews">
         <div *ngFor="let file of selectedFiles; let i = index" class="file-chip">
@@ -2368,11 +3049,16 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
           (change)="onFilesSelected($event)"
         />
         <textarea
-          [(ngModel)]="messageText"
+          #messageTextarea
+          [ngModel]="messageText"
+          (ngModelChange)="onTextChange($event)"
+          (input)="autoResize()"
+          (paste)="onPaste($event)"
           (keydown.enter)="onEnter($event)"
           placeholder="Type a message..."
           rows="1"
           class="message-textarea"
+          [style.height.px]="textareaHeight"
         ></textarea>
         <button
           mat-icon-button
@@ -2385,14 +3071,19 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
       </div>
 
     </div>
-  `, styles: [".message-input-container{padding:8px 12px;border-top:1px solid rgba(255,255,255,.15);background:transparent;position:relative}.file-previews{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:80px;overflow-y:auto}.file-chip{display:flex;align-items:center;gap:4px;background:#ffffff26;border-radius:8px;padding:4px 4px 4px 8px;max-width:200px}.file-icon{font-size:16px;width:16px;height:16px;color:#fffc}.file-name{font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px}.file-size{font-size:10px;color:#ffffff80;flex-shrink:0}.file-remove{width:20px!important;height:20px!important}.file-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fff9}.input-wrapper{display:flex;align-items:center;gap:4px;background:#ffffff1a;border-radius:24px;padding:2px 4px}.attach-btn,.send-btn{flex-shrink:0;width:36px;height:36px;padding:0!important;margin:0;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:0!important}.attach-btn mat-icon,.send-btn mat-icon{color:#ffffffb3;font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}.send-btn mat-icon{color:#ffffffe6}.message-textarea{flex:1;border:none;outline:none;background:transparent;resize:none;font-size:14px;font-family:inherit;line-height:1.5;max-height:100px;padding:6px 0;color:#fff}.message-textarea::placeholder{color:#ffffff80}.send-btn:disabled mat-icon{color:#ffffff4d}:host ::ng-deep .attach-btn .mat-mdc-button-touch-target,:host ::ng-deep .send-btn .mat-mdc-button-touch-target{height:36px!important;width:36px!important}:host ::ng-deep .attach-btn .mdc-icon-button__icon,:host ::ng-deep .send-btn .mdc-icon-button__icon{display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important}\n"] }]
-        }], propDecorators: { messageSent: [{
+  `, styles: [".message-input-container{padding:8px 12px;border-top:1px solid rgba(255,255,255,.15);background:transparent;position:relative}.input-resize-handle{position:absolute;top:-5px;left:0;right:0;height:10px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;z-index:2}.input-resize-handle span{width:42px;height:3px;border-radius:999px;background:#ffffff38;transition:background .15s,width .15s}.input-resize-handle:hover span{width:56px;background:#ffffff6b}.file-previews{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:80px;overflow-y:auto}.file-chip{display:flex;align-items:center;gap:4px;background:#ffffff26;border-radius:8px;padding:4px 4px 4px 8px;max-width:200px}.file-icon{font-size:16px;width:16px;height:16px;color:#fffc}.file-name{font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px}.file-size{font-size:10px;color:#ffffff80;flex-shrink:0}.file-remove{width:20px!important;height:20px!important}.file-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fff9}.input-wrapper{display:flex;align-items:flex-end;gap:4px;background:#ffffff1a;border-radius:24px;padding:2px 4px}.attach-btn,.send-btn{flex-shrink:0;width:36px;height:36px;padding:0!important;margin:0;min-width:36px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:0!important}.attach-btn mat-icon,.send-btn mat-icon{color:#ffffffb3;font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}.send-btn mat-icon{color:#ffffffe6}.message-textarea{flex:1;border:none;outline:none;background:transparent;resize:none;font-size:14px;font-family:inherit;line-height:1.5;min-height:24px;max-height:180px;padding:7px 0;color:#fff;overflow-y:auto;box-sizing:border-box}.message-textarea::placeholder{color:#ffffff80}.send-btn:disabled mat-icon{color:#ffffff4d}:host ::ng-deep .attach-btn .mat-mdc-button-touch-target,:host ::ng-deep .send-btn .mat-mdc-button-touch-target{height:36px!important;width:36px!important}:host ::ng-deep .attach-btn .mdc-icon-button__icon,:host ::ng-deep .send-btn .mdc-icon-button__icon{display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important}\n"] }]
+        }], propDecorators: { conversationId: [{
+                type: Input
+            }], messageSent: [{
                 type: Output
             }], messageWithFiles: [{
                 type: Output
             }], fileInput: [{
                 type: ViewChild,
                 args: ['fileInput']
+            }], messageTextarea: [{
+                type: ViewChild,
+                args: ['messageTextarea']
             }] } });
 
 class ChatThreadComponent {
@@ -2407,6 +3098,7 @@ class ChatThreadComponent {
     visibleContacts = [];
     conversationName = '';
     isGroup = false;
+    isRemovedFromGroup = false;
     loading = false;
     myContactId = null;
     conversationId = null;
@@ -2441,7 +3133,8 @@ class ChatThreadComponent {
             this.store.openChats,
             this.store.visibleContacts,
             this.store.loadingMessages,
-        ]).subscribe(([convId, msgMap, chats, contacts, loading]) => {
+            this.store.removedGroupIds,
+        ]).subscribe(([convId, msgMap, chats, contacts, loading, removedGroupIds]) => {
             this.loading = loading;
             this.visibleContacts = contacts || [];
             if (convId && convId !== this.conversationId) {
@@ -2461,6 +3154,7 @@ class ChatThreadComponent {
                 // Pre-warm media cache for any image/file messages visible
                 this.prewarmMedia(this.messages);
             }
+            this.isRemovedFromGroup = !!this.conversationId && removedGroupIds.has(String(this.conversationId));
         });
     }
     ngAfterViewChecked() {
@@ -2488,15 +3182,21 @@ class ChatThreadComponent {
         }
     }
     onGroupSettings() {
+        if (this.isRemovedFromGroup)
+            return;
         if (this.conversationId) {
             this.store.openGroupSettings(this.conversationId, this.conversationName);
         }
     }
     onSendMessage(content) {
+        if (this.isRemovedFromGroup)
+            return;
         this.store.sendMessage(this.conversationId, content);
         this.shouldScrollToBottom = true;
     }
     onSendWithFiles(payload) {
+        if (this.isRemovedFromGroup)
+            return;
         if (!this.conversationId || !this.auth.contactId)
             return;
         this.uploading = true;
@@ -2536,7 +3236,7 @@ class ChatThreadComponent {
                             content: payload.text || filenames.join(', '),
                             media_url: firstId,
                             created_at: new Date().toISOString(),
-                            is_read: true,
+                            is_read: false,
                             attachments: fileIds.map((id, idx) => ({
                                 file_id: id,
                                 filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
@@ -2565,6 +3265,8 @@ class ChatThreadComponent {
     }
     onScroll() { }
     onThreadDragEnter(event) {
+        if (this.isRemovedFromGroup)
+            return;
         if (!this.dragHasFiles(event))
             return;
         event.preventDefault();
@@ -2573,6 +3275,8 @@ class ChatThreadComponent {
         this.threadDragOver = true;
     }
     onThreadDragOver(event) {
+        if (this.isRemovedFromGroup)
+            return;
         if (!this.dragHasFiles(event))
             return;
         event.preventDefault();
@@ -2591,6 +3295,8 @@ class ChatThreadComponent {
         this.threadDragOver = this.threadDragDepth > 0;
     }
     onThreadDrop(event) {
+        if (this.isRemovedFromGroup)
+            return;
         if (!this.dragHasFiles(event))
             return;
         event.preventDefault();
@@ -2602,6 +3308,11 @@ class ChatThreadComponent {
     resetThreadDrag() {
         this.threadDragDepth = 0;
         this.threadDragOver = false;
+    }
+    exitRemovedGroup() {
+        if (this.conversationId) {
+            this.store.exitRemovedGroup(this.conversationId);
+        }
     }
     dragHasFiles(event) {
         const types = event.dataTransfer?.types;
@@ -2623,6 +3334,102 @@ class ChatThreadComponent {
     }
     isOwnMessage(msg) {
         return String(msg.sender_id) === String(this.myContactId);
+    }
+    isSystemMessage(msg) {
+        const content = String(msg.content || '').trim();
+        return msg.message_type === 'SYSTEM' ||
+            /^.+ added .+ to the group$/.test(content) ||
+            /^.+ removed .+ from the group$/.test(content);
+    }
+    isPreformattedText(msg) {
+        const content = String(msg.content || '');
+        return content.includes('\t') || content.includes('\n') || / {2,}/.test(content);
+    }
+    isTableText(msg) {
+        const rows = this.getTableRows(msg);
+        return rows.length >= 2 && rows.some((row) => row.length >= 2);
+    }
+    getTableRows(msg) {
+        const content = String(msg.content || '').trim();
+        if (!content.includes('\t'))
+            return [];
+        const rows = content
+            .split(/\r?\n/)
+            .map((line) => line.split('\t').map((cell) => cell.trim()))
+            .filter((row) => row.some((cell) => cell.length > 0));
+        const maxColumns = Math.max(0, ...rows.map((row) => row.length));
+        if (maxColumns < 2)
+            return [];
+        return rows.map((row) => [
+            ...row,
+            ...Array.from({ length: maxColumns - row.length }, () => ''),
+        ]);
+    }
+    isMessageRead(msg) {
+        const value = msg.is_read;
+        return value === true || value === 'true' || value === 'True' || value === '1';
+    }
+    getReadTooltip(msg) {
+        if (!this.isGroup)
+            return 'Read';
+        const names = this.getReadByNames(msg);
+        if (names.length > 0) {
+            return `Read by ${names.join(', ')}`;
+        }
+        return 'Read';
+    }
+    getReadByNames(msg) {
+        const anyMsg = msg;
+        const rawNames = [
+            ...this.toReadArray(anyMsg.read_by_names),
+            ...this.toReadArray(anyMsg.readByNames),
+            ...this.toReadArray(anyMsg.reader_names),
+            ...this.toReadArray(anyMsg.readers),
+            ...this.toReadArray(anyMsg.read_by),
+            ...this.toReadArray(anyMsg.readBy),
+        ];
+        const names = rawNames
+            .map((entry) => this.readEntryToName(entry))
+            .filter((name) => !!name && name !== 'You');
+        return Array.from(new Set(names));
+    }
+    toReadArray(value) {
+        if (!value)
+            return [];
+        if (Array.isArray(value))
+            return value;
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            if (!trimmed)
+                return [];
+            try {
+                const parsed = JSON.parse(trimmed);
+                return Array.isArray(parsed) ? parsed : [parsed];
+            }
+            catch {
+                return trimmed.includes(',') ? trimmed.split(',').map((v) => v.trim()) : [trimmed];
+            }
+        }
+        return [value];
+    }
+    readEntryToName(entry) {
+        if (entry == null)
+            return null;
+        if (typeof entry === 'string' || typeof entry === 'number') {
+            const idOrName = String(entry).trim();
+            const contact = this.visibleContacts.find((c) => String(c.contact_id) === idOrName);
+            return contact ? getContactDisplayName(contact) : idOrName;
+        }
+        if (typeof entry === 'object') {
+            const obj = entry;
+            const explicit = obj.username || obj.name || obj.display_name || obj.displayName || obj.email;
+            if (explicit)
+                return String(explicit);
+            if (obj.contact_id || obj.contactId) {
+                return this.readEntryToName(obj.contact_id || obj.contactId);
+            }
+        }
+        return null;
     }
     getSenderName(msg) {
         const fromMessage = getMessageSenderName(msg);
@@ -3004,7 +3811,7 @@ class ChatThreadComponent {
     }
     // ── Reactions ────────────────────────────────────────────────────────────
     onEmojiSelected(emoji, messageId) {
-        this.store.addReaction(messageId, emoji);
+        this.toggleReaction(emoji, messageId);
     }
     toggleReaction(emoji, messageId) {
         const msg = this.messages.find(m => m.message_id === messageId);
@@ -3041,7 +3848,7 @@ class ChatThreadComponent {
           <span class="chat-name">{{ conversationName }}</span>
         </div>
         <div class="header-actions">
-          <button *ngIf="isGroup" mat-icon-button class="hdr-btn" (click)="onGroupSettings()" matTooltip="Group settings" matTooltipPosition="below">
+          <button *ngIf="isGroup && !isRemovedFromGroup" mat-icon-button class="hdr-btn" (click)="onGroupSettings()" matTooltip="Group settings" matTooltipPosition="below">
             <mat-icon>settings</mat-icon>
           </button>
         </div>
@@ -3053,13 +3860,22 @@ class ChatThreadComponent {
           <span>Drop files anywhere in this chat</span>
         </div>
 
-        <div *ngIf="loading" class="loading-indicator">
+        <div *ngIf="isRemovedFromGroup" class="removed-group-state">
+          <mat-icon>block</mat-icon>
+          <h4>You were removed from this group</h4>
+          <p>Messages, attachments, and group settings are no longer available.</p>
+          <button type="button" mat-raised-button class="removed-exit-btn" (click)="exitRemovedGroup()">
+            Exit Group
+          </button>
+        </div>
+
+        <div *ngIf="!isRemovedFromGroup && loading" class="loading-indicator">
           <mat-spinner diameter="24"></mat-spinner>
           <span>Loading messages...</span>
         </div>
 
         <button
-          *ngIf="messages.length >= 50 && !loading"
+          *ngIf="!isRemovedFromGroup && messages.length >= 50 && !loading"
           mat-stroked-button
           class="load-more-btn"
           (click)="loadOlder()"
@@ -3067,7 +3883,7 @@ class ChatThreadComponent {
           Load older messages
         </button>
 
-        <div class="messages-list">
+        <div *ngIf="!isRemovedFromGroup" class="messages-list">
           <ng-container *ngFor="let msg of messages; let i = index">
             <div
               *ngIf="shouldShowDateSeparator(i)"
@@ -3077,7 +3893,15 @@ class ChatThreadComponent {
             </div>
 
             <div
-              class="message-bubble-row"
+              *ngIf="isSystemMessage(msg); else chatMessage"
+              class="system-message-row"
+            >
+              <span class="system-message-text">{{ msg.content }}</span>
+            </div>
+
+            <ng-template #chatMessage>
+              <div
+                class="message-bubble-row"
               [class.own]="isOwnMessage(msg)"
               [class.other]="!isOwnMessage(msg)"
             >
@@ -3159,16 +3983,44 @@ class ChatThreadComponent {
                     </ng-template>
                   </div>
                 </div>
-                <div
-                  *ngIf="msg.message_type === 'TEXT' && !hasFileAttachment(msg)"
-                  class="text-content"
-                >
-                  {{ msg.content }}
-                </div>
+                <ng-container *ngIf="msg.message_type === 'TEXT' && !hasFileAttachment(msg)">
+                  <div *ngIf="isTableText(msg); else plainTextMessage" class="table-message-wrap">
+                    <table class="pasted-table">
+                      <tbody>
+                        <tr *ngFor="let row of getTableRows(msg); let rowIndex = index">
+                          <ng-container *ngFor="let cell of row">
+                            <th *ngIf="rowIndex === 0; else tableCell">{{ cell }}</th>
+                            <ng-template #tableCell>
+                              <td>{{ cell }}</td>
+                            </ng-template>
+                          </ng-container>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <ng-template #plainTextMessage>
+                    <div
+                      class="text-content"
+                      [class.preformatted-text]="isPreformattedText(msg)"
+                    >
+                      {{ msg.content }}
+                    </div>
+                  </ng-template>
+                </ng-container>
                 <div class="message-meta">
                   <span class="msg-time">{{ formatTime(msg.created_at) }}</span>
-                  <mat-icon *ngIf="isOwnMessage(msg) && msg.is_read" class="read-icon">done_all</mat-icon>
-                  <mat-icon *ngIf="isOwnMessage(msg) && !msg.is_read" class="read-icon unread">done</mat-icon>
+                  <mat-icon
+                    *ngIf="isOwnMessage(msg) && isMessageRead(msg)"
+                    class="read-icon read"
+                    [matTooltip]="getReadTooltip(msg)"
+                    matTooltipPosition="above"
+                  >done_all</mat-icon>
+                  <mat-icon
+                    *ngIf="isOwnMessage(msg) && !isMessageRead(msg)"
+                    class="read-icon unread"
+                    matTooltip="Sent"
+                    matTooltipPosition="above"
+                  >done</mat-icon>
                 </div>
                 <div *ngIf="hoveredMessageId === msg.message_id" class="quick-reactions">
                   <button
@@ -3189,27 +4041,31 @@ class ChatThreadComponent {
                     [matTooltip]="getReactorTooltip(r)"
                     matTooltipPosition="above"
                   >
-                    {{ r.emoji }} {{ r.count }}
+                    <span class="reaction-emoji">{{ r.emoji }}</span>
+                    <span class="reaction-count">{{ r.count }}</span>
                   </button>
                 </div>
               </div>
-            </div>
+              </div>
+            </ng-template>
           </ng-container>
         </div>
 
-        <div *ngIf="messages.length === 0 && !loading" class="empty-chat">
+        <div *ngIf="!isRemovedFromGroup && messages.length === 0 && !loading" class="empty-chat">
           <mat-icon>chat_bubble_outline</mat-icon>
           <p>No messages yet. Say hello!</p>
         </div>
       </div>
 
       <app-message-input
+        *ngIf="!isRemovedFromGroup"
+        [conversationId]="conversationId"
         (messageSent)="onSendMessage($event)"
         (messageWithFiles)="onSendWithFiles($event)"
       ></app-message-input>
     </div>
 
-  `, isInline: true, styles: [":host{--attachment-thumb-size: 180px}.chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;gap:0}.header-actions button{width:32px;height:32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.image-message{line-height:0}.media-wrapper{position:relative;display:inline-block;line-height:0;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);overflow:hidden;border-radius:10px;background:#ffffff14}.media-img{width:100%;height:100%;border-radius:inherit;display:block;cursor:zoom-in;object-fit:cover}.attachment-actions{position:absolute;right:6px;top:6px;display:flex;gap:4px;opacity:0;transition:opacity .12s ease;pointer-events:none}.media-wrapper:hover .attachment-actions{opacity:1;pointer-events:auto}.attachment-action-btn,.file-download-btn{border:none;border-radius:999px;background:#071d30d1;color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}.attachment-action-btn{width:28px;height:28px}.attachment-action-btn mat-icon{font-size:17px;width:17px;height:17px}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;justify-content:center;gap:8px;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);border-radius:10px;background:#ffffff14;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.attachments-list{display:flex;flex-direction:column;gap:8px;max-width:100%}.attachment-item{max-width:100%}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.attachment-thumb.file-message{position:relative;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);padding:12px;border-radius:10px;background:#ffffff14;flex-direction:column;justify-content:center;box-sizing:border-box;overflow:hidden}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px}.file-msg-icon{font-size:42px;width:42px;height:42px;color:#fffc;flex-shrink:0}.file-msg-name{font-size:13px;color:#fff;line-height:1.2;max-width:100%;overflow:hidden;text-align:center;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;word-break:break-word}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.file-download-btn{width:24px;height:24px;flex-shrink:0;position:absolute;right:6px;top:6px}.file-download-link{border:none;border-radius:999px;background:#ffffff29;color:#fff;cursor:pointer;font-size:11px;padding:4px 10px;margin-top:4px}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.unread{opacity:.4}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions{left:0;right:auto}.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:1px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i7.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i8.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "component", type: MessageInputComponent, selector: "app-message-input", outputs: ["messageSent", "messageWithFiles"] }] });
+  `, isInline: true, styles: [":host{--attachment-thumb-size: 180px}.chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;align-items:center;gap:0}.header-actions button{width:32px;height:32px;min-width:32px!important;padding:0!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;--mdc-icon-button-state-layer-size: 32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}:host ::ng-deep .hdr-btn .mat-mdc-button-touch-target{width:32px!important;height:32px!important}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.removed-group-state{height:100%;min-height:260px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:10px;padding:32px 24px;color:#ffffffc7;box-sizing:border-box}.removed-group-state mat-icon{width:44px;height:44px;font-size:44px;color:#f87171;margin-bottom:4px}.removed-group-state h4{margin:0;color:#fff;font-size:17px;font-weight:700}.removed-group-state p{margin:0 0 8px;max-width:280px;font-size:13px;line-height:1.4;color:#ffffff9e}.removed-exit-btn{border-radius:10px;background:#ffffff2e!important;color:#fff!important;font-weight:700;padding:0 18px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.system-message-row{align-self:center;max-width:88%;margin:8px auto;text-align:center}.system-message-text{display:inline-flex;align-items:center;justify-content:center;padding:5px 11px;border-radius:999px;background:#ffffff17;border:1px solid rgba(255,255,255,.12);color:#ffffffb8;font-size:11px;line-height:1.35}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.text-content{white-space:pre-wrap;tab-size:4}.text-content.preformatted-text{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;font-size:12px;line-height:1.45;overflow-x:auto;max-width:min(72vw,520px)}.table-message-wrap{max-width:min(76vw,560px);overflow-x:auto;border-radius:9px;border:1px solid rgba(255,255,255,.16);background:#ffffff0a}.pasted-table{border-collapse:collapse;min-width:100%;font-size:12px;line-height:1.35;color:#f5f7ff}.pasted-table th,.pasted-table td{padding:6px 9px;border-right:1px solid rgba(255,255,255,.12);border-bottom:1px solid rgba(255,255,255,.12);text-align:left;white-space:pre-wrap;vertical-align:top}.pasted-table th{background:#ffffff1a;font-weight:700}.pasted-table tr:last-child td,.pasted-table tr:last-child th{border-bottom:none}.pasted-table th:last-child,.pasted-table td:last-child{border-right:none}.image-message{line-height:0}.media-wrapper{position:relative;display:inline-block;line-height:0;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);overflow:hidden;border-radius:10px;background:#ffffff14}.media-img{width:100%;height:100%;border-radius:inherit;display:block;cursor:zoom-in;object-fit:cover}.attachment-actions{position:absolute;right:6px;top:6px;display:flex;gap:4px;opacity:0;transition:opacity .12s ease;pointer-events:none}.media-wrapper:hover .attachment-actions{opacity:1;pointer-events:auto}.attachment-action-btn,.file-download-btn{border:none;border-radius:999px;background:#071d30d1;color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}.attachment-action-btn{width:28px;height:28px}.attachment-action-btn mat-icon{font-size:17px;width:17px;height:17px}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;justify-content:center;gap:8px;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);border-radius:10px;background:#ffffff14;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.attachments-list{display:flex;flex-direction:column;gap:8px;max-width:100%}.attachment-item{max-width:100%}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.attachment-thumb.file-message{position:relative;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);padding:12px;border-radius:10px;background:#ffffff14;flex-direction:column;justify-content:center;box-sizing:border-box;overflow:hidden}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px}.file-msg-icon{font-size:42px;width:42px;height:42px;color:#fffc;flex-shrink:0}.file-msg-name{font-size:13px;color:#fff;line-height:1.2;max-width:100%;overflow:hidden;text-align:center;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;word-break:break-word}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.file-download-btn{width:24px;height:24px;flex-shrink:0;position:absolute;right:6px;top:6px}.file-download-link{border:none;border-radius:999px;background:#ffffff29;color:#fff;cursor:pointer;font-size:11px;padding:4px 10px;margin-top:4px}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.read{color:#60a5fa;opacity:1}.read-icon.unread{color:#dae0fa80;opacity:1}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions{left:0;right:auto}.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:2px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:3px;max-width:180px}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i7.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i8.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "component", type: MessageInputComponent, selector: "app-message-input", inputs: ["conversationId"], outputs: ["messageSent", "messageWithFiles"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: ChatThreadComponent, decorators: [{
             type: Component,
@@ -3233,7 +4089,7 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
           <span class="chat-name">{{ conversationName }}</span>
         </div>
         <div class="header-actions">
-          <button *ngIf="isGroup" mat-icon-button class="hdr-btn" (click)="onGroupSettings()" matTooltip="Group settings" matTooltipPosition="below">
+          <button *ngIf="isGroup && !isRemovedFromGroup" mat-icon-button class="hdr-btn" (click)="onGroupSettings()" matTooltip="Group settings" matTooltipPosition="below">
             <mat-icon>settings</mat-icon>
           </button>
         </div>
@@ -3245,13 +4101,22 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
           <span>Drop files anywhere in this chat</span>
         </div>
 
-        <div *ngIf="loading" class="loading-indicator">
+        <div *ngIf="isRemovedFromGroup" class="removed-group-state">
+          <mat-icon>block</mat-icon>
+          <h4>You were removed from this group</h4>
+          <p>Messages, attachments, and group settings are no longer available.</p>
+          <button type="button" mat-raised-button class="removed-exit-btn" (click)="exitRemovedGroup()">
+            Exit Group
+          </button>
+        </div>
+
+        <div *ngIf="!isRemovedFromGroup && loading" class="loading-indicator">
           <mat-spinner diameter="24"></mat-spinner>
           <span>Loading messages...</span>
         </div>
 
         <button
-          *ngIf="messages.length >= 50 && !loading"
+          *ngIf="!isRemovedFromGroup && messages.length >= 50 && !loading"
           mat-stroked-button
           class="load-more-btn"
           (click)="loadOlder()"
@@ -3259,7 +4124,7 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
           Load older messages
         </button>
 
-        <div class="messages-list">
+        <div *ngIf="!isRemovedFromGroup" class="messages-list">
           <ng-container *ngFor="let msg of messages; let i = index">
             <div
               *ngIf="shouldShowDateSeparator(i)"
@@ -3269,7 +4134,15 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
             </div>
 
             <div
-              class="message-bubble-row"
+              *ngIf="isSystemMessage(msg); else chatMessage"
+              class="system-message-row"
+            >
+              <span class="system-message-text">{{ msg.content }}</span>
+            </div>
+
+            <ng-template #chatMessage>
+              <div
+                class="message-bubble-row"
               [class.own]="isOwnMessage(msg)"
               [class.other]="!isOwnMessage(msg)"
             >
@@ -3351,16 +4224,44 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
                     </ng-template>
                   </div>
                 </div>
-                <div
-                  *ngIf="msg.message_type === 'TEXT' && !hasFileAttachment(msg)"
-                  class="text-content"
-                >
-                  {{ msg.content }}
-                </div>
+                <ng-container *ngIf="msg.message_type === 'TEXT' && !hasFileAttachment(msg)">
+                  <div *ngIf="isTableText(msg); else plainTextMessage" class="table-message-wrap">
+                    <table class="pasted-table">
+                      <tbody>
+                        <tr *ngFor="let row of getTableRows(msg); let rowIndex = index">
+                          <ng-container *ngFor="let cell of row">
+                            <th *ngIf="rowIndex === 0; else tableCell">{{ cell }}</th>
+                            <ng-template #tableCell>
+                              <td>{{ cell }}</td>
+                            </ng-template>
+                          </ng-container>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <ng-template #plainTextMessage>
+                    <div
+                      class="text-content"
+                      [class.preformatted-text]="isPreformattedText(msg)"
+                    >
+                      {{ msg.content }}
+                    </div>
+                  </ng-template>
+                </ng-container>
                 <div class="message-meta">
                   <span class="msg-time">{{ formatTime(msg.created_at) }}</span>
-                  <mat-icon *ngIf="isOwnMessage(msg) && msg.is_read" class="read-icon">done_all</mat-icon>
-                  <mat-icon *ngIf="isOwnMessage(msg) && !msg.is_read" class="read-icon unread">done</mat-icon>
+                  <mat-icon
+                    *ngIf="isOwnMessage(msg) && isMessageRead(msg)"
+                    class="read-icon read"
+                    [matTooltip]="getReadTooltip(msg)"
+                    matTooltipPosition="above"
+                  >done_all</mat-icon>
+                  <mat-icon
+                    *ngIf="isOwnMessage(msg) && !isMessageRead(msg)"
+                    class="read-icon unread"
+                    matTooltip="Sent"
+                    matTooltipPosition="above"
+                  >done</mat-icon>
                 </div>
                 <div *ngIf="hoveredMessageId === msg.message_id" class="quick-reactions">
                   <button
@@ -3381,27 +4282,31 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
                     [matTooltip]="getReactorTooltip(r)"
                     matTooltipPosition="above"
                   >
-                    {{ r.emoji }} {{ r.count }}
+                    <span class="reaction-emoji">{{ r.emoji }}</span>
+                    <span class="reaction-count">{{ r.count }}</span>
                   </button>
                 </div>
               </div>
-            </div>
+              </div>
+            </ng-template>
           </ng-container>
         </div>
 
-        <div *ngIf="messages.length === 0 && !loading" class="empty-chat">
+        <div *ngIf="!isRemovedFromGroup && messages.length === 0 && !loading" class="empty-chat">
           <mat-icon>chat_bubble_outline</mat-icon>
           <p>No messages yet. Say hello!</p>
         </div>
       </div>
 
       <app-message-input
+        *ngIf="!isRemovedFromGroup"
+        [conversationId]="conversationId"
         (messageSent)="onSendMessage($event)"
         (messageWithFiles)="onSendWithFiles($event)"
       ></app-message-input>
     </div>
 
-  `, styles: [":host{--attachment-thumb-size: 180px}.chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;gap:0}.header-actions button{width:32px;height:32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.image-message{line-height:0}.media-wrapper{position:relative;display:inline-block;line-height:0;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);overflow:hidden;border-radius:10px;background:#ffffff14}.media-img{width:100%;height:100%;border-radius:inherit;display:block;cursor:zoom-in;object-fit:cover}.attachment-actions{position:absolute;right:6px;top:6px;display:flex;gap:4px;opacity:0;transition:opacity .12s ease;pointer-events:none}.media-wrapper:hover .attachment-actions{opacity:1;pointer-events:auto}.attachment-action-btn,.file-download-btn{border:none;border-radius:999px;background:#071d30d1;color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}.attachment-action-btn{width:28px;height:28px}.attachment-action-btn mat-icon{font-size:17px;width:17px;height:17px}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;justify-content:center;gap:8px;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);border-radius:10px;background:#ffffff14;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.attachments-list{display:flex;flex-direction:column;gap:8px;max-width:100%}.attachment-item{max-width:100%}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.attachment-thumb.file-message{position:relative;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);padding:12px;border-radius:10px;background:#ffffff14;flex-direction:column;justify-content:center;box-sizing:border-box;overflow:hidden}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px}.file-msg-icon{font-size:42px;width:42px;height:42px;color:#fffc;flex-shrink:0}.file-msg-name{font-size:13px;color:#fff;line-height:1.2;max-width:100%;overflow:hidden;text-align:center;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;word-break:break-word}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.file-download-btn{width:24px;height:24px;flex-shrink:0;position:absolute;right:6px;top:6px}.file-download-link{border:none;border-radius:999px;background:#ffffff29;color:#fff;cursor:pointer;font-size:11px;padding:4px 10px;margin-top:4px}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.unread{opacity:.4}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions{left:0;right:auto}.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:1px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"] }]
+  `, styles: [":host{--attachment-thumb-size: 180px}.chat-thread{display:flex;flex-direction:column;height:100%;background:#041322;position:relative}.chat-thread.drag-over{outline:2px dashed rgba(255,255,255,.45);outline-offset:-6px}.thread-drag-overlay{position:absolute;inset:8px;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#fff;background:#1f4bd852;border:2px dashed rgba(255,255,255,.55);border-radius:14px;font-size:14px;font-weight:600}.thread-drag-overlay mat-icon{font-size:36px;width:36px;height:36px}.chat-header{display:flex;align-items:center;padding:8px 8px 8px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.chat-header button mat-icon{color:#fffc}.chat-name{font-size:16px;font-weight:600;color:#fff}.header-info{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding:0 4px}.header-actions{display:flex;align-items:center;gap:0}.header-actions button{width:32px;height:32px;min-width:32px!important;padding:0!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;--mdc-icon-button-state-layer-size: 32px}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{font-size:20px;width:20px;height:20px;line-height:20px;margin:0;display:flex;align-items:center;justify-content:center}:host ::ng-deep .hdr-btn .mat-mdc-button-touch-target{width:32px!important;height:32px!important}.messages-area{flex:1;overflow-y:auto;padding:12px;background:transparent;scrollbar-width:none;-ms-overflow-style:none}.messages-area::-webkit-scrollbar{display:none}.loading-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;color:#ffffffb3;font-size:13px}.removed-group-state{height:100%;min-height:260px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:10px;padding:32px 24px;color:#ffffffc7;box-sizing:border-box}.removed-group-state mat-icon{width:44px;height:44px;font-size:44px;color:#f87171;margin-bottom:4px}.removed-group-state h4{margin:0;color:#fff;font-size:17px;font-weight:700}.removed-group-state p{margin:0 0 8px;max-width:280px;font-size:13px;line-height:1.4;color:#ffffff9e}.removed-exit-btn{border-radius:10px;background:#ffffff2e!important;color:#fff!important;font-weight:700;padding:0 18px}.load-more-btn{align-self:center;margin-bottom:16px;font-size:12px;color:#fff}.messages-list{display:flex;flex-direction:column;gap:1px;flex:1}.date-separator{text-align:center;margin:16px 0 8px;font-size:12px;color:#ffffffb3;font-weight:500}.message-bubble-row{display:flex;flex-direction:column;max-width:88%;margin-bottom:2px}.message-bubble-row.own{align-self:flex-end;align-items:flex-end}.message-bubble-row.other{align-self:flex-start;align-items:flex-start}.sender-name{font-size:11px;font-weight:700;color:#fffffff2;margin-bottom:3px;letter-spacing:.2px;padding:0 10px;text-shadow:0 1px 3px rgba(0,0,0,.4)}.system-message-row{align-self:center;max-width:88%;margin:8px auto;text-align:center}.system-message-text{display:inline-flex;align-items:center;justify-content:center;padding:5px 11px;border-radius:999px;background:#ffffff17;border:1px solid rgba(255,255,255,.12);color:#ffffffb8;font-size:11px;line-height:1.35}.message-bubble{padding:8px 14px 7px;border-radius:14px;font-size:13px;line-height:1.32;word-break:break-word;color:#f5f7ff;position:relative;display:inline-block;min-width:fit-content}.message-bubble-row.other .message-bubble{background:#0d2540;border-bottom-left-radius:5px;box-shadow:0 1px 4px #0006}.message-bubble.own-bubble{background:#0a3d62;border-bottom-right-radius:5px;box-shadow:0 1px 4px #0006}.text-content{white-space:pre-wrap;tab-size:4}.text-content.preformatted-text{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;font-size:12px;line-height:1.45;overflow-x:auto;max-width:min(72vw,520px)}.table-message-wrap{max-width:min(76vw,560px);overflow-x:auto;border-radius:9px;border:1px solid rgba(255,255,255,.16);background:#ffffff0a}.pasted-table{border-collapse:collapse;min-width:100%;font-size:12px;line-height:1.35;color:#f5f7ff}.pasted-table th,.pasted-table td{padding:6px 9px;border-right:1px solid rgba(255,255,255,.12);border-bottom:1px solid rgba(255,255,255,.12);text-align:left;white-space:pre-wrap;vertical-align:top}.pasted-table th{background:#ffffff1a;font-weight:700}.pasted-table tr:last-child td,.pasted-table tr:last-child th{border-bottom:none}.pasted-table th:last-child,.pasted-table td:last-child{border-right:none}.image-message{line-height:0}.media-wrapper{position:relative;display:inline-block;line-height:0;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);overflow:hidden;border-radius:10px;background:#ffffff14}.media-img{width:100%;height:100%;border-radius:inherit;display:block;cursor:zoom-in;object-fit:cover}.attachment-actions{position:absolute;right:6px;top:6px;display:flex;gap:4px;opacity:0;transition:opacity .12s ease;pointer-events:none}.media-wrapper:hover .attachment-actions{opacity:1;pointer-events:auto}.attachment-action-btn,.file-download-btn{border:none;border-radius:999px;background:#071d30d1;color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}.attachment-action-btn{width:28px;height:28px}.attachment-action-btn mat-icon{font-size:17px;width:17px;height:17px}.media-video{max-width:240px;max-height:260px;border-radius:10px;display:block;background:#000}.video-message{display:flex;flex-direction:column;gap:6px}.video-download{color:#ffffffc7;font-size:12px;text-decoration:underline;text-underline-offset:2px}.media-placeholder{display:flex;align-items:center;justify-content:center;gap:8px;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);border-radius:10px;background:#ffffff14;color:#fff9;font-size:11px}.media-load-label{font-size:11px;color:#fff9}.attachments-list{display:flex;flex-direction:column;gap:8px;max-width:100%}.attachment-item{max-width:100%}.file-message{display:flex;align-items:center;gap:8px;padding:4px 0}.attachment-thumb.file-message{position:relative;width:var(--attachment-thumb-size);height:var(--attachment-thumb-size);padding:12px;border-radius:10px;background:#ffffff14;flex-direction:column;justify-content:center;box-sizing:border-box;overflow:hidden}.file-download{display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;max-width:240px}.file-msg-icon{font-size:42px;width:42px;height:42px;color:#fffc;flex-shrink:0}.file-msg-name{font-size:13px;color:#fff;line-height:1.2;max-width:100%;overflow:hidden;text-align:center;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;word-break:break-word}.file-download-icon{font-size:18px;width:18px;height:18px;color:#ffffffb3;flex-shrink:0}.file-download-btn{width:24px;height:24px;flex-shrink:0;position:absolute;right:6px;top:6px}.file-download-link{border:none;border-radius:999px;background:#ffffff29;color:#fff;cursor:pointer;font-size:11px;padding:4px 10px;margin-top:4px}.message-meta{display:flex;align-items:center;gap:4px;margin-top:3px}.msg-time{font-size:10px;color:#dae0faa8}.message-bubble-row.other .msg-time{color:#d8dff694}.read-icon{font-size:14px;width:14px;height:14px;opacity:.7}.read-icon.read{color:#60a5fa;opacity:1}.read-icon.unread{color:#dae0fa80;opacity:1}.quick-reactions{position:absolute;top:-18px;right:0;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#071d30;border:1px solid rgba(255,255,255,.14);border-radius:999px;box-shadow:0 6px 14px #00000047;z-index:4}.message-bubble-row.other .quick-reactions{left:0;right:auto}.message-bubble-row.own .quick-reactions{left:auto;right:0}.quick-emoji-btn{width:20px;height:20px;border:none;border-radius:999px;background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;padding:0;transition:transform .12s ease,background .12s ease}.quick-emoji-btn:hover{background:#ffffff2e;transform:scale(1.14)}.reactions-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.reaction-chip{background:#ffffff14;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:2px 7px;font-size:11px;color:#f2f6ff;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:3px;max-width:180px}.reaction-chip:hover{background:#ffffff40;transform:scale(1.05)}.reaction-chip.own-reaction{background:#2a5bff4d;border-color:#2a5bff80}.empty-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9ca3af}.empty-chat mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:8px}.empty-chat p{font-size:14px;margin:0}\n"] }]
         }], ctorParameters: () => [{ type: MessagingStoreService }, { type: AuthService }, { type: MessagingFileService }, { type: i0.ChangeDetectorRef }], propDecorators: { scrollContainer: [{
                 type: ViewChild,
                 args: ['scrollContainer']
@@ -3549,6 +4454,9 @@ class GroupManagerComponent {
     editingConversationId = null;
     creatorContactId = null;
     loadingMembers = false;
+    creatingGroup = false;
+    deletingGroup = false;
+    showDeleteConfirm = false;
     subs = [];
     constructor(store, api, auth) {
         this.store = store;
@@ -3566,6 +4474,7 @@ class GroupManagerComponent {
                 this.groupName = settings.name;
                 this.originalGroupName = settings.name;
                 this.selectedContacts = [];
+                this.showDeleteConfirm = false;
                 this.loadCurrentMembers(settings.conversationId);
             }
             else {
@@ -3575,6 +4484,7 @@ class GroupManagerComponent {
                 this.originalGroupName = '';
                 this.selectedContacts = [];
                 this.currentMembers = [];
+                this.showDeleteConfirm = false;
             }
         }));
     }
@@ -3610,6 +4520,8 @@ class GroupManagerComponent {
         return member.username || member.email || `Contact ${member.contact_id}`;
     }
     get canSubmit() {
+        if (this.creatingGroup)
+            return false;
         if (!this.groupName.trim())
             return false;
         if (this.isEditMode) {
@@ -3635,8 +4547,11 @@ class GroupManagerComponent {
         if (!this.editingConversationId)
             return;
         if (confirm(`Remove ${this.getMemberName(member)} from this group?`)) {
-            this.store.manageGroup('remove', this.editingConversationId, undefined, [member.contact_id]);
-            this.currentMembers = this.currentMembers.filter(m => m.contact_id !== member.contact_id);
+            this.store.manageGroup('remove', this.editingConversationId, undefined, [member.contact_id], {
+                success: () => {
+                    this.currentMembers = this.currentMembers.filter(m => m.contact_id !== member.contact_id);
+                },
+            });
         }
     }
     onSubmit() {
@@ -3654,16 +4569,34 @@ class GroupManagerComponent {
             this.store.setView('chat');
         }
         else {
+            this.creatingGroup = true;
             const ids = this.selectedContacts.map((c) => c.contact_id);
-            this.store.createGroupConversation(ids, this.groupName.trim());
-            this.store.setView('chat');
+            this.store.createGroupConversation(ids, this.groupName.trim(), {
+                error: () => {
+                    this.creatingGroup = false;
+                },
+            });
         }
     }
-    onDelete() {
-        if (this.editingConversationId) {
-            this.store.deleteGroup(this.editingConversationId);
-            this.store.clearGroupSettings();
-            this.goBack();
+    requestDeleteGroup() {
+        if (!this.editingConversationId || this.deletingGroup)
+            return;
+        this.showDeleteConfirm = true;
+    }
+    cancelDeleteGroup() {
+        if (this.deletingGroup)
+            return;
+        this.showDeleteConfirm = false;
+    }
+    confirmDeleteGroup() {
+        if (this.editingConversationId && !this.deletingGroup) {
+            this.deletingGroup = true;
+            this.store.deleteGroup(this.editingConversationId, {
+                error: () => {
+                    this.deletingGroup = false;
+                    this.showDeleteConfirm = false;
+                },
+            });
         }
     }
     goBack() {
@@ -3781,21 +4714,44 @@ class GroupManagerComponent {
           class="create-btn"
         >
           <mat-icon>{{ isEditMode ? 'save' : 'group_add' }}</mat-icon>
-          <ng-container *ngIf="!isEditMode">Create Group ({{ selectedContacts.length + 1 }} members)</ng-container>
+          <ng-container *ngIf="!isEditMode && !creatingGroup">Create Group ({{ selectedContacts.length + 1 }} members)</ng-container>
+          <ng-container *ngIf="!isEditMode && creatingGroup">Creating group...</ng-container>
           <ng-container *ngIf="isEditMode">Save Changes</ng-container>
         </button>
         <button
           *ngIf="isEditMode"
           mat-stroked-button
           class="delete-btn"
-          (click)="onDelete()"
+          [disabled]="deletingGroup"
+          (click)="requestDeleteGroup()"
         >
-          <mat-icon>delete</mat-icon>
-          Delete Group
+          <mat-icon>logout</mat-icon>
+          {{ deletingGroup ? 'Exiting group...' : 'Exit Group' }}
         </button>
       </div>
+
+      <div *ngIf="showDeleteConfirm" class="confirm-overlay">
+        <div class="confirm-card">
+          <div class="confirm-icon">
+            <mat-icon>warning</mat-icon>
+          </div>
+          <div class="confirm-copy">
+            <h4>Exit group?</h4>
+            <p>Are you sure you want to exit "{{ groupName.trim() || 'this group' }}"?</p>
+          </div>
+          <div class="confirm-actions">
+            <button mat-stroked-button class="confirm-cancel" [disabled]="deletingGroup" (click)="cancelDeleteGroup()">
+              Cancel
+            </button>
+            <button mat-raised-button class="confirm-delete" [disabled]="deletingGroup" (click)="confirmDeleteGroup()">
+              <mat-icon>logout</mat-icon>
+              {{ deletingGroup ? 'Exiting...' : 'Exit Group' }}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
-  `, isInline: true, styles: [".group-manager{display:flex;flex-direction:column;height:100%}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.scrollable{flex:1;overflow-y:auto}.form-section{padding:12px 16px 0}.section-gap{padding-top:16px}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.loading-row{display:flex;align-items:center;gap:8px;color:#fff9;font-size:13px;padding:8px 0}.members-list{border-radius:8px;overflow:hidden}.member-row{display:flex;align-items:center;padding:8px 12px;gap:10px;background:#ffffff12;border-bottom:1px solid rgba(255,255,255,.06)}.member-row:last-child{border-bottom:none}.member-avatar{width:30px;height:30px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.member-avatar mat-icon{color:#fff;font-size:18px}.member-info{display:flex;flex-direction:column}.member-name{font-size:13px;font-weight:500;color:#fff}.member-sub{font-size:11px;color:#ffffff80}.remove-member-btn{margin-left:auto;color:#fff9!important}.remove-member-btn:hover{color:#f87171!important;background:#f871711a!important}.empty-members{font-size:13px;color:#ffffff80;padding:8px 0}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px;flex-shrink:0}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6$1.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i8.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i7.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }] });
+  `, isInline: true, styles: [".group-manager{display:flex;flex-direction:column;height:100%;position:relative}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.scrollable{flex:1;overflow-y:auto}.form-section{padding:12px 16px 0}.section-gap{padding-top:16px}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.loading-row{display:flex;align-items:center;gap:8px;color:#fff9;font-size:13px;padding:8px 0}.members-list{border-radius:8px;overflow:hidden}.member-row{display:flex;align-items:center;padding:8px 12px;gap:10px;background:#ffffff12;border-bottom:1px solid rgba(255,255,255,.06)}.member-row:last-child{border-bottom:none}.member-avatar{width:30px;height:30px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.member-avatar mat-icon{color:#fff;font-size:18px}.member-info{display:flex;flex-direction:column}.member-name{font-size:13px;font-weight:500;color:#fff}.member-sub{font-size:11px;color:#ffffff80}.remove-member-btn{margin-left:auto;color:#fff9!important}.remove-member-btn:hover{color:#f87171!important;background:#f871711a!important}.empty-members{font-size:13px;color:#ffffff80;padding:8px 0}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px;flex-shrink:0}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}.confirm-overlay{position:absolute;inset:0;z-index:10;display:flex;align-items:flex-end;padding:16px;background:#0413229e;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);box-sizing:border-box}.confirm-card{width:100%;padding:16px;border-radius:14px;background:#0c1f35;border:1px solid rgba(255,255,255,.14);box-shadow:0 16px 40px #00000073;color:#fff}.confirm-icon{width:36px;height:36px;border-radius:50%;background:#f8717124;display:flex;align-items:center;justify-content:center;margin-bottom:10px}.confirm-icon mat-icon{color:#f87171}.confirm-copy h4{margin:0 0 6px;font-size:16px;font-weight:700}.confirm-copy p{margin:0;color:#ffffffb3;font-size:13px;line-height:1.4}.confirm-actions{display:flex;gap:8px;margin-top:16px}.confirm-cancel,.confirm-delete{flex:1;border-radius:10px;font-weight:600}.confirm-cancel{color:#fff!important;border-color:#ffffff40!important}.confirm-delete{background:#dc2626e6!important;color:#fff!important}.confirm-delete mat-icon{margin-right:6px;font-size:18px;width:18px;height:18px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6$1.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i8.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i7.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: GroupManagerComponent, decorators: [{
             type: Component,
@@ -3904,21 +4860,44 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
           class="create-btn"
         >
           <mat-icon>{{ isEditMode ? 'save' : 'group_add' }}</mat-icon>
-          <ng-container *ngIf="!isEditMode">Create Group ({{ selectedContacts.length + 1 }} members)</ng-container>
+          <ng-container *ngIf="!isEditMode && !creatingGroup">Create Group ({{ selectedContacts.length + 1 }} members)</ng-container>
+          <ng-container *ngIf="!isEditMode && creatingGroup">Creating group...</ng-container>
           <ng-container *ngIf="isEditMode">Save Changes</ng-container>
         </button>
         <button
           *ngIf="isEditMode"
           mat-stroked-button
           class="delete-btn"
-          (click)="onDelete()"
+          [disabled]="deletingGroup"
+          (click)="requestDeleteGroup()"
         >
-          <mat-icon>delete</mat-icon>
-          Delete Group
+          <mat-icon>logout</mat-icon>
+          {{ deletingGroup ? 'Exiting group...' : 'Exit Group' }}
         </button>
       </div>
+
+      <div *ngIf="showDeleteConfirm" class="confirm-overlay">
+        <div class="confirm-card">
+          <div class="confirm-icon">
+            <mat-icon>warning</mat-icon>
+          </div>
+          <div class="confirm-copy">
+            <h4>Exit group?</h4>
+            <p>Are you sure you want to exit "{{ groupName.trim() || 'this group' }}"?</p>
+          </div>
+          <div class="confirm-actions">
+            <button mat-stroked-button class="confirm-cancel" [disabled]="deletingGroup" (click)="cancelDeleteGroup()">
+              Cancel
+            </button>
+            <button mat-raised-button class="confirm-delete" [disabled]="deletingGroup" (click)="confirmDeleteGroup()">
+              <mat-icon>logout</mat-icon>
+              {{ deletingGroup ? 'Exiting...' : 'Exit Group' }}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
-  `, styles: [".group-manager{display:flex;flex-direction:column;height:100%}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.scrollable{flex:1;overflow-y:auto}.form-section{padding:12px 16px 0}.section-gap{padding-top:16px}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.loading-row{display:flex;align-items:center;gap:8px;color:#fff9;font-size:13px;padding:8px 0}.members-list{border-radius:8px;overflow:hidden}.member-row{display:flex;align-items:center;padding:8px 12px;gap:10px;background:#ffffff12;border-bottom:1px solid rgba(255,255,255,.06)}.member-row:last-child{border-bottom:none}.member-avatar{width:30px;height:30px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.member-avatar mat-icon{color:#fff;font-size:18px}.member-info{display:flex;flex-direction:column}.member-name{font-size:13px;font-weight:500;color:#fff}.member-sub{font-size:11px;color:#ffffff80}.remove-member-btn{margin-left:auto;color:#fff9!important}.remove-member-btn:hover{color:#f87171!important;background:#f871711a!important}.empty-members{font-size:13px;color:#ffffff80;padding:8px 0}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px;flex-shrink:0}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}\n"] }]
+  `, styles: [".group-manager{display:flex;flex-direction:column;height:100%;position:relative}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.scrollable{flex:1;overflow-y:auto}.form-section{padding:12px 16px 0}.section-gap{padding-top:16px}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.loading-row{display:flex;align-items:center;gap:8px;color:#fff9;font-size:13px;padding:8px 0}.members-list{border-radius:8px;overflow:hidden}.member-row{display:flex;align-items:center;padding:8px 12px;gap:10px;background:#ffffff12;border-bottom:1px solid rgba(255,255,255,.06)}.member-row:last-child{border-bottom:none}.member-avatar{width:30px;height:30px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.member-avatar mat-icon{color:#fff;font-size:18px}.member-info{display:flex;flex-direction:column}.member-name{font-size:13px;font-weight:500;color:#fff}.member-sub{font-size:11px;color:#ffffff80}.remove-member-btn{margin-left:auto;color:#fff9!important}.remove-member-btn:hover{color:#f87171!important;background:#f871711a!important}.empty-members{font-size:13px;color:#ffffff80;padding:8px 0}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px;flex-shrink:0}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}.confirm-overlay{position:absolute;inset:0;z-index:10;display:flex;align-items:flex-end;padding:16px;background:#0413229e;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);box-sizing:border-box}.confirm-card{width:100%;padding:16px;border-radius:14px;background:#0c1f35;border:1px solid rgba(255,255,255,.14);box-shadow:0 16px 40px #00000073;color:#fff}.confirm-icon{width:36px;height:36px;border-radius:50%;background:#f8717124;display:flex;align-items:center;justify-content:center;margin-bottom:10px}.confirm-icon mat-icon{color:#f87171}.confirm-copy h4{margin:0 0 6px;font-size:16px;font-weight:700}.confirm-copy p{margin:0;color:#ffffffb3;font-size:13px;line-height:1.4}.confirm-actions{display:flex;gap:8px;margin-top:16px}.confirm-cancel,.confirm-delete{flex:1;border-radius:10px;font-weight:600}.confirm-cancel{color:#fff!important;border-color:#ffffff40!important}.confirm-delete{background:#dc2626e6!important;color:#fff!important}.confirm-delete mat-icon{margin-right:6px;font-size:18px;width:18px;height:18px}\n"] }]
         }], ctorParameters: () => [{ type: MessagingStoreService }, { type: MessagingApiService }, { type: AuthService }] });
 
 class ChatPanelComponent {
@@ -3928,6 +4907,7 @@ class ChatPanelComponent {
     wsStatus = 'disconnected';
     side = 'right';
     sidebarWidth = 400;
+    toast = null;
     // ── Floating window state ──
     isFloating = false;
     floatX = 80;
@@ -4000,11 +4980,13 @@ class ChatPanelComponent {
             this.store.activeView,
             this.store.wsStatus,
             this.store.sidebarSide,
-        ]).subscribe(([open, view, ws, side]) => {
+            this.store.toast,
+        ]).subscribe(([open, view, ws, side, toast]) => {
             this.isOpen = open;
             this.activeView = view;
             this.wsStatus = ws;
             this.side = side;
+            this.toast = toast;
         });
     }
     ngOnDestroy() {
@@ -4310,6 +5292,11 @@ class ChatPanelComponent {
         <app-group-manager *ngIf="activeView === 'group-manager'"></app-group-manager>
       </div>
 
+      <div *ngIf="toast" class="messaging-toast" [class.success]="toast.type === 'success'" [class.error]="toast.type === 'error'">
+        <mat-icon>{{ toast.type === 'error' ? 'error' : toast.type === 'success' ? 'check_circle' : 'info' }}</mat-icon>
+        <span>{{ toast.message }}</span>
+      </div>
+
       <!-- Resize corner (floating mode only) -->
       <div *ngIf="isFloating" class="float-resize-corner" (mousedown)="onFloatResizeStart($event)"></div>
     </div>
@@ -4348,12 +5335,12 @@ class ChatPanelComponent {
       </ng-container>
       <div *ngIf="lightboxDetached" class="lb-resize-corner" (mousedown)="onLbResizeStart($event)"></div>
     </div>
-  `, isInline: true, styles: [".sidebar{position:fixed;top:0;bottom:0;width:400px;background:#041322;z-index:9999;display:flex;flex-direction:column;box-shadow:0 0 40px #0009;transition:transform .3s cubic-bezier(.4,0,.2,1)}.sidebar.side-right{right:0;transform:translate(100%)}.sidebar.side-left{left:0;transform:translate(-100%)}.sidebar.open.side-right,.sidebar.open.side-left{transform:translate(0)}.resize-handle{position:absolute;top:0;bottom:0;width:5px;cursor:ew-resize;z-index:1;transition:background .15s}.resize-handle:hover,.resize-handle:active{background:#ffffff26}.resize-handle.handle-left{left:0}.resize-handle.handle-right{right:0}.sidebar-header{display:flex;align-items:center;justify-content:space-between;padding:8px 10px 8px 14px;border-bottom:1px solid rgba(255,255,255,.15);flex-shrink:0;position:relative;z-index:2;min-height:48px}.header-left{display:flex;align-items:center;gap:8px;min-width:0}.header-title{font-size:16px;font-weight:700;color:#fff;letter-spacing:.3px;white-space:nowrap}.header-actions{display:flex;align-items:center;gap:0}.btn-spacer{width:12px}.hdr-btn{width:32px;height:32px;min-width:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:6px!important;transition:background .15s,box-shadow .15s;--mdc-icon-button-state-layer-size: 32px}.hdr-btn .mat-mdc-button-touch-target{width:32px;height:32px}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{font-size:20px;color:#ffffffd9}.sidebar-content{flex:1;overflow:hidden}.status-dot{width:8px;height:8px;border-radius:50%;background:#fff6;flex-shrink:0}.status-dot.connected{background:#22c55e;box-shadow:0 0 0 3px #22c55e2e}.status-dot.connecting{background:#f59e0b;animation:blink 1s infinite}.status-dot.disconnected{background:#ef4444;box-shadow:0 0 0 3px #ef444424}@keyframes blink{50%{opacity:.3}}.sidebar.floating{position:fixed!important;right:unset!important;left:80px;top:80px;transform:none!important;border-radius:12px;overflow:hidden;resize:none;min-width:280px;min-height:320px}.sidebar.floating:not(.open){display:none}.drag-handle{cursor:grab;-webkit-user-select:none;user-select:none}.drag-handle:active{cursor:grabbing}.float-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.25) 50%);border-bottom-right-radius:12px}@media (max-width: 480px){.sidebar{width:100%!important}.resize-handle{display:none}}.lb-overlay{position:fixed;inset:0;background:#000000e0;display:flex;align-items:center;justify-content:center;z-index:99999;cursor:pointer}.lb-overlay.lb-detached{inset:unset;background:#0c1f35;border:1px solid rgba(255,255,255,.18);border-radius:12px;box-shadow:0 12px 48px #000000b3;display:flex;flex-direction:column;overflow:hidden;cursor:default;min-width:240px;min-height:200px}.lb-drag-bar{display:flex;align-items:center;justify-content:space-between;padding:6px 8px 6px 12px;background:#041322;border-bottom:1px solid rgba(255,255,255,.12);cursor:grab;flex-shrink:0;-webkit-user-select:none;user-select:none}.lb-drag-bar:active{cursor:grabbing}.lb-drag-title{font-size:12px;color:#fff9;letter-spacing:.4px}.lb-drag-actions{display:flex;gap:2px}.lb-action-btn{background:transparent;border:none;border-radius:6px;width:28px;height:28px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#ffffffb3;transition:background .15s}.lb-action-btn:hover{background:#ffffff26}.lb-action-btn mat-icon{font-size:16px;width:16px;height:16px}.lb-img{max-width:92vw;max-height:92vh;border-radius:8px;box-shadow:0 8px 40px #0009;cursor:default}.lb-img.lb-img-detached{max-width:100%;max-height:100%;border-radius:0;box-shadow:none;object-fit:contain;flex:1}.lb-close{position:absolute;top:16px;right:16px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lb-close:hover{background:#ffffff4d}.lb-detach-btn{position:absolute;top:16px;right:60px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lb-detach-btn:hover{background:#ffffff4d}.lb-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.2) 50%);border-bottom-right-radius:12px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i8.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "component", type: InboxListComponent, selector: "app-inbox-list" }, { kind: "component", type: ChatThreadComponent, selector: "app-chat-thread", outputs: ["lightboxOpen"] }, { kind: "component", type: NewConversationComponent, selector: "app-new-conversation" }, { kind: "component", type: GroupManagerComponent, selector: "app-group-manager" }] });
+  `, isInline: true, styles: [".sidebar{position:fixed;top:0;bottom:0;width:400px;background:#041322;z-index:9999;display:flex;flex-direction:column;box-shadow:0 0 40px #0009;transition:transform .3s cubic-bezier(.4,0,.2,1);container-type:inline-size}.sidebar.side-right{right:0;transform:translate(100%)}.sidebar.side-left{left:0;transform:translate(-100%)}.sidebar.open.side-right,.sidebar.open.side-left{transform:translate(0)}.resize-handle{position:absolute;top:0;bottom:0;width:5px;cursor:ew-resize;z-index:1;transition:background .15s}.resize-handle:hover,.resize-handle:active{background:#ffffff26}.resize-handle.handle-left{left:0}.resize-handle.handle-right{right:0}.sidebar-header{display:flex;align-items:center;justify-content:space-between;padding:8px 10px 8px 14px;border-bottom:1px solid rgba(255,255,255,.15);flex-shrink:0;position:relative;z-index:2;min-height:48px}.header-left{display:flex;align-items:center;gap:8px;min-width:0;flex:1 1 auto}.header-title{font-size:clamp(11px,5cqw,16px);font-weight:700;color:#fff;letter-spacing:.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.header-actions{display:flex;align-items:center;gap:0;flex-shrink:0}.btn-spacer{width:12px}.hdr-btn{width:32px;height:32px;min-width:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:6px!important;transition:background .15s,box-shadow .15s;--mdc-icon-button-state-layer-size: 32px}.hdr-btn .mat-mdc-button-touch-target{width:32px;height:32px}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{font-size:20px;color:#ffffffd9}@container (max-width: 330px){.sidebar-header{padding:8px 6px 8px 10px}.header-title{display:none}.header-left{flex:0 0 auto;gap:0}.btn-spacer{width:4px}.hdr-btn{width:28px;height:28px;min-width:28px;--mdc-icon-button-state-layer-size: 28px}.hdr-btn mat-icon{font-size:18px}}.sidebar-content{flex:1;overflow:hidden}.messaging-toast{position:absolute;left:16px;right:16px;bottom:16px;z-index:5;display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;background:#192a3ff5;border:1px solid rgba(255,255,255,.14);box-shadow:0 10px 26px #00000059;color:#fff;font-size:13px;pointer-events:none}.messaging-toast.success{background:#14532df5;border-color:#22c55e66}.messaging-toast.error{background:#7f1d1df5;border-color:#f8717173}.messaging-toast mat-icon{font-size:18px;width:18px;height:18px}.status-dot{width:8px;height:8px;border-radius:50%;background:#fff6;flex-shrink:0}.status-dot.connected{background:#22c55e;box-shadow:0 0 0 3px #22c55e2e}.status-dot.connecting{background:#f59e0b;animation:blink 1s infinite}.status-dot.disconnected{background:#ef4444;box-shadow:0 0 0 3px #ef444424}@keyframes blink{50%{opacity:.3}}.sidebar.floating{position:fixed!important;right:unset!important;left:80px;top:80px;transform:none!important;border-radius:12px;overflow:hidden;resize:none;min-width:280px;min-height:320px}.sidebar.floating:not(.open){display:none}.drag-handle{cursor:grab;-webkit-user-select:none;user-select:none}.drag-handle:active{cursor:grabbing}.float-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.25) 50%);border-bottom-right-radius:12px}@media (max-width: 480px){.sidebar{width:100%!important}.resize-handle{display:none}}.lb-overlay{position:fixed;inset:0;background:#000000e0;display:flex;align-items:center;justify-content:center;z-index:99999;cursor:pointer}.lb-overlay.lb-detached{inset:unset;background:#0c1f35;border:1px solid rgba(255,255,255,.18);border-radius:12px;box-shadow:0 12px 48px #000000b3;display:flex;flex-direction:column;overflow:hidden;cursor:default;min-width:240px;min-height:200px}.lb-drag-bar{display:flex;align-items:center;justify-content:space-between;padding:6px 8px 6px 12px;background:#041322;border-bottom:1px solid rgba(255,255,255,.12);cursor:grab;flex-shrink:0;-webkit-user-select:none;user-select:none}.lb-drag-bar:active{cursor:grabbing}.lb-drag-title{font-size:12px;color:#fff9;letter-spacing:.4px}.lb-drag-actions{display:flex;gap:2px}.lb-action-btn{background:transparent;border:none;border-radius:6px;width:28px;height:28px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#ffffffb3;transition:background .15s}.lb-action-btn:hover{background:#ffffff26}.lb-action-btn mat-icon{font-size:16px;width:16px;height:16px}.lb-img{max-width:92vw;max-height:92vh;border-radius:8px;box-shadow:0 8px 40px #0009;cursor:default}.lb-img.lb-img-detached{max-width:100%;max-height:100%;border-radius:0;box-shadow:none;object-fit:contain;flex:1}.lb-close{position:absolute;top:16px;right:16px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lb-close:hover{background:#ffffff4d}.lb-detach-btn{position:absolute;top:16px;right:60px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lb-detach-btn:hover{background:#ffffff4d}.lb-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.2) 50%);border-bottom-right-radius:12px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i5.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i8.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "component", type: InboxListComponent, selector: "app-inbox-list" }, { kind: "component", type: ChatThreadComponent, selector: "app-chat-thread", outputs: ["lightboxOpen"] }, { kind: "component", type: NewConversationComponent, selector: "app-new-conversation" }, { kind: "component", type: GroupManagerComponent, selector: "app-group-manager" }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: ChatPanelComponent, decorators: [{
             type: Component,
             args: [{ selector: 'app-chat-panel', standalone: true, imports: [
-                        CommonModule, MatIconModule, MatButtonModule, MatTooltipModule,
+                        CommonModule, FormsModule, MatIconModule, MatButtonModule, MatTooltipModule,
                         InboxListComponent, ChatThreadComponent,
                         NewConversationComponent, GroupManagerComponent,
                     ], template: `
@@ -4446,6 +5433,11 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
         <app-group-manager *ngIf="activeView === 'group-manager'"></app-group-manager>
       </div>
 
+      <div *ngIf="toast" class="messaging-toast" [class.success]="toast.type === 'success'" [class.error]="toast.type === 'error'">
+        <mat-icon>{{ toast.type === 'error' ? 'error' : toast.type === 'success' ? 'check_circle' : 'info' }}</mat-icon>
+        <span>{{ toast.message }}</span>
+      </div>
+
       <!-- Resize corner (floating mode only) -->
       <div *ngIf="isFloating" class="float-resize-corner" (mousedown)="onFloatResizeStart($event)"></div>
     </div>
@@ -4484,7 +5476,7 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
       </ng-container>
       <div *ngIf="lightboxDetached" class="lb-resize-corner" (mousedown)="onLbResizeStart($event)"></div>
     </div>
-  `, styles: [".sidebar{position:fixed;top:0;bottom:0;width:400px;background:#041322;z-index:9999;display:flex;flex-direction:column;box-shadow:0 0 40px #0009;transition:transform .3s cubic-bezier(.4,0,.2,1)}.sidebar.side-right{right:0;transform:translate(100%)}.sidebar.side-left{left:0;transform:translate(-100%)}.sidebar.open.side-right,.sidebar.open.side-left{transform:translate(0)}.resize-handle{position:absolute;top:0;bottom:0;width:5px;cursor:ew-resize;z-index:1;transition:background .15s}.resize-handle:hover,.resize-handle:active{background:#ffffff26}.resize-handle.handle-left{left:0}.resize-handle.handle-right{right:0}.sidebar-header{display:flex;align-items:center;justify-content:space-between;padding:8px 10px 8px 14px;border-bottom:1px solid rgba(255,255,255,.15);flex-shrink:0;position:relative;z-index:2;min-height:48px}.header-left{display:flex;align-items:center;gap:8px;min-width:0}.header-title{font-size:16px;font-weight:700;color:#fff;letter-spacing:.3px;white-space:nowrap}.header-actions{display:flex;align-items:center;gap:0}.btn-spacer{width:12px}.hdr-btn{width:32px;height:32px;min-width:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:6px!important;transition:background .15s,box-shadow .15s;--mdc-icon-button-state-layer-size: 32px}.hdr-btn .mat-mdc-button-touch-target{width:32px;height:32px}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{font-size:20px;color:#ffffffd9}.sidebar-content{flex:1;overflow:hidden}.status-dot{width:8px;height:8px;border-radius:50%;background:#fff6;flex-shrink:0}.status-dot.connected{background:#22c55e;box-shadow:0 0 0 3px #22c55e2e}.status-dot.connecting{background:#f59e0b;animation:blink 1s infinite}.status-dot.disconnected{background:#ef4444;box-shadow:0 0 0 3px #ef444424}@keyframes blink{50%{opacity:.3}}.sidebar.floating{position:fixed!important;right:unset!important;left:80px;top:80px;transform:none!important;border-radius:12px;overflow:hidden;resize:none;min-width:280px;min-height:320px}.sidebar.floating:not(.open){display:none}.drag-handle{cursor:grab;-webkit-user-select:none;user-select:none}.drag-handle:active{cursor:grabbing}.float-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.25) 50%);border-bottom-right-radius:12px}@media (max-width: 480px){.sidebar{width:100%!important}.resize-handle{display:none}}.lb-overlay{position:fixed;inset:0;background:#000000e0;display:flex;align-items:center;justify-content:center;z-index:99999;cursor:pointer}.lb-overlay.lb-detached{inset:unset;background:#0c1f35;border:1px solid rgba(255,255,255,.18);border-radius:12px;box-shadow:0 12px 48px #000000b3;display:flex;flex-direction:column;overflow:hidden;cursor:default;min-width:240px;min-height:200px}.lb-drag-bar{display:flex;align-items:center;justify-content:space-between;padding:6px 8px 6px 12px;background:#041322;border-bottom:1px solid rgba(255,255,255,.12);cursor:grab;flex-shrink:0;-webkit-user-select:none;user-select:none}.lb-drag-bar:active{cursor:grabbing}.lb-drag-title{font-size:12px;color:#fff9;letter-spacing:.4px}.lb-drag-actions{display:flex;gap:2px}.lb-action-btn{background:transparent;border:none;border-radius:6px;width:28px;height:28px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#ffffffb3;transition:background .15s}.lb-action-btn:hover{background:#ffffff26}.lb-action-btn mat-icon{font-size:16px;width:16px;height:16px}.lb-img{max-width:92vw;max-height:92vh;border-radius:8px;box-shadow:0 8px 40px #0009;cursor:default}.lb-img.lb-img-detached{max-width:100%;max-height:100%;border-radius:0;box-shadow:none;object-fit:contain;flex:1}.lb-close{position:absolute;top:16px;right:16px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lb-close:hover{background:#ffffff4d}.lb-detach-btn{position:absolute;top:16px;right:60px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lb-detach-btn:hover{background:#ffffff4d}.lb-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.2) 50%);border-bottom-right-radius:12px}\n"] }]
+  `, styles: [".sidebar{position:fixed;top:0;bottom:0;width:400px;background:#041322;z-index:9999;display:flex;flex-direction:column;box-shadow:0 0 40px #0009;transition:transform .3s cubic-bezier(.4,0,.2,1);container-type:inline-size}.sidebar.side-right{right:0;transform:translate(100%)}.sidebar.side-left{left:0;transform:translate(-100%)}.sidebar.open.side-right,.sidebar.open.side-left{transform:translate(0)}.resize-handle{position:absolute;top:0;bottom:0;width:5px;cursor:ew-resize;z-index:1;transition:background .15s}.resize-handle:hover,.resize-handle:active{background:#ffffff26}.resize-handle.handle-left{left:0}.resize-handle.handle-right{right:0}.sidebar-header{display:flex;align-items:center;justify-content:space-between;padding:8px 10px 8px 14px;border-bottom:1px solid rgba(255,255,255,.15);flex-shrink:0;position:relative;z-index:2;min-height:48px}.header-left{display:flex;align-items:center;gap:8px;min-width:0;flex:1 1 auto}.header-title{font-size:clamp(11px,5cqw,16px);font-weight:700;color:#fff;letter-spacing:.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.header-actions{display:flex;align-items:center;gap:0;flex-shrink:0}.btn-spacer{width:12px}.hdr-btn{width:32px;height:32px;min-width:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:6px!important;transition:background .15s,box-shadow .15s;--mdc-icon-button-state-layer-size: 32px}.hdr-btn .mat-mdc-button-touch-target{width:32px;height:32px}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{font-size:20px;color:#ffffffd9}@container (max-width: 330px){.sidebar-header{padding:8px 6px 8px 10px}.header-title{display:none}.header-left{flex:0 0 auto;gap:0}.btn-spacer{width:4px}.hdr-btn{width:28px;height:28px;min-width:28px;--mdc-icon-button-state-layer-size: 28px}.hdr-btn mat-icon{font-size:18px}}.sidebar-content{flex:1;overflow:hidden}.messaging-toast{position:absolute;left:16px;right:16px;bottom:16px;z-index:5;display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;background:#192a3ff5;border:1px solid rgba(255,255,255,.14);box-shadow:0 10px 26px #00000059;color:#fff;font-size:13px;pointer-events:none}.messaging-toast.success{background:#14532df5;border-color:#22c55e66}.messaging-toast.error{background:#7f1d1df5;border-color:#f8717173}.messaging-toast mat-icon{font-size:18px;width:18px;height:18px}.status-dot{width:8px;height:8px;border-radius:50%;background:#fff6;flex-shrink:0}.status-dot.connected{background:#22c55e;box-shadow:0 0 0 3px #22c55e2e}.status-dot.connecting{background:#f59e0b;animation:blink 1s infinite}.status-dot.disconnected{background:#ef4444;box-shadow:0 0 0 3px #ef444424}@keyframes blink{50%{opacity:.3}}.sidebar.floating{position:fixed!important;right:unset!important;left:80px;top:80px;transform:none!important;border-radius:12px;overflow:hidden;resize:none;min-width:280px;min-height:320px}.sidebar.floating:not(.open){display:none}.drag-handle{cursor:grab;-webkit-user-select:none;user-select:none}.drag-handle:active{cursor:grabbing}.float-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.25) 50%);border-bottom-right-radius:12px}@media (max-width: 480px){.sidebar{width:100%!important}.resize-handle{display:none}}.lb-overlay{position:fixed;inset:0;background:#000000e0;display:flex;align-items:center;justify-content:center;z-index:99999;cursor:pointer}.lb-overlay.lb-detached{inset:unset;background:#0c1f35;border:1px solid rgba(255,255,255,.18);border-radius:12px;box-shadow:0 12px 48px #000000b3;display:flex;flex-direction:column;overflow:hidden;cursor:default;min-width:240px;min-height:200px}.lb-drag-bar{display:flex;align-items:center;justify-content:space-between;padding:6px 8px 6px 12px;background:#041322;border-bottom:1px solid rgba(255,255,255,.12);cursor:grab;flex-shrink:0;-webkit-user-select:none;user-select:none}.lb-drag-bar:active{cursor:grabbing}.lb-drag-title{font-size:12px;color:#fff9;letter-spacing:.4px}.lb-drag-actions{display:flex;gap:2px}.lb-action-btn{background:transparent;border:none;border-radius:6px;width:28px;height:28px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#ffffffb3;transition:background .15s}.lb-action-btn:hover{background:#ffffff26}.lb-action-btn mat-icon{font-size:16px;width:16px;height:16px}.lb-img{max-width:92vw;max-height:92vh;border-radius:8px;box-shadow:0 8px 40px #0009;cursor:default}.lb-img.lb-img-detached{max-width:100%;max-height:100%;border-radius:0;box-shadow:none;object-fit:contain;flex:1}.lb-close{position:absolute;top:16px;right:16px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lb-close:hover{background:#ffffff4d}.lb-detach-btn{position:absolute;top:16px;right:60px;background:#ffffff26;border:none;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s}.lb-detach-btn:hover{background:#ffffff4d}.lb-resize-corner{position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:se-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.2) 50%);border-bottom-right-radius:12px}\n"] }]
         }], ctorParameters: () => [{ type: MessagingStoreService }] });
 
 class MessagingOverlayComponent {

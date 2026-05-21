@@ -15,7 +15,7 @@ import { InboxItem } from '../../models/messaging.models';
   imports: [CommonModule, FormsModule, MatIconModule, MatButtonModule, MatRippleModule, MatTooltipModule],
   template: `
     <div class="inbox-container">
-      <div class="search-bar">
+      <div *ngIf="activeTab !== 'projects' && activeTab !== 'settings'" class="search-bar">
         <mat-icon class="search-icon">search</mat-icon>
         <input
           type="text"
@@ -51,13 +51,104 @@ import { InboxItem } from '../../models/messaging.models';
           </div>
         </div>
 
-        <div *ngIf="filteredInbox.length === 0" class="empty-state">
-          <mat-icon>forum</mat-icon>
-          <p>{{ searchQuery ? 'No matching conversations' : 'No conversations yet' }}</p>
-          <button *ngIf="!searchQuery" mat-stroked-button color="primary" (click)="onNewConversation()">
+        <div *ngIf="filteredInbox.length === 0 && activeTab !== 'projects' && activeTab !== 'settings'" class="empty-state">
+          <mat-icon>{{ activeTab === 'groups' ? 'group' : 'forum' }}</mat-icon>
+          <p>{{ emptyStateText }}</p>
+          <button *ngIf="!searchQuery && activeTab !== 'groups'" mat-stroked-button color="primary" (click)="onNewConversation()">
             Start a conversation
           </button>
+          <button *ngIf="!searchQuery && activeTab === 'groups'" mat-stroked-button color="primary" (click)="onCreateGroup()">
+            Create a group
+          </button>
         </div>
+
+        <div *ngIf="activeTab === 'projects'" class="empty-state projects-state">
+          <mat-icon>workspaces</mat-icon>
+          <p>Coming soon</p>
+        </div>
+
+        <div *ngIf="activeTab === 'settings'" class="settings-panel">
+          <div class="settings-card">
+            <div class="settings-header">
+              <div class="settings-icon">
+                <mat-icon>{{ notificationsMuted || notificationVolume <= 0 ? 'volume_off' : 'volume_up' }}</mat-icon>
+              </div>
+              <div>
+                <h4>Notification Sound</h4>
+                <p>Control message alerts for this browser.</p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              mat-stroked-button
+              class="settings-toggle"
+              (click)="toggleNotificationsMuted()"
+            >
+              <mat-icon>{{ notificationsMuted ? 'volume_up' : 'volume_off' }}</mat-icon>
+              {{ notificationsMuted ? 'Unmute notifications' : 'Mute notifications' }}
+            </button>
+
+            <label class="volume-label" for="messaging-volume-slider">
+              Volume
+              <span>{{ (notificationVolume * 100) | number:'1.0-0' }}%</span>
+            </label>
+            <input
+              id="messaging-volume-slider"
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              class="settings-volume"
+              [(ngModel)]="notificationVolume"
+              (ngModelChange)="onNotificationVolumeChange($event)"
+              (change)="previewNotificationSound()"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div class="inbox-tabs" role="tablist" aria-label="Conversation filters">
+        <button
+          type="button"
+          class="inbox-tab"
+          [class.active]="activeTab === 'all'"
+          (click)="setActiveTab('all')"
+        >
+          All
+        </button>
+        <button
+          type="button"
+          class="inbox-tab"
+          [class.active]="activeTab === 'direct'"
+          (click)="setActiveTab('direct')"
+        >
+          Chats
+        </button>
+        <button
+          type="button"
+          class="inbox-tab"
+          [class.active]="activeTab === 'groups'"
+          (click)="setActiveTab('groups')"
+        >
+          Groups
+        </button>
+        <button
+          type="button"
+          class="inbox-tab"
+          [class.active]="activeTab === 'projects'"
+          (click)="setActiveTab('projects')"
+        >
+          Projects
+        </button>
+        <button
+          type="button"
+          class="inbox-tab"
+          [class.active]="activeTab === 'settings'"
+          (click)="setActiveTab('settings')"
+        >
+          Settings
+        </button>
       </div>
 
       <!-- Context Menu -->
@@ -72,8 +163,8 @@ import { InboxItem } from '../../models/messaging.models';
           <span>Clear conversation</span>
         </div>
         <div class="ctx-item ctx-danger" (click)="deleteChat()">
-          <mat-icon>delete</mat-icon>
-          <span>{{ contextMenu.item.is_group ? 'Delete group' : 'Delete conversation' }}</span>
+          <mat-icon>{{ contextMenu.item.is_group ? 'logout' : 'delete' }}</mat-icon>
+          <span>{{ contextMenu.item.is_group ? 'Exit group' : 'Delete conversation' }}</span>
         </div>
       </div>
       <div *ngIf="contextMenu" class="ctx-backdrop" (click)="closeContextMenu()"></div>
@@ -85,6 +176,7 @@ import { InboxItem } from '../../models/messaging.models';
       flex-direction: column;
       height: 100%;
       background: transparent;
+      container-type: inline-size;
     }
 
     .search-bar {
@@ -117,9 +209,76 @@ import { InboxItem } from '../../models/messaging.models';
       color: rgba(255, 255, 255, 0.6);
     }
 
+    .inbox-tabs {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 5px;
+      padding: 10px 16px 12px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      flex-shrink: 0;
+    }
+
+    .inbox-tab {
+      min-width: 0;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(255, 255, 255, 0.06);
+      color: rgba(255, 255, 255, 0.72);
+      border-radius: 999px;
+      padding: 7px 4px;
+      font-size: clamp(9px, 3.1cqw, 11px);
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+      text-align: center;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+
+    .inbox-tab:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+    }
+
+    .inbox-tab.active {
+      background: rgba(26, 95, 168, 0.35);
+      border-color: rgba(127, 180, 255, 0.45);
+      color: #fff;
+    }
+
+    @container (max-width: 330px) {
+      .inbox-tabs {
+        gap: 3px;
+        padding: 8px 8px 10px;
+      }
+
+      .inbox-tab {
+        padding: 6px 2px;
+        letter-spacing: -0.2px;
+      }
+    }
+
+    @container (max-width: 280px) {
+      .inbox-tabs {
+        gap: 2px;
+        padding-left: 6px;
+        padding-right: 6px;
+      }
+
+      .inbox-tab {
+        font-size: 8.5px;
+      }
+    }
+
     .conversation-list {
       flex: 1;
       overflow-y: auto;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    .conversation-list::-webkit-scrollbar {
+      display: none;
     }
 
     .conversation-item {
@@ -252,6 +411,90 @@ import { InboxItem } from '../../models/messaging.models';
       font-size: 14px;
     }
 
+    .projects-state p {
+      margin-bottom: 0;
+    }
+
+    .settings-panel {
+      padding: 16px;
+      color: #fff;
+    }
+
+    .settings-card {
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      padding: 16px;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+    }
+
+    .settings-header {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 16px;
+    }
+
+    .settings-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: rgba(26, 95, 168, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .settings-icon mat-icon {
+      color: #bfdbfe;
+    }
+
+    .settings-header h4 {
+      margin: 0 0 4px;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .settings-header p {
+      margin: 0;
+      color: rgba(255, 255, 255, 0.65);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .settings-toggle {
+      width: 100%;
+      justify-content: center;
+      border-radius: 10px;
+      color: #fff !important;
+      border-color: rgba(255, 255, 255, 0.2) !important;
+      margin-bottom: 16px;
+    }
+
+    .settings-toggle mat-icon {
+      margin-right: 8px;
+      font-size: 18px;
+      width: 18px;
+      height: 18px;
+    }
+
+    .volume-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: rgba(255, 255, 255, 0.78);
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .settings-volume {
+      width: 100%;
+      accent-color: #7fb4ff;
+      cursor: pointer;
+    }
+
     .context-menu {
       position: fixed;
       z-index: 10001;
@@ -301,13 +544,21 @@ import { InboxItem } from '../../models/messaging.models';
 export class InboxListComponent implements OnInit, OnDestroy {
   inbox: InboxItem[] = [];
   searchQuery = '';
+  activeTab: 'all' | 'direct' | 'groups' | 'projects' | 'settings' = 'all';
+  notificationVolume = 0.35;
+  notificationsMuted = false;
   contextMenu: { x: number; y: number; item: InboxItem } | null = null;
+  private readonly tabStorageKey = 'messaging_inbox_active_tab';
   private sub!: Subscription;
 
   constructor(private store: MessagingStoreService) {}
 
   ngOnInit(): void {
-    this.sub = this.store.inbox.subscribe((items) => (this.inbox = items));
+    this.activeTab = this.getSavedTab();
+    this.sub = new Subscription();
+    this.sub.add(this.store.inbox.subscribe((items) => (this.inbox = items)));
+    this.sub.add(this.store.notificationVolume.subscribe((volume) => (this.notificationVolume = volume)));
+    this.sub.add(this.store.notificationsMuted.subscribe((muted) => (this.notificationsMuted = muted)));
   }
 
   ngOnDestroy(): void {
@@ -315,13 +566,57 @@ export class InboxListComponent implements OnInit, OnDestroy {
   }
 
   get filteredInbox(): InboxItem[] {
-    if (!this.searchQuery.trim()) return this.inbox;
+    if (this.activeTab === 'projects' || this.activeTab === 'settings') return [];
+    const tabbed = this.inbox.filter((item) => {
+      if (this.activeTab === 'direct') return !item.is_group;
+      if (this.activeTab === 'groups') return item.is_group;
+      return true;
+    });
+    if (!this.searchQuery.trim()) return tabbed;
     const q = this.searchQuery.toLowerCase();
-    return this.inbox.filter(
+    return tabbed.filter(
       (item) =>
         (item.name || '').toLowerCase().includes(q) ||
         (item.last_message_preview || '').toLowerCase().includes(q)
     );
+  }
+
+  get emptyStateText(): string {
+    if (this.searchQuery.trim()) return 'No matching conversations';
+    if (this.activeTab === 'direct') return 'No chats yet';
+    if (this.activeTab === 'groups') return 'No groups yet';
+    return 'No conversations yet';
+  }
+
+  setActiveTab(tab: 'all' | 'direct' | 'groups' | 'projects' | 'settings'): void {
+    this.activeTab = tab;
+    localStorage.setItem(this.tabStorageKey, tab);
+    this.contextMenu = null;
+  }
+
+  private getSavedTab(): 'all' | 'direct' | 'groups' | 'projects' | 'settings' {
+    const saved = localStorage.getItem(this.tabStorageKey);
+    return saved === 'direct' || saved === 'groups' || saved === 'projects' || saved === 'settings' || saved === 'all'
+      ? saved
+      : 'all';
+  }
+
+  toggleNotificationsMuted(): void {
+    const nextMuted = !this.notificationsMuted;
+    this.store.setNotificationsMuted(nextMuted);
+    if (!nextMuted && this.notificationVolume > 0) {
+      this.store.testNotificationSound();
+    }
+  }
+
+  onNotificationVolumeChange(value: number | string): void {
+    this.store.setNotificationVolume(Number(value));
+  }
+
+  previewNotificationSound(): void {
+    if (!this.notificationsMuted && this.notificationVolume > 0) {
+      this.store.testNotificationSound();
+    }
   }
 
   openConversation(item: InboxItem): void {

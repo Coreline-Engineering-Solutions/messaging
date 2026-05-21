@@ -1,5 +1,6 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { MatIconModule } from '@angular/material/icon';
 import { MatButtonModule } from '@angular/material/button';
 import { MatTooltipModule } from '@angular/material/tooltip';
@@ -15,7 +16,7 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
   selector: 'app-chat-panel',
   standalone: true,
   imports: [
-    CommonModule, MatIconModule, MatButtonModule, MatTooltipModule,
+    CommonModule, FormsModule, MatIconModule, MatButtonModule, MatTooltipModule,
     InboxListComponent, ChatThreadComponent,
     NewConversationComponent, GroupManagerComponent,
   ],
@@ -109,6 +110,11 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
         <app-group-manager *ngIf="activeView === 'group-manager'"></app-group-manager>
       </div>
 
+      <div *ngIf="toast" class="messaging-toast" [class.success]="toast.type === 'success'" [class.error]="toast.type === 'error'">
+        <mat-icon>{{ toast.type === 'error' ? 'error' : toast.type === 'success' ? 'check_circle' : 'info' }}</mat-icon>
+        <span>{{ toast.message }}</span>
+      </div>
+
       <!-- Resize corner (floating mode only) -->
       <div *ngIf="isFloating" class="float-resize-corner" (mousedown)="onFloatResizeStart($event)"></div>
     </div>
@@ -160,6 +166,7 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
       flex-direction: column;
       box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
       transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      container-type: inline-size;
     }
 
     .sidebar.side-right {
@@ -222,20 +229,24 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
       align-items: center;
       gap: 8px;
       min-width: 0;
+      flex: 1 1 auto;
     }
 
     .header-title {
-      font-size: 16px;
+      font-size: clamp(11px, 5cqw, 16px);
       font-weight: 700;
       color: #fff;
       letter-spacing: 0.3px;
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .header-actions {
       display: flex;
       align-items: center;
       gap: 0;
+      flex-shrink: 0;
     }
 
     .btn-spacer {
@@ -270,10 +281,75 @@ import { GroupManagerComponent } from '../group-manager/group-manager.component'
       color: rgba(255, 255, 255, 0.85);
     }
 
+    @container (max-width: 330px) {
+      .sidebar-header {
+        padding: 8px 6px 8px 10px;
+      }
+
+      .header-title {
+        display: none;
+      }
+
+      .header-left {
+        flex: 0 0 auto;
+        gap: 0;
+      }
+
+      .btn-spacer {
+        width: 4px;
+      }
+
+      .hdr-btn {
+        width: 28px;
+        height: 28px;
+        min-width: 28px;
+        --mdc-icon-button-state-layer-size: 28px;
+      }
+
+      .hdr-btn mat-icon {
+        font-size: 18px;
+      }
+    }
+
     /* ── Content ── */
     .sidebar-content {
       flex: 1;
       overflow: hidden;
+    }
+
+    .messaging-toast {
+      position: absolute;
+      left: 16px;
+      right: 16px;
+      bottom: 16px;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(25, 42, 63, 0.96);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+      color: #fff;
+      font-size: 13px;
+      pointer-events: none;
+    }
+
+    .messaging-toast.success {
+      background: rgba(20, 83, 45, 0.96);
+      border-color: rgba(34, 197, 94, 0.4);
+    }
+
+    .messaging-toast.error {
+      background: rgba(127, 29, 29, 0.96);
+      border-color: rgba(248, 113, 113, 0.45);
+    }
+
+    .messaging-toast mat-icon {
+      font-size: 18px;
+      width: 18px;
+      height: 18px;
     }
 
     .status-dot {
@@ -450,6 +526,7 @@ export class ChatPanelComponent implements OnInit, OnDestroy {
   wsStatus: string = 'disconnected';
   side: SidebarSide = 'right';
   sidebarWidth = 400;
+  toast: { message: string; type: 'info' | 'success' | 'error' } | null = null;
 
   // ── Floating window state ──
   isFloating = false;
@@ -528,11 +605,13 @@ export class ChatPanelComponent implements OnInit, OnDestroy {
       this.store.activeView,
       this.store.wsStatus,
       this.store.sidebarSide,
-    ]).subscribe(([open, view, ws, side]) => {
+      this.store.toast,
+    ]).subscribe(([open, view, ws, side, toast]) => {
       this.isOpen = open;
       this.activeView = view;
       this.wsStatus = ws;
       this.side = side;
+      this.toast = toast;
     });
   }
 

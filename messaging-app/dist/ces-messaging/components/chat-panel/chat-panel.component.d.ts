@@ -9,6 +9,10 @@ export declare class ChatPanelComponent implements OnInit, OnDestroy {
     wsStatus: string;
     side: SidebarSide;
     sidebarWidth: number;
+    toast: {
+        message: string;
+        type: 'info' | 'success' | 'error';
+    } | null;
     isFloating: boolean;
     floatX: number;
     floatY: number;

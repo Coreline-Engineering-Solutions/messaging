@@ -6,16 +6,26 @@ export declare class InboxListComponent implements OnInit, OnDestroy {
     private store;
     inbox: InboxItem[];
     searchQuery: string;
+    activeTab: 'all' | 'direct' | 'groups' | 'projects' | 'settings';
+    notificationVolume: number;
+    notificationsMuted: boolean;
     contextMenu: {
         x: number;
         y: number;
         item: InboxItem;
     } | null;
+    private readonly tabStorageKey;
     private sub;
     constructor(store: MessagingStoreService);
     ngOnInit(): void;
     ngOnDestroy(): void;
     get filteredInbox(): InboxItem[];
+    get emptyStateText(): string;
+    setActiveTab(tab: 'all' | 'direct' | 'groups' | 'projects' | 'settings'): void;
+    private getSavedTab;
+    toggleNotificationsMuted(): void;
+    onNotificationVolumeChange(value: number | string): void;
+    previewNotificationSound(): void;
     openConversation(item: InboxItem): void;
     onNewConversation(): void;
     onCreateGroup(): void;

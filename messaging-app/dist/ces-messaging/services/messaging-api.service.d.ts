@@ -12,7 +12,7 @@ export declare class MessagingApiService {
     constructor(http: HttpClient, auth: AuthService, config: MessagingConfig);
     getInbox(contactId: string): Observable<InboxItem[]>;
     getMessages(conversationId: string, contactId: string, beforeMessageId?: string, limit?: number): Observable<Message[]>;
-    sendMessage(conversationId: string, senderContactId: string, content: string, messageType?: 'TEXT' | 'IMAGE', mediaUrl?: string): Observable<any>;
+    sendMessage(conversationId: string, senderContactId: string, content: string, messageType?: 'TEXT' | 'IMAGE' | 'SYSTEM', mediaUrl?: string): Observable<any>;
     sendDirectMessage(senderContactId: string, recipientContactId: string, content: string, messageType?: 'TEXT' | 'IMAGE'): Observable<any>;
     markConversationRead(conversationId: string, contactId: string): Observable<any>;
     createConversation(creatorContactId: string, participantContactIds: string[], name?: string): Observable<Conversation>;

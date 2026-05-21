@@ -54,7 +54,7 @@ export class MessagingApiService {
     conversationId: string,
     senderContactId: string,
     content: string,
-    messageType: 'TEXT' | 'IMAGE' = 'TEXT',
+    messageType: 'TEXT' | 'IMAGE' | 'SYSTEM' = 'TEXT',
     mediaUrl?: string
   ): Observable<any> {
     const body: any = {
@@ -157,9 +157,7 @@ export class MessagingApiService {
   }
 
   deleteGroup(conversationId: string, contactId: string): Observable<any> {
-    return this.http.post(`${this.base}/groups/${conversationId}/delete`, {
-      contactId,
-    });
+    return this.manageGroup(contactId, 'remove', conversationId);
   }
 
   // ── Attachments ──

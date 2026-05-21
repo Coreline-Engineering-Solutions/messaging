@@ -36,7 +36,7 @@ export interface Message {
     sender_username?: string;
     sender_first_name?: string;
     sender_last_name?: string;
-    message_type: 'TEXT' | 'IMAGE' | 'FILE';
+    message_type: 'TEXT' | 'IMAGE' | 'FILE' | 'SYSTEM';
     content?: string;
     media_url?: string;
     created_at: string;
@@ -44,6 +44,14 @@ export interface Message {
     read_at?: string;
     edited_at?: string;
     deleted_at?: string;
+    read_by?: Array<string | number | {
+        contact_id?: string | number;
+        username?: string;
+        name?: string;
+        display_name?: string;
+        email?: string;
+    }>;
+    read_by_names?: string[];
     parent_message_id?: string;
     thread_count?: number;
     reactions?: MessageReaction[];

@@ -36,6 +36,14 @@ export class MessagingStoreService implements OnDestroy {
   private panelSize$ = new BehaviorSubject<{ width: number; height: number }>({ width: 380, height: 560 });
   private wasOpenBeforeDrag$ = new BehaviorSubject<boolean>(false);
   private panelFloating$ = new BehaviorSubject<boolean>(false);
+  private notificationVolume$ = new BehaviorSubject<number>(
+    Number(localStorage.getItem('messaging_notification_volume') ?? '0.35')
+  );
+  private notificationsMuted$ = new BehaviorSubject<boolean>(
+    localStorage.getItem('messaging_notifications_muted') === 'true'
+  );
+  private toast$ = new BehaviorSubject<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
+  private removedGroupIds$ = new BehaviorSubject<Set<string>>(new Set());
 
   // ── Public observables ──
   readonly inbox = this.inbox$.asObservable();
@@ -53,11 +61,18 @@ export class MessagingStoreService implements OnDestroy {
   readonly wasOpenBeforeDrag = this.wasOpenBeforeDrag$.asObservable();
   readonly sidebarSide = this.sidebarSide$.asObservable();
   readonly panelFloating = this.panelFloating$.asObservable();
+  readonly notificationVolume = this.notificationVolume$.asObservable();
+  readonly notificationsMuted = this.notificationsMuted$.asObservable();
+  readonly toast = this.toast$.asObservable();
+  readonly removedGroupIds = this.removedGroupIds$.asObservable();
 
   private wsSub: Subscription | null = null;
   private destroy$ = new Subject<void>();
   private pollTimer: any = null;
   private groupSettings$ = new BehaviorSubject<{ conversationId: string; name: string } | null>(null);
+  private deletingConversationIds = new Set<string>();
+  private removalToastShown = new Set<string>();
+  private toastTimer: any = null;
 
   readonly groupSettings = this.groupSettings$.asObservable();
 
@@ -86,6 +101,10 @@ export class MessagingStoreService implements OnDestroy {
 
   teardown(): void {
     this.stopPolling();
+    if (this.toastTimer) {
+      clearTimeout(this.toastTimer);
+      this.toastTimer = null;
+    }
     this.wsService.disconnect();
     this.wsSub?.unsubscribe();
     this.inbox$.next([]);
@@ -95,6 +114,10 @@ export class MessagingStoreService implements OnDestroy {
     this.activeView$.next('inbox');
     this.activeConversationId$.next(null);
     this.totalUnread$.next(0);
+    this.deletingConversationIds.clear();
+    this.removalToastShown.clear();
+    this.removedGroupIds$.next(new Set());
+    this.toast$.next(null);
   }
 
   // ── Polling fallback (inbox only - messages rely on WebSocket) ──
@@ -183,6 +206,36 @@ export class MessagingStoreService implements OnDestroy {
     this.panelFloating$.next(isFloating);
   }
 
+  setNotificationVolume(volume: number): void {
+    const normalized = Math.max(0, Math.min(1, Number(volume)));
+    this.notificationVolume$.next(normalized);
+    localStorage.setItem('messaging_notification_volume', String(normalized));
+    if (normalized > 0 && this.notificationsMuted$.value) {
+      this.setNotificationsMuted(false);
+    }
+  }
+
+  setNotificationsMuted(muted: boolean): void {
+    this.notificationsMuted$.next(muted);
+    localStorage.setItem('messaging_notifications_muted', String(muted));
+  }
+
+  testNotificationSound(): void {
+    this.playSoftNotificationSound(true);
+  }
+
+  showToast(message: string, type: 'info' | 'success' | 'error' = 'info', durationMs = 3000): void {
+    if (this.toastTimer) {
+      clearTimeout(this.toastTimer);
+      this.toastTimer = null;
+    }
+    this.toast$.next({ message, type });
+    this.toastTimer = setTimeout(() => {
+      this.toast$.next(null);
+      this.toastTimer = null;
+    }, durationMs);
+  }
+
   getSidebarSide(): SidebarSide {
     return this.sidebarSide$.value;
   }
@@ -201,7 +254,10 @@ export class MessagingStoreService implements OnDestroy {
             return { ...item, name: item.other_participant_name, is_group: false };
           }
           return { ...item, is_group: isGroup };
-        });
+        }).filter(item =>
+          !this.deletingConversationIds.has(String(item.conversation_id)) &&
+          !this.removedGroupIds$.value.has(String(item.conversation_id))
+        );
         this.inbox$.next(mapped);
         this.recalcUnread(mapped);
 
@@ -257,10 +313,7 @@ export class MessagingStoreService implements OnDestroy {
     }
 
     const existing = this.messagesMap$.value.get(conversationId);
-    if (existing && existing.length > 0) {
-      // Already cached — silent background refresh for new messages, skip reaction hydration
-      this.loadMessages(conversationId, undefined, true);
-    } else {
+    if (!existing || existing.length === 0) {
       this.loadMessages(conversationId);
     }
     this.markAsRead(conversationId);
@@ -271,10 +324,37 @@ export class MessagingStoreService implements OnDestroy {
     const chats = this.openChats$.value.filter((c) => c.conversationId !== conversationId);
     this.openChats$.next(chats);
 
-    if (this.activeConversationId$.value === conversationId) {
+    if (String(this.activeConversationId$.value) === String(conversationId)) {
       this.activeConversationId$.next(null);
       this.activeView$.next('inbox');
     }
+  }
+
+  markGroupRemoved(conversationId: string): void {
+    const id = String(conversationId);
+    if (!id || id === 'undefined') return;
+
+    const next = new Set(this.removedGroupIds$.value);
+    next.add(id);
+    this.removedGroupIds$.next(next);
+
+    const items = this.inbox$.value.filter(i => String(i.conversation_id) !== id);
+    this.inbox$.next(items);
+    this.recalcUnread(items);
+
+    if (!this.removalToastShown.has(id)) {
+      this.removalToastShown.add(id);
+      this.showToast('You were removed from this group', 'info', 5000);
+    }
+  }
+
+  exitRemovedGroup(conversationId: string): void {
+    const id = String(conversationId);
+    const next = new Set(this.removedGroupIds$.value);
+    next.delete(id);
+    this.removedGroupIds$.next(next);
+    this.removalToastShown.delete(id);
+    this.removeConversationFromUi(id);
   }
 
   // ── Messages ──
@@ -296,6 +376,7 @@ export class MessagingStoreService implements OnDestroy {
         const sorted = [...normalized].sort((a, b) => 
           new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
         );
+        sorted.forEach((m) => this.detectGroupRemovalForCurrentUser(m));
 
         const existingById = new Map(existing.map(m => [String(m.message_id), m]));
 
@@ -315,9 +396,11 @@ export class MessagingStoreService implements OnDestroy {
         }
 
         this.messagesMap$.next(map);
-        if (!skipReactionHydration) {
-          this.hydrateReactionsForConversation(conversationId, map.get(conversationId) || []);
-        }
+        this.hydrateReactionsForConversation(
+          conversationId,
+          map.get(conversationId) || [],
+          skipReactionHydration
+        );
         this.loadingMessages$.next(false);
       },
       error: () => {
@@ -326,7 +409,7 @@ export class MessagingStoreService implements OnDestroy {
     });
   }
 
-  sendMessage(conversationId: string | null, content: string, messageType: 'TEXT' | 'IMAGE' = 'TEXT'): void {
+  sendMessage(conversationId: string | null, content: string, messageType: 'TEXT' | 'IMAGE' | 'SYSTEM' = 'TEXT'): void {
     const contactId = this.auth.contactId;
     if (!contactId) return;
 
@@ -350,7 +433,7 @@ export class MessagingStoreService implements OnDestroy {
       message_type: messageType,
       content,
       created_at: new Date().toISOString(),
-      is_read: true,
+      is_read: false,
     };
     this.appendMessage(optimistic);
 
@@ -366,6 +449,7 @@ export class MessagingStoreService implements OnDestroy {
           ...res,
           message_id: String(realId),
           conversation_id: conversationId,
+          message_type: messageType === 'SYSTEM' ? 'SYSTEM' : res?.message_type ?? optimistic.message_type,
           content: pickedContent,
         });
         const map = new Map(this.messagesMap$.value);
@@ -430,9 +514,16 @@ export class MessagingStoreService implements OnDestroy {
     });
   }
 
-  createGroupConversation(participantIds: string[], name: string): void {
+  createGroupConversation(
+    participantIds: string[],
+    name: string,
+    callbacks?: { success?: () => void; error?: () => void }
+  ): void {
     const contactId = this.auth.contactId;
-    if (!contactId) return;
+    if (!contactId) {
+      callbacks?.error?.();
+      return;
+    }
 
     const allParticipants = participantIds.includes(contactId)
       ? participantIds
@@ -441,15 +532,24 @@ export class MessagingStoreService implements OnDestroy {
     this.api.createConversation(contactId, allParticipants, name).subscribe({
       next: (conv) => {
         // Backend may return conversation_id, id, or conversationId
-        const convId = String((conv as any)?.conversation_id || (conv as any)?.id || (conv as any)?.conversationId || '');
+        const convId = String(
+          typeof conv === 'string' || typeof conv === 'number'
+            ? conv
+            : (conv as any)?.conversation_id || (conv as any)?.id || (conv as any)?.conversationId || ''
+        );
         if (!convId) {
           this.loadInbox();
+          callbacks?.error?.();
           return;
         }
         this.loadInbox();
+        this.clearGroupSettings();
         this.openConversation(convId, name, true);
+        callbacks?.success?.();
       },
-      error: () => {},
+      error: () => {
+        callbacks?.error?.();
+      },
     });
   }
 
@@ -484,14 +584,61 @@ export class MessagingStoreService implements OnDestroy {
     action: 'create' | 'add' | 'remove' | 'rename',
     conversationId?: string,
     groupName?: string,
-    participantContactIds?: string[]
+    participantContactIds?: string[],
+    callbacks?: { success?: () => void; error?: () => void }
   ): void {
     const contactId = this.auth.contactId;
-    if (!contactId) return;
+    if (!contactId) {
+      callbacks?.error?.();
+      return;
+    }
+
+    if (action === 'remove' && conversationId && participantContactIds?.length) {
+      const actorName = this.getContactNameById(contactId);
+      const noticeJobs = participantContactIds.map((id) =>
+        this.api.sendMessage(
+          conversationId,
+          contactId,
+          `${actorName} removed ${this.getContactNameById(id)} from the group`,
+          'SYSTEM'
+        ).pipe(catchError(() => of(null)))
+      );
+      const removeJobs = participantContactIds.map((id) =>
+        this.api.manageGroup(id, action, conversationId, groupName)
+      );
+
+      forkJoin(noticeJobs).subscribe({
+        next: () => {
+          forkJoin(removeJobs).subscribe({
+            next: () => {
+              this.loadInbox();
+              callbacks?.success?.();
+            },
+            error: () => {
+              callbacks?.error?.();
+            },
+          });
+        },
+        error: () => {
+          callbacks?.error?.();
+        },
+      });
+      return;
+    }
 
     this.api.manageGroup(contactId, action, conversationId, groupName, participantContactIds).subscribe({
-      next: () => this.loadInbox(),
-      error: () => {},
+      next: () => {
+        this.loadInbox();
+        if (action === 'add' && conversationId && participantContactIds?.length) {
+          const addedNames = participantContactIds.map((id) => this.getContactNameById(id));
+          const text = `${this.getContactNameById(contactId)} added ${addedNames.join(', ')} to the group`;
+          this.sendMessage(conversationId, text, 'SYSTEM');
+        }
+        callbacks?.success?.();
+      },
+      error: () => {
+        callbacks?.error?.();
+      },
     });
   }
 
@@ -538,26 +685,63 @@ export class MessagingStoreService implements OnDestroy {
     });
   }
 
-  deleteGroup(conversationId: string): void {
+  deleteGroup(conversationId: string, callbacks?: { success?: () => void; error?: () => void }): void {
     const contactId = this.auth.contactId;
-    if (!contactId) return;
+    if (!contactId || this.deletingConversationIds.has(conversationId)) {
+      callbacks?.error?.();
+      return;
+    }
+
+    const previousInbox = this.inbox$.value;
+    const previousMessagesMap = new Map(this.messagesMap$.value);
+    const previousOpenChats = this.openChats$.value;
+    const previousActiveConversationId = this.activeConversationId$.value;
+    const previousActiveView = this.activeView$.value;
+    const previousGroupSettings = this.groupSettings$.value;
+
+    this.deletingConversationIds.add(conversationId);
+    this.showToast('Exiting group...', 'info', 1500);
+    this.removeConversationFromUi(conversationId);
 
     this.api.deleteGroup(conversationId, contactId).subscribe({
       next: () => {
-        const items = this.inbox$.value.filter(i => i.conversation_id !== conversationId);
-        this.inbox$.next(items);
-        this.recalcUnread(items);
-        const map = new Map(this.messagesMap$.value);
-        map.delete(conversationId);
-        this.messagesMap$.next(map);
-        if (this.activeConversationId$.value === conversationId) {
-          this.activeConversationId$.next(null);
-          this.activeView$.next('inbox');
-        }
-        this.closeChat(conversationId);
+        this.deletingConversationIds.delete(conversationId);
+        this.showToast('Exited group', 'success');
+        callbacks?.success?.();
       },
-      error: () => {},
+      error: () => {
+        this.deletingConversationIds.delete(conversationId);
+        this.inbox$.next(previousInbox);
+        this.recalcUnread(previousInbox);
+        this.messagesMap$.next(previousMessagesMap);
+        this.openChats$.next(previousOpenChats);
+        this.groupSettings$.next(previousGroupSettings);
+        this.activeConversationId$.next(previousActiveConversationId);
+        this.activeView$.next(previousActiveView);
+        this.showToast('Could not exit group', 'error');
+        callbacks?.error?.();
+      },
     });
+  }
+
+  private removeConversationFromUi(conversationId: string): void {
+    const items = this.inbox$.value.filter(i => String(i.conversation_id) !== String(conversationId));
+    this.inbox$.next(items);
+    this.recalcUnread(items);
+
+    const map = new Map(this.messagesMap$.value);
+    map.delete(conversationId);
+    this.messagesMap$.next(map);
+
+    this.openChats$.next(this.openChats$.value.filter(c => String(c.conversationId) !== String(conversationId)));
+    if (String(this.activeConversationId$.value) === String(conversationId)) {
+      this.activeConversationId$.next(null);
+      this.activeView$.next('inbox');
+    }
+    const settings = this.groupSettings$.value;
+    if (settings?.conversationId === conversationId) {
+      this.clearGroupSettings();
+    }
   }
 
   // ── Reactions ──
@@ -649,9 +833,6 @@ export class MessagingStoreService implements OnDestroy {
         break;
       case 'conversation_updated':
         this.loadInbox();
-        if (this.activeConversationId$.value) {
-          this.loadMessages(this.activeConversationId$.value);
-        }
         break;
       case 'group_updated':
         this.handleGroupUpdated(this.wsEventPayload(msg));
@@ -674,6 +855,7 @@ export class MessagingStoreService implements OnDestroy {
     if (!data) return;
 
     let message: Message = this.normalizeMessageShape(data);
+    this.detectGroupRemovalForCurrentUser(message);
     const myContactId = String(this.auth.contactId ?? '');
     const convId = String(message.conversation_id ?? '');
     const existing = this.messagesMap$.value.get(convId) || [];
@@ -736,7 +918,7 @@ export class MessagingStoreService implements OnDestroy {
       this.appendMessage(message);
 
       if (isFromOther) {
-        this.playNotificationSound();
+        this.playSoftNotificationSound();
       }
       this.updateInboxPreview(message);
     } else {
@@ -1084,6 +1266,43 @@ export class MessagingStoreService implements OnDestroy {
     return base;
   }
 
+  private playSoftNotificationSound(force = false): void {
+    if (!force && this.notificationsMuted$.value) return;
+    const volume = Math.max(0, Math.min(1, this.notificationVolume$.value));
+    if (volume <= 0 && !force) return;
+
+    try {
+      const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const master = ctx.createGain();
+      const outputGain = Math.max(volume, 0.001);
+      master.gain.setValueAtTime(0.0001, ctx.currentTime);
+      master.gain.exponentialRampToValueAtTime(outputGain, ctx.currentTime + 0.015);
+      master.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.42);
+      master.connect(ctx.destination);
+
+      const playTone = (frequency: number, start: number, duration: number) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(frequency, ctx.currentTime + start);
+        gain.gain.setValueAtTime(0.0001, ctx.currentTime + start);
+        gain.gain.exponentialRampToValueAtTime(0.55, ctx.currentTime + start + 0.025);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + duration);
+        osc.connect(gain);
+        gain.connect(master);
+        osc.start(ctx.currentTime + start);
+        osc.stop(ctx.currentTime + start + duration + 0.02);
+      };
+
+      playTone(740, 0, 0.18);
+      playTone(988, 0.12, 0.22);
+      window.setTimeout(() => ctx.close().catch(() => {}), 600);
+    } catch {
+    }
+  }
+
   private playNotificationSound(): void {
     try {
       const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIGGS57OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBQLSKDf8sFuIwUug8/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy2os7ChRgs+jsq1gVC0ig3/LBbiMFLoLP8tuJNwgYZLvs6KFQEQtMpeHxuWUcBTaN1fPOfS8FKH7M8tqLOwoUYLPo7KtYFQtIoN/ywW4jBS6Cz/LbiTcIGGS77OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBULSKDf8sFuIwUugs/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy2os7ChRgs+jsq1gVC0ig3/LBbiMFLoLP8tuJNwgYZLvs6KFQEQtMpeHxuWUcBTaN1fPOfS8FKH7M8tqLOwoUYLPo7KtYFQtIoN/ywW4jBS6Cz/LbiTcIGGS77OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBULSKDf8sFuIwUugs/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy2os7ChRgs+jsq1gVC0ig3/LBbiMFLoLP8tuJNwgYZLvs6KFQEQtMpeHxuWUcBTaN1fPOfS8FKH7M8tqLOwoUYLPo7KtYFQtIoN/ywW4jBS6Cz/LbiTcIGGS77OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBULSKDf8sFuIwUugs/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy2os7ChRgs+jsq1gVC0ig3/LBbiMFLoLP8tuJNwgYZLvs6KFQEQtMpeHxuWUcBTaN1fPOfS8FKH7M8tqLOwoUYLPo7KtYFQtIoN/ywW4jBS6Cz/LbiTcIGGS77OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBULSKDf8sFuIwUugs/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy2os7ChRgs+jsq1gVC0ig3/LBbiMFLoLP8tuJNwgYZLvs6KFQEQtMpeHxuWUcBTaN1fPOfS8FKH7M8tqLOwoUYLPo7KtYFQtIoN/ywW4jBS6Cz/LbiTcIGGS77OihUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKFGCz6OyrWBULSKDf8sFuIwUugs/y24k3CBhku+zooVARC0yl4fG5ZRwFNo3V8859LwUofszy');
@@ -1098,10 +1317,37 @@ export class MessagingStoreService implements OnDestroy {
     this.totalUnread$.next(total);
   }
 
-  private hydrateReactionsForConversation(conversationId: string, messages: Message[]): void {
-    const fetchable = messages.filter(
-      (m) => !!m.message_id && !String(m.message_id).startsWith('temp-')
-    );
+  private getContactNameById(contactId: string): string {
+    const id = String(contactId);
+    if (id === String(this.auth.contactId || '') && this.auth.currentContact) {
+      return getContactDisplayName(this.auth.currentContact);
+    }
+    const contact = this.visibleContacts$.value.find((c) => String(c.contact_id) === id);
+    return contact ? getContactDisplayName(contact) : `User ${id}`;
+  }
+
+  private detectGroupRemovalForCurrentUser(message: Message): void {
+    const content = String(message.content || '').trim();
+    const match = content.match(/^(.+) removed (.+) from the group$/);
+    if (!match) return;
+
+    const myContact = this.auth.currentContact;
+    const myName = myContact ? getContactDisplayName(myContact).trim().toLowerCase() : '';
+    const removedName = match[2]?.trim().toLowerCase();
+    if (!myName || removedName !== myName) return;
+
+    const convId = String(message.conversation_id || '');
+    if (convId) {
+      this.markGroupRemoved(convId);
+    }
+  }
+
+  private hydrateReactionsForConversation(conversationId: string, messages: Message[], onlyMissing = false): void {
+    const fetchable = messages.filter((m) => {
+      if (!m.message_id || String(m.message_id).startsWith('temp-')) return false;
+      if (!onlyMissing) return true;
+      return !Array.isArray(m.reactions) || m.reactions.length === 0;
+    });
     if (!fetchable.length) return;
 
     const jobs = fetchable.map((m) =>
@@ -1162,6 +1408,56 @@ export class MessagingStoreService implements OnDestroy {
     const byEmoji = new Map<string, { emoji: string; count: number; hasReacted: boolean; reactors: string[] }>();
     const myContactId = String(this.auth.contactId || '');
     const contacts = this.visibleContacts$.value;
+    const parseReactors = (value: any): any[] => {
+      if (Array.isArray(value)) return value;
+      if (value && typeof value === 'object') return [value];
+      if (typeof value !== 'string' || !value.trim()) return [];
+
+      const trimmed = value.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          return Array.isArray(parsed) ? parsed : [parsed];
+        } catch {
+          return [trimmed];
+        }
+      }
+
+      return trimmed.split(',').map((x: string) => x.trim()).filter(Boolean);
+    };
+
+    const displayNameForReactor = (reactor: any): string => {
+      if (reactor == null) return '';
+      if (typeof reactor === 'string') {
+        const trimmed = reactor.trim();
+        if (!trimmed) return '';
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+          const parsed = parseReactors(trimmed);
+          return parsed.map(displayNameForReactor).filter(Boolean).join(', ');
+        }
+        return trimmed;
+      }
+
+      const reactorId = String(reactor?.contact_id ?? reactor?.contactId ?? reactor?.id ?? '').trim();
+      if (reactorId && reactorId === myContactId) return 'You';
+
+      const explicitName = String(
+        reactor?.username ??
+        reactor?.name ??
+        reactor?.display_name ??
+        reactor?.displayName ??
+        reactor?.email ??
+        ''
+      ).trim();
+      if (explicitName) return explicitName;
+
+      if (reactorId) {
+        const contact = contacts.find(c => String(c.contact_id) === reactorId);
+        return contact ? getContactDisplayName(contact) : `User ${reactorId}`;
+      }
+
+      return '';
+    };
 
     for (const row of rows || []) {
       const emoji = String(row?.emoji || '').trim();
@@ -1171,7 +1467,16 @@ export class MessagingStoreService implements OnDestroy {
       const explicitHasReacted = row?.hasReacted ?? row?.has_reacted;
       const hasReacted = explicitHasReacted === true || (contactId && contactId === myContactId);
 
-      const countFromRow = Number(row?.count ?? row?.reaction_count ?? 0);
+      const rawReactors =
+        row?.reactors ??
+        row?.reactor_names ??
+        row?.reactorNames ??
+        row?.reacted_by ??
+        row?.reactedBy ??
+        row?.users ??
+        [];
+      const reactorRows = parseReactors(rawReactors);
+      const countFromRow = Number(row?.count ?? row?.reaction_count ?? row?.reactionCount ?? reactorRows.length ?? 0);
       const existing = byEmoji.get(emoji) || { emoji, count: 0, hasReacted: false, reactors: [] };
 
       // Some APIs return one row per reaction; some return pre-aggregated count.
@@ -1190,6 +1495,34 @@ export class MessagingStoreService implements OnDestroy {
         if (!existing.reactors.includes(name)) {
           existing.reactors.push(name);
         }
+      }
+
+      for (const reactor of reactorRows) {
+        const reactorId = String(
+          typeof reactor === 'object'
+            ? reactor?.contact_id ?? reactor?.contactId ?? reactor?.id ?? ''
+            : ''
+        ).trim();
+        const name = displayNameForReactor(reactor);
+        if (reactorId && reactorId === myContactId) {
+          existing.hasReacted = true;
+        }
+        if (name && !existing.reactors.includes(name)) {
+          existing.reactors.push(name);
+        }
+      }
+
+      const directName = String(
+        row?.reactor_name ??
+        row?.reactorName ??
+        row?.contact_name ??
+        row?.contactName ??
+        row?.username ??
+        row?.email ??
+        ''
+      ).trim();
+      if (directName && !existing.reactors.includes(directName)) {
+        existing.reactors.push(contactId === myContactId ? 'You' : directName);
       }
 
       byEmoji.set(emoji, existing);
@@ -1214,14 +1547,17 @@ export class MessagingStoreService implements OnDestroy {
         if (rIdx >= 0) {
           const current = nextReactions[rIdx];
           if (!current.hasReacted) {
+            const reactors = Array.isArray(current.reactors) ? [...current.reactors] : [];
+            if (!reactors.includes('You')) reactors.unshift('You');
             nextReactions[rIdx] = {
               ...current,
               hasReacted: true,
               count: Number(current.count || 0) + 1,
+              reactors,
             };
           }
         } else {
-          nextReactions.push({ emoji, count: 1, hasReacted: true });
+          nextReactions.push({ emoji, count: 1, hasReacted: true, reactors: ['You'] });
         }
       } else {
         if (rIdx >= 0) {
@@ -1234,6 +1570,9 @@ export class MessagingStoreService implements OnDestroy {
               ...current,
               hasReacted: false,
               count: nextCount,
+              reactors: Array.isArray(current.reactors)
+                ? current.reactors.filter((name: string) => name !== 'You')
+                : current.reactors,
             };
           }
         }
