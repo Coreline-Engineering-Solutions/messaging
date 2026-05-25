@@ -65,6 +65,7 @@ import {
     dedupeMessagesById,
     incrementInboxUnread,
     isTempMessageId,
+    normalizeMessageFromApi,
     normalizeReactionRows,
     patchInboxPreview,
     resolveMessageFileId,
@@ -310,7 +311,9 @@ export function MessagingProvider({
       if (!contact) return;
       setLoadingMessages(true);
       try {
-        const batch = await getMessages(conversationId, contact.contact_id, before);
+        const batch = (await getMessages(conversationId, contact.contact_id, before)).map((m) =>
+          normalizeMessageFromApi(m as unknown as Record<string, unknown>)
+        );
         let nextList: Message[] = [];
         setMessagesMap((prev) => {
           const existing = prev[conversationId] ?? [];
@@ -358,7 +361,9 @@ export function MessagingProvider({
   const handleWsMessage = useCallback(
     (msg: WebSocketMessage) => {
       if (msg.type === 'new_message') {
-        const incoming = (msg.data ?? msg) as Message;
+        const incoming = normalizeMessageFromApi(
+          (msg.data ?? msg) as unknown as Record<string, unknown>
+        );
         const convId = incoming.conversation_id || msg.conversation_id;
         if (!convId || !contact) return;
 

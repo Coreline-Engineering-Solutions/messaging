@@ -2,6 +2,9 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.isTempMessageId = isTempMessageId;
 exports.isStructuredAttachmentId = isStructuredAttachmentId;
+exports.isHttpOrDataUrl = isHttpOrDataUrl;
+exports.looksLikeStorageFileId = looksLikeStorageFileId;
+exports.normalizeMessageFromApi = normalizeMessageFromApi;
 exports.formatMessageTime = formatMessageTime;
 exports.formatDateSeparatorLabel = formatDateSeparatorLabel;
 exports.shouldShowDateSeparator = shouldShowDateSeparator;
@@ -21,6 +24,166 @@ function isTempMessageId(id) {
 function isStructuredAttachmentId(id) {
     const value = String(id ?? '').trim();
     return value.startsWith('{') || value.startsWith('[');
+}
+function isHttpOrDataUrl(url) {
+    const v = String(url ?? '').trim();
+    return v.startsWith('http://') || v.startsWith('https://') || v.startsWith('data:');
+}
+/** Storage file id (UUID / hex), not a fetchable http URL. */
+function looksLikeStorageFileId(value) {
+    const v = String(value ?? '').trim();
+    if (!v || isStructuredAttachmentId(v) || isTempMessageId(v))
+        return false;
+    if (isHttpOrDataUrl(v))
+        return false;
+    return (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v) ||
+        /^[a-f0-9-]{8,}$/i.test(v) ||
+        /^\d+$/.test(v));
+}
+function toStringArray(value) {
+    if (Array.isArray(value)) {
+        return value
+            .map((x) => (typeof x === 'string' ? x : x?.file_id ?? x?.id ?? ''))
+            .map((x) => String(x).trim())
+            .filter(Boolean);
+    }
+    if (typeof value === 'string' && value.trim()) {
+        const trimmed = value.trim();
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                if (Array.isArray(parsed))
+                    return toStringArray(parsed);
+                return toStringArray(parsed.ids ?? parsed.file_ids ?? parsed.attachment_ids ?? parsed.attachments);
+            }
+            catch {
+                return [];
+            }
+        }
+        return trimmed.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+    }
+    return [];
+}
+/**
+ * Rebuild attachments[] and resolve media_url file ids (Angular normalizeMessageShape parity).
+ */
+function normalizeMessageFromApi(raw) {
+    const messageType = (raw.message_type ?? raw.messageType ?? 'TEXT');
+    const base = {
+        message_id: String(raw.message_id ?? raw.id ?? ''),
+        conversation_id: String(raw.conversation_id ?? raw.conversationId ?? ''),
+        sender_id: String(raw.sender_id ?? raw.senderId ?? ''),
+        sender_name: raw.sender_name,
+        sender_username: raw.sender_username,
+        sender_first_name: raw.sender_first_name,
+        sender_last_name: raw.sender_last_name,
+        message_type: messageType,
+        content: String(raw.content ?? raw.body ?? raw.text ?? ''),
+        media_url: (raw.media_url ?? raw.mediaUrl ?? raw.url ?? raw.file_url),
+        created_at: String(raw.created_at ?? raw.createdAt ?? new Date().toISOString()),
+        is_read: raw.is_read,
+        reactions: raw.reactions,
+        mentions: raw.mentions,
+        attachments: raw.attachments,
+        parent_message_id: raw.parent_message_id,
+        edited_at: raw.edited_at,
+        is_pinned: raw.is_pinned,
+    };
+    const attachments = [];
+    const seen = new Set();
+    const addAttachment = (a) => {
+        if (!a?.file_id)
+            return;
+        const id = String(a.file_id).trim();
+        if (!id || isTempMessageId(id) || isStructuredAttachmentId(id) || seen.has(id))
+            return;
+        seen.add(id);
+        attachments.push(a);
+    };
+    const normalizeOne = (a) => {
+        if (typeof a === 'string') {
+            const id = a.trim();
+            return id && !isTempMessageId(id) ? { file_id: id, filename: 'File' } : null;
+        }
+        if (!a || typeof a !== 'object')
+            return null;
+        const o = a;
+        const fileId = String(o.file_id ?? o.fileId ?? o.id ?? o.attachment_id ?? o.storage_file_id ?? '').trim();
+        if (!fileId || isTempMessageId(fileId))
+            return null;
+        return {
+            file_id: fileId,
+            filename: String(o.filename ?? o.file_name ?? o.name ?? 'File'),
+            mime_type: (o.mime_type ?? o.mimeType),
+        };
+    };
+    if (Array.isArray(raw.attachments)) {
+        for (const a of raw.attachments)
+            addAttachment(normalizeOne(a));
+    }
+    const mediaValue = String(base.media_url ?? '').trim();
+    if (mediaValue.startsWith('{') || mediaValue.startsWith('[')) {
+        try {
+            const parsed = JSON.parse(mediaValue);
+            const rawAttachments = Array.isArray(parsed) ? parsed : parsed.attachments;
+            if (Array.isArray(rawAttachments)) {
+                for (const a of rawAttachments)
+                    addAttachment(normalizeOne(a));
+            }
+            if (!Array.isArray(parsed)) {
+                const ids = toStringArray(parsed.ids ?? parsed.file_ids ?? parsed.attachment_ids);
+                const names = toStringArray(parsed.filenames);
+                const mimes = toStringArray(parsed.mime_types ?? parsed.mimeTypes);
+                ids.forEach((id, idx) => addAttachment({
+                    file_id: id,
+                    filename: names[idx] || names[0] || `Attachment ${idx + 1}`,
+                    mime_type: mimes[idx],
+                }));
+            }
+        }
+        catch {
+            /* ignore */
+        }
+    }
+    let attachmentIds = toStringArray(raw.attachment_ids ?? raw.attachmentIds);
+    if (attachmentIds.length === 0)
+        attachmentIds = toStringArray(raw.file_ids ?? raw.fileIds);
+    for (const key of ['file_id', 'fileId', 'attachment_id', 'storage_file_id', 'blob_id']) {
+        const v = raw[key];
+        if (v != null && v !== '') {
+            const s = String(v).trim();
+            if (s && !attachmentIds.includes(s))
+                attachmentIds.push(s);
+        }
+    }
+    if (looksLikeStorageFileId(mediaValue) && !attachmentIds.includes(mediaValue)) {
+        attachmentIds.push(mediaValue);
+    }
+    const contentTrim = String(base.content ?? '').trim();
+    if (attachmentIds.length === 0 && looksLikeStorageFileId(contentTrim)) {
+        attachmentIds.push(contentTrim);
+    }
+    if (attachmentIds.length === 0 &&
+        /^\d+$/.test(contentTrim) &&
+        (messageType === 'FILE' || messageType === 'IMAGE')) {
+        attachmentIds.push(contentTrim);
+    }
+    const filenames = toStringArray(raw.filenames);
+    const mimeTypes = toStringArray(raw.mime_types ?? raw.mimeTypes);
+    const fallbackMime = (raw.mime_type ?? raw.mimeType);
+    for (let idx = 0; idx < attachmentIds.length; idx++) {
+        addAttachment({
+            file_id: attachmentIds[idx],
+            filename: filenames[idx] ||
+                filenames[0] ||
+                (messageType === 'IMAGE' ? `Image ${idx + 1}` : `Attachment ${idx + 1}`),
+            mime_type: mimeTypes[idx] || fallbackMime,
+        });
+    }
+    if (attachments.length > 0) {
+        return { ...base, attachments };
+    }
+    return base;
 }
 function formatMessageTime(iso) {
     const d = new Date(iso);
@@ -164,14 +327,14 @@ function tryMergeOwnEcho(existing, incoming, myContactId) {
 }
 function resolveMessageFileId(msg) {
     const fromAttachment = msg.attachments?.[0]?.file_id;
-    if (fromAttachment) {
-        return isStructuredAttachmentId(fromAttachment) ? null : fromAttachment;
+    if (fromAttachment && looksLikeStorageFileId(fromAttachment)) {
+        return fromAttachment;
     }
+    const media = String(msg.media_url ?? '').trim();
+    if (looksLikeStorageFileId(media))
+        return media;
     const content = String(msg.content ?? '').trim();
-    if (content &&
-        !isStructuredAttachmentId(content) &&
-        /^[a-f0-9-]{8,}$/i.test(content) &&
-        msg.message_type !== 'TEXT') {
+    if (looksLikeStorageFileId(content) && msg.message_type !== 'TEXT') {
         return content;
     }
     return null;

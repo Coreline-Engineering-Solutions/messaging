@@ -49,7 +49,8 @@ function MessageMedia({ message, onPress, }) {
             cancelled = true;
         };
     }, [fileId, localUri]);
-    const uri = localUri || remoteUri || message.media_url;
+    const directUrl = message.media_url && (0, messagingHelpers_1.isHttpOrDataUrl)(message.media_url) ? message.media_url : null;
+    const uri = localUri || remoteUri || directUrl;
     if (message.message_type === 'FILE' && !uri) {
         return ((0, jsx_runtime_1.jsxs)(react_native_1.View, { style: [messagingStyles_1.messagingStyles.chatImage, messagingStyles_1.messagingStyles.fileAttachment], children: [(0, jsx_runtime_1.jsx)(MaterialIcons_1.default, { name: "insert-drive-file", size: 32, color: theme_1.colors.primary[500] }), (0, jsx_runtime_1.jsx)(react_native_1.Text, { style: messagingStyles_1.messagingStyles.convPreview, numberOfLines: 2, children: message.attachments?.[0]?.filename || 'Attachment' })] }));
     }

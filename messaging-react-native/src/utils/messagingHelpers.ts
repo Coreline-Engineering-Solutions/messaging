@@ -1,4 +1,10 @@
-﻿import type { Contact, InboxItem, Message, MessageReaction } from '../types/messaging';
+﻿import type {
+  Contact,
+  InboxItem,
+  Message,
+  MessageAttachment,
+  MessageReaction,
+} from '../types/messaging';
 import { getContactDisplayName } from '../types/messaging';
 
 export function isTempMessageId(id: string | undefined | null): boolean {
@@ -9,6 +15,178 @@ export function isTempMessageId(id: string | undefined | null): boolean {
 export function isStructuredAttachmentId(id: string | undefined | null): boolean {
   const value = String(id ?? '').trim();
   return value.startsWith('{') || value.startsWith('[');
+}
+
+export function isHttpOrDataUrl(url: string | undefined | null): boolean {
+  const v = String(url ?? '').trim();
+  return v.startsWith('http://') || v.startsWith('https://') || v.startsWith('data:');
+}
+
+/** Storage file id (UUID / hex), not a fetchable http URL. */
+export function looksLikeStorageFileId(value: string | undefined | null): boolean {
+  const v = String(value ?? '').trim();
+  if (!v || isStructuredAttachmentId(v) || isTempMessageId(v)) return false;
+  if (isHttpOrDataUrl(v)) return false;
+  return (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v) ||
+    /^[a-f0-9-]{8,}$/i.test(v) ||
+    /^\d+$/.test(v)
+  );
+}
+
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((x) => (typeof x === 'string' ? x : (x as { file_id?: string; id?: string })?.file_id ?? (x as { id?: string })?.id ?? ''))
+      .map((x) => String(x).trim())
+      .filter(Boolean);
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const trimmed = value.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+        if (Array.isArray(parsed)) return toStringArray(parsed);
+        return toStringArray(
+          parsed.ids ?? parsed.file_ids ?? parsed.attachment_ids ?? parsed.attachments
+        );
+      } catch {
+        return [];
+      }
+    }
+    return trimmed.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+/**
+ * Rebuild attachments[] and resolve media_url file ids (Angular normalizeMessageShape parity).
+ */
+export function normalizeMessageFromApi(raw: Record<string, unknown>): Message {
+  const messageType = (raw.message_type ?? raw.messageType ?? 'TEXT') as Message['message_type'];
+  const base: Message = {
+    message_id: String(raw.message_id ?? raw.id ?? ''),
+    conversation_id: String(raw.conversation_id ?? raw.conversationId ?? ''),
+    sender_id: String(raw.sender_id ?? raw.senderId ?? ''),
+    sender_name: raw.sender_name as string | undefined,
+    sender_username: raw.sender_username as string | undefined,
+    sender_first_name: raw.sender_first_name as string | undefined,
+    sender_last_name: raw.sender_last_name as string | undefined,
+    message_type: messageType,
+    content: String(raw.content ?? raw.body ?? raw.text ?? ''),
+    media_url: (raw.media_url ?? raw.mediaUrl ?? raw.url ?? raw.file_url) as string | undefined,
+    created_at: String(raw.created_at ?? raw.createdAt ?? new Date().toISOString()),
+    is_read: raw.is_read as Message['is_read'],
+    reactions: raw.reactions as MessageReaction[] | undefined,
+    mentions: raw.mentions as string[] | undefined,
+    attachments: raw.attachments as MessageAttachment[] | undefined,
+    parent_message_id: raw.parent_message_id as string | undefined,
+    edited_at: raw.edited_at as string | undefined,
+    is_pinned: raw.is_pinned as boolean | undefined,
+  };
+
+  const attachments: MessageAttachment[] = [];
+  const seen = new Set<string>();
+
+  const addAttachment = (a: MessageAttachment | null) => {
+    if (!a?.file_id) return;
+    const id = String(a.file_id).trim();
+    if (!id || isTempMessageId(id) || isStructuredAttachmentId(id) || seen.has(id)) return;
+    seen.add(id);
+    attachments.push(a);
+  };
+
+  const normalizeOne = (a: unknown): MessageAttachment | null => {
+    if (typeof a === 'string') {
+      const id = a.trim();
+      return id && !isTempMessageId(id) ? { file_id: id, filename: 'File' } : null;
+    }
+    if (!a || typeof a !== 'object') return null;
+    const o = a as Record<string, unknown>;
+    const fileId = String(
+      o.file_id ?? o.fileId ?? o.id ?? o.attachment_id ?? o.storage_file_id ?? ''
+    ).trim();
+    if (!fileId || isTempMessageId(fileId)) return null;
+    return {
+      file_id: fileId,
+      filename: String(o.filename ?? o.file_name ?? o.name ?? 'File'),
+      mime_type: (o.mime_type ?? o.mimeType) as string | undefined,
+    };
+  };
+
+  if (Array.isArray(raw.attachments)) {
+    for (const a of raw.attachments) addAttachment(normalizeOne(a));
+  }
+
+  const mediaValue = String(base.media_url ?? '').trim();
+  if (mediaValue.startsWith('{') || mediaValue.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(mediaValue) as Record<string, unknown>;
+      const rawAttachments = Array.isArray(parsed) ? parsed : parsed.attachments;
+      if (Array.isArray(rawAttachments)) {
+        for (const a of rawAttachments) addAttachment(normalizeOne(a));
+      }
+      if (!Array.isArray(parsed)) {
+        const ids = toStringArray(parsed.ids ?? parsed.file_ids ?? parsed.attachment_ids);
+        const names = toStringArray(parsed.filenames);
+        const mimes = toStringArray(parsed.mime_types ?? parsed.mimeTypes);
+        ids.forEach((id, idx) =>
+          addAttachment({
+            file_id: id,
+            filename: names[idx] || names[0] || `Attachment ${idx + 1}`,
+            mime_type: mimes[idx],
+          })
+        );
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  let attachmentIds = toStringArray(raw.attachment_ids ?? raw.attachmentIds);
+  if (attachmentIds.length === 0) attachmentIds = toStringArray(raw.file_ids ?? raw.fileIds);
+  for (const key of ['file_id', 'fileId', 'attachment_id', 'storage_file_id', 'blob_id'] as const) {
+    const v = raw[key];
+    if (v != null && v !== '') {
+      const s = String(v).trim();
+      if (s && !attachmentIds.includes(s)) attachmentIds.push(s);
+    }
+  }
+  if (looksLikeStorageFileId(mediaValue) && !attachmentIds.includes(mediaValue)) {
+    attachmentIds.push(mediaValue);
+  }
+
+  const contentTrim = String(base.content ?? '').trim();
+  if (attachmentIds.length === 0 && looksLikeStorageFileId(contentTrim)) {
+    attachmentIds.push(contentTrim);
+  }
+  if (
+    attachmentIds.length === 0 &&
+    /^\d+$/.test(contentTrim) &&
+    (messageType === 'FILE' || messageType === 'IMAGE')
+  ) {
+    attachmentIds.push(contentTrim);
+  }
+
+  const filenames = toStringArray(raw.filenames);
+  const mimeTypes = toStringArray(raw.mime_types ?? raw.mimeTypes);
+  const fallbackMime = (raw.mime_type ?? raw.mimeType) as string | undefined;
+
+  for (let idx = 0; idx < attachmentIds.length; idx++) {
+    addAttachment({
+      file_id: attachmentIds[idx],
+      filename:
+        filenames[idx] ||
+        filenames[0] ||
+        (messageType === 'IMAGE' ? `Image ${idx + 1}` : `Attachment ${idx + 1}`),
+      mime_type: mimeTypes[idx] || fallbackMime,
+    });
+  }
+
+  if (attachments.length > 0) {
+    return { ...base, attachments };
+  }
+  return base;
 }
 
 export function formatMessageTime(iso: string): string {
@@ -186,16 +364,13 @@ export function tryMergeOwnEcho(
 
 export function resolveMessageFileId(msg: Message): string | null {
   const fromAttachment = msg.attachments?.[0]?.file_id;
-  if (fromAttachment) {
-    return isStructuredAttachmentId(fromAttachment) ? null : fromAttachment;
+  if (fromAttachment && looksLikeStorageFileId(fromAttachment)) {
+    return fromAttachment;
   }
+  const media = String(msg.media_url ?? '').trim();
+  if (looksLikeStorageFileId(media)) return media;
   const content = String(msg.content ?? '').trim();
-  if (
-    content &&
-    !isStructuredAttachmentId(content) &&
-    /^[a-f0-9-]{8,}$/i.test(content) &&
-    msg.message_type !== 'TEXT'
-  ) {
+  if (looksLikeStorageFileId(content) && msg.message_type !== 'TEXT') {
     return content;
   }
   return null;

@@ -164,7 +164,7 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
             return;
         setLoadingMessages(true);
         try {
-            const batch = await (0, messagingApiService_1.getMessages)(conversationId, contact.contact_id, before);
+            const batch = (await (0, messagingApiService_1.getMessages)(conversationId, contact.contact_id, before)).map((m) => (0, messagingHelpers_1.normalizeMessageFromApi)(m));
             let nextList = [];
             setMessagesMap((prev) => {
                 const existing = prev[conversationId] ?? [];
@@ -209,7 +209,7 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
     }, [contact, visibleContacts]);
     const handleWsMessage = (0, react_1.useCallback)((msg) => {
         if (msg.type === 'new_message') {
-            const incoming = (msg.data ?? msg);
+            const incoming = (0, messagingHelpers_1.normalizeMessageFromApi)((msg.data ?? msg));
             const convId = incoming.conversation_id || msg.conversation_id;
             if (!convId || !contact)
                 return;

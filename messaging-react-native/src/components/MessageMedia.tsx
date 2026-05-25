@@ -9,7 +9,10 @@ import {
 } from '../services/messagingFileService';
 import { messagingStyles } from '../styles/messagingStyles';
 import type { Message } from '../types/messaging';
-import { resolveMessageFileId } from '../utils/messagingHelpers';
+import {
+  isHttpOrDataUrl,
+  resolveMessageFileId,
+} from '../utils/messagingHelpers';
 
 export function MessageMedia({
   message,
@@ -54,7 +57,9 @@ export function MessageMedia({
     };
   }, [fileId, localUri]);
 
-  const uri = localUri || remoteUri || message.media_url;
+  const directUrl =
+    message.media_url && isHttpOrDataUrl(message.media_url) ? message.media_url : null;
+  const uri = localUri || remoteUri || directUrl;
 
   if (message.message_type === 'FILE' && !uri) {
     return (
