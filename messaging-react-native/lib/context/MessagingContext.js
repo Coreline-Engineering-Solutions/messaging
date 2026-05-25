@@ -559,13 +559,21 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
             [activeConversationId]: [...(prev[activeConversationId] ?? []), optimistic],
         }));
         try {
-            const uploaded = await (0, messagingFileService_1.uploadMessagingImages)(files);
+            let uploaded;
+            try {
+                uploaded = await (0, messagingFileService_1.uploadMessagingImages)(files);
+            }
+            catch (uploadErr) {
+                const msg = uploadErr instanceof Error ? uploadErr.message : String(uploadErr);
+                throw new Error(msg.startsWith('Upload') ? msg : `Upload failed: ${msg}`);
+            }
             const fileIds = uploaded.map((u) => u.file_id);
             const filenames = uploaded.map((u) => u.filename);
             const mimeTypes = uploaded.map((u) => u.mime_type || '');
             if (fileIds.some((id) => (0, messagingHelpers_1.isTempMessageId)(id))) {
                 throw new Error('Upload not finished — cannot attach temp file.');
             }
+            const messageText = caption.trim() || filenames.filter(Boolean).join(', ') || 'Attachment';
             const isImg = (mimeTypes[0] || '').startsWith('image/') ||
                 /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)$/i.test(filenames[0] || '');
             setMessagesMap((prev) => ({
@@ -574,6 +582,7 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
                     ? {
                         ...m,
                         message_type: isImg ? 'IMAGE' : 'FILE',
+                        content: messageText,
                         attachments: fileIds.map((id, idx) => ({
                             file_id: id,
                             filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
@@ -584,7 +593,7 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
                     : m),
             }));
             (0, messagingFileService_1.prewarmMessagingMediaCache)(fileIds);
-            await (0, messagingApiService_1.sendMessageWithAttachments)(activeConversationId, contact.contact_id, caption, fileIds, filenames, mimeTypes);
+            await (0, messagingApiService_1.sendMessageWithAttachments)(activeConversationId, contact.contact_id, messageText, fileIds, filenames, mimeTypes);
             await loadMessagesFor(activeConversationId);
             setInbox((prev) => (0, messagingHelpers_1.patchInboxPreview)(prev, optimistic));
         }

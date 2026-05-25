@@ -759,7 +759,16 @@ export function MessagingProvider({
         [activeConversationId]: [...(prev[activeConversationId] ?? []), optimistic],
       }));
       try {
-        const uploaded = await uploadMessagingImages(files);
+        let uploaded;
+        try {
+          uploaded = await uploadMessagingImages(files);
+        } catch (uploadErr) {
+          const msg =
+            uploadErr instanceof Error ? uploadErr.message : String(uploadErr);
+          throw new Error(
+            msg.startsWith('Upload') ? msg : `Upload failed: ${msg}`
+          );
+        }
         const fileIds = uploaded.map((u) => u.file_id);
         const filenames = uploaded.map((u) => u.filename);
         const mimeTypes = uploaded.map((u) => u.mime_type || '');
@@ -767,6 +776,8 @@ export function MessagingProvider({
         if (fileIds.some((id) => isTempMessageId(id))) {
           throw new Error('Upload not finished — cannot attach temp file.');
         }
+
+        const messageText = caption.trim() || filenames.filter(Boolean).join(', ') || 'Attachment';
 
         const isImg =
           (mimeTypes[0] || '').startsWith('image/') ||
@@ -779,6 +790,7 @@ export function MessagingProvider({
               ? {
                   ...m,
                   message_type: isImg ? 'IMAGE' : 'FILE',
+                  content: messageText,
                   attachments: fileIds.map((id, idx) => ({
                     file_id: id,
                     filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
@@ -795,7 +807,7 @@ export function MessagingProvider({
         await sendMessageWithAttachments(
           activeConversationId,
           contact.contact_id,
-          caption,
+          messageText,
           fileIds,
           filenames,
           mimeTypes

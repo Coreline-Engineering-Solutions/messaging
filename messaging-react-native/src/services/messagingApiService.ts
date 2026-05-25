@@ -1,4 +1,5 @@
 ﻿import axios from 'axios';
+import { formatMessagingHttpError } from '../utils/messagingHttpError';
 import { getMessagingApiBaseUrl, resolveMessagingAccessToken } from './messagingRuntime';
 import type {
   CompanyConnection,
@@ -346,15 +347,29 @@ export async function sendMessageWithAttachments(
   filenames: string[],
   mimeTypes: string[] = []
 ): Promise<{ message_id?: string }> {
-  const { data } = await messagingHttp.post<{ message_id?: string }>(
-    `${base}/conversations/${conversationId}/messages`,
-    {
-      sender_id: parseInt(senderContactId, 10),
-      content: content || '',
-      attachment_ids: attachmentIds,
-      filenames,
-      mime_types: mimeTypes,
-    }
-  );
-  return data ?? {};
+  const messageContent =
+    (content || '').trim() || filenames.filter(Boolean).join(', ') || 'Attachment';
+  const senderId = String(senderContactId);
+  const body: Record<string, unknown> = {
+    sender_id: parseInt(senderContactId, 10),
+    senderId,
+    content: messageContent,
+    attachment_ids: attachmentIds,
+    attachmentIds: attachmentIds,
+    filenames,
+  };
+  const mimes = mimeTypes.filter((m) => !!m && m.trim());
+  if (mimes.length > 0) {
+    body.mime_types = mimes;
+    body.mimeTypes = mimes;
+  }
+  try {
+    const { data } = await messagingHttp.post<{ message_id?: string }>(
+      `${base}/conversations/${conversationId}/messages`,
+      body
+    );
+    return data ?? {};
+  } catch (error) {
+    throw new Error(formatMessagingHttpError(error, 'Send attachment message failed'));
+  }
 }

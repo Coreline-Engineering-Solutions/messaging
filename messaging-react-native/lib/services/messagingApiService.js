@@ -36,6 +36,7 @@ exports.respondToConnection = respondToConnection;
 exports.updateNotificationSettings = updateNotificationSettings;
 exports.sendMessageWithAttachments = sendMessageWithAttachments;
 const axios_1 = __importDefault(require("axios"));
+const messagingHttpError_1 = require("../utils/messagingHttpError");
 const messagingRuntime_1 = require("./messagingRuntime");
 const messagingHttp = axios_1.default.create();
 messagingHttp.interceptors.request.use(async (config) => {
@@ -236,12 +237,26 @@ async function updateNotificationSettings(conversationId, contactId, settings) {
     });
 }
 async function sendMessageWithAttachments(conversationId, senderContactId, content, attachmentIds, filenames, mimeTypes = []) {
-    const { data } = await messagingHttp.post(`${base}/conversations/${conversationId}/messages`, {
+    const messageContent = (content || '').trim() || filenames.filter(Boolean).join(', ') || 'Attachment';
+    const senderId = String(senderContactId);
+    const body = {
         sender_id: parseInt(senderContactId, 10),
-        content: content || '',
+        senderId,
+        content: messageContent,
         attachment_ids: attachmentIds,
+        attachmentIds: attachmentIds,
         filenames,
-        mime_types: mimeTypes,
-    });
-    return data ?? {};
+    };
+    const mimes = mimeTypes.filter((m) => !!m && m.trim());
+    if (mimes.length > 0) {
+        body.mime_types = mimes;
+        body.mimeTypes = mimes;
+    }
+    try {
+        const { data } = await messagingHttp.post(`${base}/conversations/${conversationId}/messages`, body);
+        return data ?? {};
+    }
+    catch (error) {
+        throw new Error((0, messagingHttpError_1.formatMessagingHttpError)(error, 'Send attachment message failed'));
+    }
 }
