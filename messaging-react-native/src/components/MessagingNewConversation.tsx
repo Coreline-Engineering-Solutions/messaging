@@ -52,7 +52,7 @@ export function MessagingNewConversation() {
         <MaterialIcons name="search" size={20} color={colors.text.tertiary} />
         <TextInput
           style={messagingStyles.searchInput}
-          placeholder="Search contactsâ€¦"
+          placeholder="Search contacts…"
           placeholderTextColor={colors.text.tertiary}
           value={search}
           onChangeText={setSearch}

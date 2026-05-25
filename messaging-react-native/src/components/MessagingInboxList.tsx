@@ -89,7 +89,7 @@ export function MessagingInboxList() {
     return (
       <View style={messagingStyles.emptyState}>
         <ActivityIndicator color={colors.primary[500]} />
-        <Text style={messagingStyles.emptyText}>Loading messengerâ€¦</Text>
+        <Text style={messagingStyles.emptyText}>Loading messenger…</Text>
       </View>
     );
   }
@@ -282,7 +282,7 @@ export function MessagingInboxList() {
         <MaterialIcons name="search" size={20} color={colors.text.tertiary} />
         <TextInput
           style={messagingStyles.searchInput}
-          placeholder="Search conversationsâ€¦"
+          placeholder="Search conversations…"
           placeholderTextColor={colors.text.tertiary}
           value={search}
           onChangeText={setSearch}

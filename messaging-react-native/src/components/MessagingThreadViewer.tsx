@@ -95,7 +95,7 @@ export function MessagingThreadViewer() {
       <View style={messagingStyles.inputBar}>
         <TextInput
           style={messagingStyles.textInput}
-          placeholder="Reply in threadâ€¦"
+          placeholder="Reply in thread…"
           placeholderTextColor={colors.text.tertiary}
           value={draft}
           onChangeText={setDraft}

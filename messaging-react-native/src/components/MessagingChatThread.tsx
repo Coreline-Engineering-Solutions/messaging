@@ -342,7 +342,7 @@ export function MessagingChatThread() {
       {loadingMessages && messages.length === 0 ? (
         <View style={messagingStyles.emptyState}>
           <ActivityIndicator color={colors.primary[500]} />
-          <Text style={messagingStyles.emptyText}>Loading messagesâ€¦</Text>
+          <Text style={messagingStyles.emptyText}>Loading messages…</Text>
         </View>
       ) : (
         <FlatList
@@ -465,7 +465,7 @@ export function MessagingChatThread() {
         </TouchableOpacity>
         <TextInput
           style={messagingStyles.textInput}
-          placeholder={editingId ? 'Edit messageâ€¦' : 'Type a messageâ€¦'}
+          placeholder={editingId ? 'Edit message…' : 'Type a message…'}
           placeholderTextColor={colors.text.tertiary}
           value={editingId ? editDraft : draft}
           onChangeText={editingId ? setEditDraft : setDraft}

@@ -161,7 +161,7 @@ export function MessagingGroupManager() {
         </Text>
         <TextInput
           style={messagingStyles.textInput}
-          placeholder="Enter group nameâ€¦"
+          placeholder="Enter group name…"
           placeholderTextColor={colors.text.tertiary}
           value={name}
           onChangeText={setName}
@@ -231,7 +231,7 @@ export function MessagingGroupManager() {
           <MaterialIcons name="search" size={20} color={colors.text.tertiary} />
           <TextInput
             style={messagingStyles.searchInput}
-            placeholder="Search contactsâ€¦"
+            placeholder="Search contacts…"
             placeholderTextColor={colors.text.tertiary}
             value={search}
             onChangeText={setSearch}
@@ -241,7 +241,7 @@ export function MessagingGroupManager() {
         <View style={messagingStyles.memberTagsSection}>
           {selected.length === 0 ? (
             <Text style={messagingStyles.memberTagsHint}>
-              Selected people appear here â€” tap contacts below to add
+              Selected people appear here — tap contacts below to add
             </Text>
           ) : (
             <View style={messagingStyles.memberTagsWrap}>

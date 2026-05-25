@@ -51,7 +51,7 @@ export function MessagingMessageSearch() {
         <MaterialIcons name="search" size={20} color={colors.text.tertiary} />
         <TextInput
           style={messagingStyles.searchInput}
-          placeholder="Search message textâ€¦"
+          placeholder="Search message text…"
           placeholderTextColor={colors.text.tertiary}
           value={query}
           onChangeText={setQuery}
