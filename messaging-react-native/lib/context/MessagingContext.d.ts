@@ -56,11 +56,15 @@ interface MessagingContextValue {
     favoriteConversationIds: ReadonlySet<string>;
     isFavoriteConversation: (conversationId: string) => boolean;
     toggleFavoriteConversation: (conversationId: string) => Promise<void>;
+    /** `screen` = dedicated tab; `overlay` = bottom sheet (default). */
+    presentation: 'overlay' | 'screen';
 }
-export declare function MessagingProvider({ children, sessionGid, userEmail, }: {
+export type MessagingPresentation = 'overlay' | 'screen';
+export declare function MessagingProvider({ children, sessionGid, userEmail, presentation, }: {
     children: React.ReactNode;
     sessionGid: string | null;
     userEmail: string | null;
+    presentation?: MessagingPresentation;
 }): import("react/jsx-runtime").JSX.Element;
 export declare function useMessaging(): MessagingContextValue;
 export declare function useMessagingOptional(): MessagingContextValue | null;

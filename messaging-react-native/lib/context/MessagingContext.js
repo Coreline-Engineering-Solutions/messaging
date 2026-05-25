@@ -13,14 +13,14 @@ const react_1 = require("react");
 const react_native_1 = require("react-native");
 const messagingConfig_1 = require("../constants/messagingConfig");
 const messagingApiService_1 = require("../services/messagingApiService");
-const messagingFileService_1 = require("../services/messagingFileService");
 const messagingFavoritesCache_1 = require("../services/messagingFavoritesCache");
+const messagingFileService_1 = require("../services/messagingFileService");
 const messagingNotificationSound_1 = require("../services/messagingNotificationSound");
-const messagingHelpers_1 = require("../utils/messagingHelpers");
 const messagingWebSocketService_1 = require("../services/messagingWebSocketService");
 const messaging_1 = require("../types/messaging");
+const messagingHelpers_1 = require("../utils/messagingHelpers");
 const MessagingContext = (0, react_1.createContext)(null);
-function MessagingProvider({ children, sessionGid, userEmail, }) {
+function MessagingProvider({ children, sessionGid, userEmail, presentation = 'overlay', }) {
     const [contact, setContact] = (0, react_1.useState)(null);
     const [initError, setInitError] = (0, react_1.useState)(null);
     const [panelOpen, setPanelOpen] = (0, react_1.useState)(false);
@@ -232,7 +232,8 @@ function MessagingProvider({ children, sessionGid, userEmail, }) {
             const fromOther = String(incoming.sender_id) !== String(myId);
             if (fromOther && !isActive) {
                 setInbox((prev) => (0, messagingHelpers_1.incrementInboxUnread)(prev, convId));
-                if (!panelOpenRef.current)
+                const shouldNotify = presentation === 'screen' || !panelOpenRef.current;
+                if (shouldNotify)
                     void (0, messagingNotificationSound_1.playMessagingNotificationSound)();
             }
             if (isActive && contact) {
@@ -250,7 +251,7 @@ function MessagingProvider({ children, sessionGid, userEmail, }) {
             if (activeId)
                 void loadMessagesFor(activeId);
         }
-    }, [contact, loadInbox, loadMessagesFor, refreshMessageReactions]);
+    }, [contact, loadInbox, loadMessagesFor, presentation, refreshMessageReactions]);
     const initialize = (0, react_1.useCallback)(async () => {
         if (!sessionGid || !userEmail)
             return;
@@ -324,10 +325,26 @@ function MessagingProvider({ children, sessionGid, userEmail, }) {
         return () => sub.remove();
     }, [openPanel]);
     const closePanel = (0, react_1.useCallback)(() => {
-        setPanelOpen(false);
         setActiveView('inbox');
-    }, []);
+        if (presentation === 'overlay') {
+            setPanelOpen(false);
+        }
+    }, [presentation]);
+    (0, react_1.useEffect)(() => {
+        if (presentation === 'screen' && contact && sessionGid) {
+            setPanelOpen(true);
+        }
+    }, [presentation, contact, sessionGid]);
     const togglePanel = (0, react_1.useCallback)(() => setPanelOpen((v) => !v), []);
+    const goBackToInbox = (0, react_1.useCallback)(() => {
+        setActiveView('inbox');
+        setActiveConversationId(null);
+        setActiveConversationName(null);
+        setActiveIsGroup(false);
+        setPendingRecipient(null);
+        setThreadParent(null);
+        setThreadMessages([]);
+    }, []);
     const openConversation = (0, react_1.useCallback)((item) => {
         setActiveConversationId(item.conversation_id);
         setActiveConversationName((0, messaging_1.getInboxDisplayName)(item, visibleContacts));
@@ -686,7 +703,7 @@ function MessagingProvider({ children, sessionGid, userEmail, }) {
         openCreateGroup,
         openGroupSettings,
         clearGroupEdit,
-        goBackToInbox: () => setActiveView('inbox'),
+        goBackToInbox,
         loadOlderMessages: async () => {
             if (!activeConversationId || messages.length === 0)
                 return;
@@ -715,7 +732,9 @@ function MessagingProvider({ children, sessionGid, userEmail, }) {
         favoriteConversationIds,
         isFavoriteConversation,
         toggleFavoriteConversation,
+        presentation,
     }), [
+        presentation,
         isSessionActive,
         isReady,
         initError,
@@ -742,6 +761,7 @@ function MessagingProvider({ children, sessionGid, userEmail, }) {
         openCreateGroup,
         openGroupSettings,
         clearGroupEdit,
+        goBackToInbox,
         loadMessagesFor,
         sendChatMessage,
         sendChatImage,

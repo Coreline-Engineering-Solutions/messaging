@@ -44,11 +44,13 @@ export {
   useMessaging,
   useMessagingOptional,
   requestMessagingOpen,
+  type MessagingPresentation,
 } from './context/MessagingContext';
 
 // UI
 export { MessagingOverlay } from './components/MessagingOverlay';
 export { MessagingPanel } from './components/MessagingPanel';
+export { MessagingScreen } from './components/MessagingScreen';
 export { MessagingImagePickerHost } from './components/MessagingImagePickerHost';
 export {
   MessagingTabBarButton,

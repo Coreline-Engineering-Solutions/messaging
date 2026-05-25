@@ -50,6 +50,7 @@ export function MessagingInboxList() {
     isFavoriteConversation,
     toggleFavoriteConversation,
     closePanel,
+    presentation,
   } = useMessaging();
   const [search, setSearch] = useState('');
   const [inboxFilter, setInboxFilter] = useState<InboxFilter>('all');
@@ -252,16 +253,18 @@ export function MessagingInboxList() {
           >
             <MaterialIcons name="group-add" size={16} color={colors.text.secondary} />
           </TouchableOpacity>
-          <TouchableOpacity
-            style={messagingStyles.iconButton}
-            onPress={closePanel}
-            activeOpacity={0.7}
-            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-            accessibilityLabel="Close messenger"
-            accessibilityRole="button"
-          >
-            <MaterialIcons name="close" size={16} color={colors.text.secondary} />
-          </TouchableOpacity>
+          {presentation === 'overlay' && (
+            <TouchableOpacity
+              style={messagingStyles.iconButton}
+              onPress={closePanel}
+              activeOpacity={0.7}
+              hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+              accessibilityLabel="Close messenger"
+              accessibilityRole="button"
+            >
+              <MaterialIcons name="close" size={16} color={colors.text.secondary} />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 

@@ -141,6 +141,8 @@ configureMessaging({
 
 Wrap the tab navigator, or the authenticated app shell that contains it, with `MessagingProvider`.
 
+### Overlay mode (bottom sheet)
+
 ```tsx
 import {
   MessagingImagePickerHost,
@@ -158,7 +160,7 @@ export function AuthenticatedAppShell({
   userEmail: string | null;
 }) {
   return (
-    <MessagingProvider sessionGid={sessionId} userEmail={userEmail}>
+    <MessagingProvider sessionGid={sessionId} userEmail={userEmail} presentation="overlay">
       <MessagingImagePickerHost />
       {children}
       <MessagingOverlay panelBottomInset={0} />
@@ -167,10 +169,40 @@ export function AuthenticatedAppShell({
 }
 ```
 
+### Screen mode (dedicated Messages tab)
+
+Use `presentation="screen"` and render `MessagingScreen` on the host app's messages route. Do not mount `MessagingOverlay` in this mode.
+
+```tsx
+import {
+  MessagingImagePickerHost,
+  MessagingProvider,
+  MessagingScreen,
+  useMessaging,
+} from '@coreline-engineering-solutions/messaging-react-native';
+
+export function AuthenticatedAppShell({ children, sessionId, userEmail }) {
+  return (
+    <MessagingProvider sessionGid={sessionId} userEmail={userEmail} presentation="screen">
+      <MessagingImagePickerHost />
+      {children}
+    </MessagingProvider>
+  );
+}
+
+// app/(tabs)/messages.tsx
+export default function MessagesTabScreen() {
+  return <MessagingScreen />;
+}
+```
+
+Show unread counts on the tab bar with `useMessaging().totalUnread` and React Navigation `tabBarBadge`.
+
 Provider props:
 
 - `sessionGid`: Session identifier sent to the WebSocket after connect. Pass `null` while logged out.
 - `userEmail`: Current authenticated user email. The package resolves this to a messaging contact through `/messaging/contacts/by-email/{email}`. Pass `null` while logged out.
+- `presentation`: `'overlay'` (default) opens UI in a resizable bottom sheet; `'screen'` renders inbox/chat in a full-screen host route via `MessagingScreen`.
 
 ## Add Tab Buttons
 
@@ -230,9 +262,9 @@ When integrating this package into another project, an AI coding agent should co
 7. Confirm where the app stores the bearer token. Use the app's existing token getter instead of hard-coding `AsyncStorage` if needed.
 8. Locate the authenticated user object and pass the user's email into `MessagingProvider`.
 9. Locate the session identifier used by the backend and pass it as `sessionGid`.
-10. Wrap the authenticated tab navigator or app shell with `MessagingProvider`.
+10. Wrap the authenticated tab navigator or app shell with `MessagingProvider` (`presentation="overlay"` or `"screen"`).
 11. Render `MessagingImagePickerHost` inside the provider.
-12. Render `MessagingOverlay` inside the provider and outside the tab navigator content.
+12. **Overlay:** render `MessagingOverlay` outside tab content. **Screen:** add a messages tab route that renders `MessagingScreen`.
 13. Add `MessagingTabBarButton` to the messages tab or another host control that should open messaging.
 14. Update `onNavigateToHost` routes to match the target app's navigation structure.
 15. Run TypeScript, lint, and the app on a device or simulator.

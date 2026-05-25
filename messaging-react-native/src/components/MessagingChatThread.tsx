@@ -1,29 +1,29 @@
 ﻿import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import React, { useRef, useState } from 'react';
 import {
-  ActionSheetIOS,
-  ActivityIndicator,
-  Alert,
-  FlatList,
-  KeyboardAvoidingView,
-  Platform,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActionSheetIOS,
+    ActivityIndicator,
+    Alert,
+    FlatList,
+    KeyboardAvoidingView,
+    Platform,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from 'react-native';
+import { useMessaging } from '../context/MessagingContext';
 import { pickImageFromHost, takePhotoFromHost } from '../services/imagePickerHost';
 import { pickImage, pickMultipleImages, takePhoto } from '../services/mediaPickerService';
-import { colors } from '../theme';
-import { useMessaging } from '../context/MessagingContext';
 import { messagingStyles } from '../styles/messagingStyles';
+import { colors } from '../theme';
 import type { Message } from '../types/messaging';
 import { resolveMessageSenderDisplayName } from '../types/messaging';
 import {
-  formatDateSeparatorLabel,
-  formatMessageTime,
-  isTempMessageId,
-  shouldShowDateSeparator,
+    formatDateSeparatorLabel,
+    formatMessageTime,
+    isTempMessageId,
+    shouldShowDateSeparator,
 } from '../utils/messagingHelpers';
 import { MessageImageLightbox } from './MessageImageLightbox';
 import { MessageMedia } from './MessageMedia';
@@ -57,6 +57,7 @@ export function MessagingChatThread() {
     togglePinMessage,
     closePanel,
     openPanel,
+    presentation,
     isFavoriteConversation,
     toggleFavoriteConversation,
   } = useMessaging();
@@ -111,9 +112,9 @@ export function MessagingChatThread() {
     if (!activeConversationId || pickingImage) return;
     setShowAttachMenu(false);
     setPickingImage(true);
-    const panelWasOpen = true;
+    const panelWasOpen = presentation === 'overlay';
     try {
-      if (source === 'camera') {
+      if (source === 'camera' && presentation === 'overlay') {
         closePanel();
         await new Promise((r) => setTimeout(r, Platform.OS === 'android' ? 500 : 150));
       }

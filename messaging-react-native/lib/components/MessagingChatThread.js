@@ -8,11 +8,11 @@ const jsx_runtime_1 = require("react/jsx-runtime");
 const MaterialIcons_1 = __importDefault(require("@expo/vector-icons/MaterialIcons"));
 const react_1 = require("react");
 const react_native_1 = require("react-native");
+const MessagingContext_1 = require("../context/MessagingContext");
 const imagePickerHost_1 = require("../services/imagePickerHost");
 const mediaPickerService_1 = require("../services/mediaPickerService");
-const theme_1 = require("../theme");
-const MessagingContext_1 = require("../context/MessagingContext");
 const messagingStyles_1 = require("../styles/messagingStyles");
+const theme_1 = require("../theme");
 const messaging_1 = require("../types/messaging");
 const messagingHelpers_1 = require("../utils/messagingHelpers");
 const MessageImageLightbox_1 = require("./MessageImageLightbox");
@@ -24,7 +24,7 @@ function isMessageRead(msg) {
     return false;
 }
 function MessagingChatThread() {
-    const { contact, messages, activeConversationName, activeIsGroup, activeConversationId, visibleContacts, loadingMessages, goBackToInbox, sendChatMessage, sendChatAttachments, toggleReaction, loadOlderMessages, openGroupSettings, openMessageSearch, openThread, editChatMessage, deleteChatMessage, togglePinMessage, closePanel, openPanel, isFavoriteConversation, toggleFavoriteConversation, } = (0, MessagingContext_1.useMessaging)();
+    const { contact, messages, activeConversationName, activeIsGroup, activeConversationId, visibleContacts, loadingMessages, goBackToInbox, sendChatMessage, sendChatAttachments, toggleReaction, loadOlderMessages, openGroupSettings, openMessageSearch, openThread, editChatMessage, deleteChatMessage, togglePinMessage, closePanel, openPanel, presentation, isFavoriteConversation, toggleFavoriteConversation, } = (0, MessagingContext_1.useMessaging)();
     const [draft, setDraft] = (0, react_1.useState)('');
     const [sending, setSending] = (0, react_1.useState)(false);
     const [reactionTargetId, setReactionTargetId] = (0, react_1.useState)(null);
@@ -76,9 +76,9 @@ function MessagingChatThread() {
             return;
         setShowAttachMenu(false);
         setPickingImage(true);
-        const panelWasOpen = true;
+        const panelWasOpen = presentation === 'overlay';
         try {
-            if (source === 'camera') {
+            if (source === 'camera' && presentation === 'overlay') {
                 closePanel();
                 await new Promise((r) => setTimeout(r, react_native_1.Platform.OS === 'android' ? 500 : 150));
             }

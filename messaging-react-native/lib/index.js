@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.resolveContactByEmail = exports.messagingWebSocket = exports.fontWeights = exports.fontSizes = exports.shadows = exports.borderWidth = exports.borderRadius = exports.spacing = exports.colors = exports.MapTabBarButton = exports.MessagingTabBarButton = exports.MessagingImagePickerHost = exports.MessagingPanel = exports.MessagingOverlay = exports.requestMessagingOpen = exports.useMessagingOptional = exports.useMessaging = exports.MessagingProvider = exports.isProjectConversation = exports.resolveMessageSenderDisplayName = exports.getMessageSenderName = exports.getInboxDisplayName = exports.getContactDisplayName = exports.MESSAGING_FAVORITES_KEY_PREFIX = exports.MESSAGING_PANEL_HEIGHT_KEY = exports.MESSAGING_PANEL_HEIGHT_MIN = exports.MESSAGING_PANEL_HEIGHT_MAX = exports.MESSAGING_PANEL_HEIGHT_DEFAULT = exports.MESSAGING_OPEN_EVENT = exports.isMessagingConfigured = exports.getMessagingConfig = exports.configureMessaging = void 0;
+exports.resolveContactByEmail = exports.messagingWebSocket = exports.fontWeights = exports.fontSizes = exports.shadows = exports.borderWidth = exports.borderRadius = exports.spacing = exports.colors = exports.MapTabBarButton = exports.MessagingTabBarButton = exports.MessagingImagePickerHost = exports.MessagingScreen = exports.MessagingPanel = exports.MessagingOverlay = exports.requestMessagingOpen = exports.useMessagingOptional = exports.useMessaging = exports.MessagingProvider = exports.isProjectConversation = exports.resolveMessageSenderDisplayName = exports.getMessageSenderName = exports.getInboxDisplayName = exports.getContactDisplayName = exports.MESSAGING_FAVORITES_KEY_PREFIX = exports.MESSAGING_PANEL_HEIGHT_KEY = exports.MESSAGING_PANEL_HEIGHT_MIN = exports.MESSAGING_PANEL_HEIGHT_MAX = exports.MESSAGING_PANEL_HEIGHT_DEFAULT = exports.MESSAGING_OPEN_EVENT = exports.isMessagingConfigured = exports.getMessagingConfig = exports.configureMessaging = void 0;
 // Configuration
 var configure_1 = require("./configure");
 Object.defineProperty(exports, "configureMessaging", { enumerable: true, get: function () { return configure_1.configureMessaging; } });
@@ -31,6 +31,8 @@ var MessagingOverlay_1 = require("./components/MessagingOverlay");
 Object.defineProperty(exports, "MessagingOverlay", { enumerable: true, get: function () { return MessagingOverlay_1.MessagingOverlay; } });
 var MessagingPanel_1 = require("./components/MessagingPanel");
 Object.defineProperty(exports, "MessagingPanel", { enumerable: true, get: function () { return MessagingPanel_1.MessagingPanel; } });
+var MessagingScreen_1 = require("./components/MessagingScreen");
+Object.defineProperty(exports, "MessagingScreen", { enumerable: true, get: function () { return MessagingScreen_1.MessagingScreen; } });
 var MessagingImagePickerHost_1 = require("./components/MessagingImagePickerHost");
 Object.defineProperty(exports, "MessagingImagePickerHost", { enumerable: true, get: function () { return MessagingImagePickerHost_1.MessagingImagePickerHost; } });
 var MessagingTabBarButton_1 = require("./components/MessagingTabBarButton");

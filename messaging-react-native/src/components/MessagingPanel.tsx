@@ -6,12 +6,7 @@ import {
   MESSAGING_PANEL_HEIGHT_MIN,
 } from '../constants/messagingConfig';
 import { messagingStyles } from '../styles/messagingStyles';
-import { MessagingChatThread } from './MessagingChatThread';
-import { MessagingGroupManager } from './MessagingGroupManager';
-import { MessagingInboxList } from './MessagingInboxList';
-import { MessagingMessageSearch } from './MessagingMessageSearch';
-import { MessagingNewConversation } from './MessagingNewConversation';
-import { MessagingThreadViewer } from './MessagingThreadViewer';
+import { MessagingPanelContent } from './MessagingPanelContent';
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -19,7 +14,7 @@ function clamp(value: number, min: number, max: number): number {
 
 export function MessagingPanel({ bottomInset }: { bottomInset: number }) {
   const { height: screenH } = useWindowDimensions();
-  const { panelOpen, panelHeightRatio, setPanelHeightRatio, activeView } = useMessaging();
+  const { panelOpen, panelHeightRatio, setPanelHeightRatio } = useMessaging();
 
   const maxH = screenH * MESSAGING_PANEL_HEIGHT_MAX;
   const minH = screenH * MESSAGING_PANEL_HEIGHT_MIN;
@@ -77,14 +72,7 @@ export function MessagingPanel({ bottomInset }: { bottomInset: number }) {
         <View style={messagingStyles.resizeGrab} />
       </View>
 
-      <View style={messagingStyles.panelBody}>
-        {activeView === 'inbox' && <MessagingInboxList />}
-        {activeView === 'chat' && <MessagingChatThread />}
-        {activeView === 'new-conversation' && <MessagingNewConversation />}
-        {activeView === 'group-manager' && <MessagingGroupManager />}
-        {activeView === 'message-search' && <MessagingMessageSearch />}
-        {activeView === 'thread' && <MessagingThreadViewer />}
-      </View>
+      <MessagingPanelContent />
     </View>
   );
 }

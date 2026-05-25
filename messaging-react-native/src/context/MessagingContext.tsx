@@ -1,76 +1,76 @@
 ﻿import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
+    createContext,
+    useCallback,
+    useContext,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
 } from 'react';
 import { DeviceEventEmitter } from 'react-native';
 import {
-  MESSAGING_OPEN_EVENT,
-  MESSAGING_PANEL_HEIGHT_DEFAULT,
-  MESSAGING_PANEL_HEIGHT_KEY,
+    MESSAGING_OPEN_EVENT,
+    MESSAGING_PANEL_HEIGHT_DEFAULT,
+    MESSAGING_PANEL_HEIGHT_KEY,
 } from '../constants/messagingConfig';
 import {
-  addReaction as addReactionApi,
-  clearConversation as clearConversationApi,
-  createConversation,
-  deleteConversation as deleteConversationApi,
-  deleteGroupConversation,
-  deleteMessage as deleteMessageApi,
-  editMessage as editMessageApi,
-  getInbox,
-  getMessages,
-  getReactions,
-  getThreadMessages,
-  getVisibleContacts,
-  manageGroup,
-  markConversationRead,
-  pinMessage as pinMessageApi,
-  removeReaction as removeReactionApi,
-  resolveContactByEmail,
-  searchMessages as searchMessagesApi,
-  sendDirectMessage,
-  sendMessage as sendMessageApi,
-  sendMessageWithAttachments,
-  sendThreadReply,
-  unpinMessage as unpinMessageApi,
-  updatePresence,
+    addReaction as addReactionApi,
+    clearConversation as clearConversationApi,
+    createConversation,
+    deleteConversation as deleteConversationApi,
+    deleteGroupConversation,
+    deleteMessage as deleteMessageApi,
+    editMessage as editMessageApi,
+    getInbox,
+    getMessages,
+    getReactions,
+    getThreadMessages,
+    getVisibleContacts,
+    manageGroup,
+    markConversationRead,
+    pinMessage as pinMessageApi,
+    removeReaction as removeReactionApi,
+    resolveContactByEmail,
+    searchMessages as searchMessagesApi,
+    sendDirectMessage,
+    sendMessage as sendMessageApi,
+    sendMessageWithAttachments,
+    sendThreadReply,
+    unpinMessage as unpinMessageApi,
+    updatePresence,
 } from '../services/messagingApiService';
 import {
-  prewarmMessagingMediaCache,
-  uploadMessagingImage,
-  uploadMessagingImages,
-} from '../services/messagingFileService';
-import {
-  loadFavoriteConversationIds,
-  persistFavoriteConversationIds,
+    loadFavoriteConversationIds,
+    persistFavoriteConversationIds,
 } from '../services/messagingFavoritesCache';
-import { playMessagingNotificationSound } from '../services/messagingNotificationSound';
 import {
-  dedupeMessagesById,
-  incrementInboxUnread,
-  isTempMessageId,
-  normalizeReactionRows,
-  patchInboxPreview,
-  resolveMessageFileId,
-  tryMergeOwnEcho,
-} from '../utils/messagingHelpers';
+    prewarmMessagingMediaCache,
+    uploadMessagingImage,
+    uploadMessagingImages,
+} from '../services/messagingFileService';
+import { playMessagingNotificationSound } from '../services/messagingNotificationSound';
 import { messagingWebSocket } from '../services/messagingWebSocketService';
 import type {
-  Contact,
-  GroupEditState,
-  InboxItem,
-  Message,
-  MessageReaction,
-  MessagingView,
-  WebSocketMessage,
-  WsStatus,
+    Contact,
+    GroupEditState,
+    InboxItem,
+    Message,
+    MessageReaction,
+    MessagingView,
+    WebSocketMessage,
+    WsStatus,
 } from '../types/messaging';
 import { getContactDisplayName, getInboxDisplayName } from '../types/messaging';
+import {
+    dedupeMessagesById,
+    incrementInboxUnread,
+    isTempMessageId,
+    normalizeReactionRows,
+    patchInboxPreview,
+    resolveMessageFileId,
+    tryMergeOwnEcho,
+} from '../utils/messagingHelpers';
 
 interface MessagingContextValue {
   isSessionActive: boolean;
@@ -129,18 +129,24 @@ interface MessagingContextValue {
   favoriteConversationIds: ReadonlySet<string>;
   isFavoriteConversation: (conversationId: string) => boolean;
   toggleFavoriteConversation: (conversationId: string) => Promise<void>;
+  /** `screen` = dedicated tab; `overlay` = bottom sheet (default). */
+  presentation: 'overlay' | 'screen';
 }
 
 const MessagingContext = createContext<MessagingContextValue | null>(null);
+
+export type MessagingPresentation = 'overlay' | 'screen';
 
 export function MessagingProvider({
   children,
   sessionGid,
   userEmail,
+  presentation = 'overlay',
 }: {
   children: React.ReactNode;
   sessionGid: string | null;
   userEmail: string | null;
+  presentation?: MessagingPresentation;
 }) {
   const [contact, setContact] = useState<Contact | null>(null);
   const [initError, setInitError] = useState<string | null>(null);
@@ -378,7 +384,9 @@ export function MessagingProvider({
         const fromOther = String(incoming.sender_id) !== String(myId);
         if (fromOther && !isActive) {
           setInbox((prev) => incrementInboxUnread(prev, convId));
-          if (!panelOpenRef.current) void playMessagingNotificationSound();
+          const shouldNotify =
+            presentation === 'screen' || !panelOpenRef.current;
+          if (shouldNotify) void playMessagingNotificationSound();
         }
 
         if (isActive && contact) {
@@ -399,7 +407,7 @@ export function MessagingProvider({
         if (activeId) void loadMessagesFor(activeId);
       }
     },
-    [contact, loadInbox, loadMessagesFor, refreshMessageReactions]
+    [contact, loadInbox, loadMessagesFor, presentation, refreshMessageReactions]
   );
 
   const initialize = useCallback(async () => {
@@ -475,10 +483,28 @@ export function MessagingProvider({
     return () => sub.remove();
   }, [openPanel]);
   const closePanel = useCallback(() => {
-    setPanelOpen(false);
     setActiveView('inbox');
-  }, []);
+    if (presentation === 'overlay') {
+      setPanelOpen(false);
+    }
+  }, [presentation]);
+
+  useEffect(() => {
+    if (presentation === 'screen' && contact && sessionGid) {
+      setPanelOpen(true);
+    }
+  }, [presentation, contact, sessionGid]);
   const togglePanel = useCallback(() => setPanelOpen((v) => !v), []);
+
+  const goBackToInbox = useCallback(() => {
+    setActiveView('inbox');
+    setActiveConversationId(null);
+    setActiveConversationName(null);
+    setActiveIsGroup(false);
+    setPendingRecipient(null);
+    setThreadParent(null);
+    setThreadMessages([]);
+  }, []);
 
   const openConversation = useCallback(
     (item: InboxItem) => {
@@ -930,7 +956,7 @@ export function MessagingProvider({
       openCreateGroup,
       openGroupSettings,
       clearGroupEdit,
-      goBackToInbox: () => setActiveView('inbox'),
+      goBackToInbox,
       loadOlderMessages: async () => {
         if (!activeConversationId || messages.length === 0) return;
         await loadMessagesFor(activeConversationId, messages[0].message_id);
@@ -958,8 +984,10 @@ export function MessagingProvider({
       favoriteConversationIds,
       isFavoriteConversation,
       toggleFavoriteConversation,
+      presentation,
     }),
     [
+      presentation,
       isSessionActive,
       isReady,
       initError,
@@ -986,6 +1014,7 @@ export function MessagingProvider({
       openCreateGroup,
       openGroupSettings,
       clearGroupEdit,
+      goBackToInbox,
       loadMessagesFor,
       sendChatMessage,
       sendChatImage,

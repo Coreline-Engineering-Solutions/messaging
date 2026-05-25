@@ -7,18 +7,13 @@ const react_native_1 = require("react-native");
 const MessagingContext_1 = require("../context/MessagingContext");
 const messagingConfig_1 = require("../constants/messagingConfig");
 const messagingStyles_1 = require("../styles/messagingStyles");
-const MessagingChatThread_1 = require("./MessagingChatThread");
-const MessagingGroupManager_1 = require("./MessagingGroupManager");
-const MessagingInboxList_1 = require("./MessagingInboxList");
-const MessagingMessageSearch_1 = require("./MessagingMessageSearch");
-const MessagingNewConversation_1 = require("./MessagingNewConversation");
-const MessagingThreadViewer_1 = require("./MessagingThreadViewer");
+const MessagingPanelContent_1 = require("./MessagingPanelContent");
 function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
 }
 function MessagingPanel({ bottomInset }) {
     const { height: screenH } = (0, react_native_1.useWindowDimensions)();
-    const { panelOpen, panelHeightRatio, setPanelHeightRatio, activeView } = (0, MessagingContext_1.useMessaging)();
+    const { panelOpen, panelHeightRatio, setPanelHeightRatio } = (0, MessagingContext_1.useMessaging)();
     const maxH = screenH * messagingConfig_1.MESSAGING_PANEL_HEIGHT_MAX;
     const minH = screenH * messagingConfig_1.MESSAGING_PANEL_HEIGHT_MIN;
     const targetH = clamp(screenH * panelHeightRatio, minH, maxH);
@@ -61,5 +56,5 @@ function MessagingPanel({ bottomInset }) {
     return ((0, jsx_runtime_1.jsxs)(react_native_1.View, { style: [
             messagingStyles_1.messagingStyles.panelOuter,
             { height: displayHeight, bottom: bottomInset },
-        ], children: [(0, jsx_runtime_1.jsx)(react_native_1.View, { ...panResponder.panHandlers, style: messagingStyles_1.messagingStyles.resizeHandle, children: (0, jsx_runtime_1.jsx)(react_native_1.View, { style: messagingStyles_1.messagingStyles.resizeGrab }) }), (0, jsx_runtime_1.jsxs)(react_native_1.View, { style: messagingStyles_1.messagingStyles.panelBody, children: [activeView === 'inbox' && (0, jsx_runtime_1.jsx)(MessagingInboxList_1.MessagingInboxList, {}), activeView === 'chat' && (0, jsx_runtime_1.jsx)(MessagingChatThread_1.MessagingChatThread, {}), activeView === 'new-conversation' && (0, jsx_runtime_1.jsx)(MessagingNewConversation_1.MessagingNewConversation, {}), activeView === 'group-manager' && (0, jsx_runtime_1.jsx)(MessagingGroupManager_1.MessagingGroupManager, {}), activeView === 'message-search' && (0, jsx_runtime_1.jsx)(MessagingMessageSearch_1.MessagingMessageSearch, {}), activeView === 'thread' && (0, jsx_runtime_1.jsx)(MessagingThreadViewer_1.MessagingThreadViewer, {})] })] }));
+        ], children: [(0, jsx_runtime_1.jsx)(react_native_1.View, { ...panResponder.panHandlers, style: messagingStyles_1.messagingStyles.resizeHandle, children: (0, jsx_runtime_1.jsx)(react_native_1.View, { style: messagingStyles_1.messagingStyles.resizeGrab }) }), (0, jsx_runtime_1.jsx)(MessagingPanelContent_1.MessagingPanelContent, {})] }));
 }
