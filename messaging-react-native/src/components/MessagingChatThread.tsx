@@ -60,6 +60,7 @@ export function MessagingChatThread() {
     presentation,
     isFavoriteConversation,
     toggleFavoriteConversation,
+    attachmentError,
   } = useMessaging();
 
   const [draft, setDraft] = useState('');
@@ -369,6 +370,14 @@ export function MessagingChatThread() {
           }
         />
       )}
+
+      {attachmentError ? (
+        <View style={messagingStyles.pendingAttachRow}>
+          <Text style={[messagingStyles.emptyText, { color: colors.error }]}>
+            {attachmentError}
+          </Text>
+        </View>
+      ) : null}
 
       {pendingFiles.length > 0 && (
         <View style={messagingStyles.pendingAttachRow}>

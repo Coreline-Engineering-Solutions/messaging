@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.isTempMessageId = isTempMessageId;
+exports.isStructuredAttachmentId = isStructuredAttachmentId;
 exports.formatMessageTime = formatMessageTime;
 exports.formatDateSeparatorLabel = formatDateSeparatorLabel;
 exports.shouldShowDateSeparator = shouldShowDateSeparator;
@@ -15,6 +16,11 @@ exports.resolveMessageFileId = resolveMessageFileId;
 const messaging_1 = require("../types/messaging");
 function isTempMessageId(id) {
     return !id || String(id).startsWith('temp-');
+}
+/** JSON-looking attachment ids must not be sent to storage retrieve. */
+function isStructuredAttachmentId(id) {
+    const value = String(id ?? '').trim();
+    return value.startsWith('{') || value.startsWith('[');
 }
 function formatMessageTime(iso) {
     const d = new Date(iso);
@@ -157,10 +163,15 @@ function tryMergeOwnEcho(existing, incoming, myContactId) {
     return dedupeMessagesById(next);
 }
 function resolveMessageFileId(msg) {
-    if (msg.attachments?.[0]?.file_id)
-        return msg.attachments[0].file_id;
+    const fromAttachment = msg.attachments?.[0]?.file_id;
+    if (fromAttachment) {
+        return isStructuredAttachmentId(fromAttachment) ? null : fromAttachment;
+    }
     const content = String(msg.content ?? '').trim();
-    if (content && /^[a-f0-9-]{8,}$/i.test(content) && msg.message_type !== 'TEXT') {
+    if (content &&
+        !isStructuredAttachmentId(content) &&
+        /^[a-f0-9-]{8,}$/i.test(content) &&
+        msg.message_type !== 'TEXT') {
         return content;
     }
     return null;

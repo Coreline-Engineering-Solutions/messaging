@@ -343,7 +343,8 @@ export async function sendMessageWithAttachments(
   senderContactId: string,
   content: string,
   attachmentIds: string[],
-  filenames: string[]
+  filenames: string[],
+  mimeTypes: string[] = []
 ): Promise<{ message_id?: string }> {
   const { data } = await messagingHttp.post<{ message_id?: string }>(
     `${base}/conversations/${conversationId}/messages`,
@@ -352,6 +353,7 @@ export async function sendMessageWithAttachments(
       content: content || '',
       attachment_ids: attachmentIds,
       filenames,
+      mime_types: mimeTypes,
     }
   );
   return data ?? {};

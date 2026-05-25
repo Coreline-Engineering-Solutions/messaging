@@ -235,12 +235,13 @@ async function updateNotificationSettings(conversationId, contactId, settings) {
         ...settings,
     });
 }
-async function sendMessageWithAttachments(conversationId, senderContactId, content, attachmentIds, filenames) {
+async function sendMessageWithAttachments(conversationId, senderContactId, content, attachmentIds, filenames, mimeTypes = []) {
     const { data } = await messagingHttp.post(`${base}/conversations/${conversationId}/messages`, {
         sender_id: parseInt(senderContactId, 10),
         content: content || '',
         attachment_ids: attachmentIds,
         filenames,
+        mime_types: mimeTypes,
     });
     return data ?? {};
 }

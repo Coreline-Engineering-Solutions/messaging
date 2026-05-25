@@ -1,5 +1,7 @@
 import type { Contact, InboxItem, Message, MessageReaction } from '../types/messaging';
 export declare function isTempMessageId(id: string | undefined | null): boolean;
+/** JSON-looking attachment ids must not be sent to storage retrieve. */
+export declare function isStructuredAttachmentId(id: string | undefined | null): boolean;
 export declare function formatMessageTime(iso: string): string;
 export declare function formatDateSeparatorLabel(iso: string): string;
 export declare function shouldShowDateSeparator(messages: Message[], index: number): boolean;

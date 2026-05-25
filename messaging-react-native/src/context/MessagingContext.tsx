@@ -46,7 +46,6 @@ import {
 } from '../services/messagingFavoritesCache';
 import {
     prewarmMessagingMediaCache,
-    uploadMessagingImage,
     uploadMessagingImages,
 } from '../services/messagingFileService';
 import { playMessagingNotificationSound } from '../services/messagingNotificationSound';
@@ -76,6 +75,8 @@ interface MessagingContextValue {
   isSessionActive: boolean;
   isReady: boolean;
   initError: string | null;
+  /** Last attachment upload/send failure (cleared on next attempt). */
+  attachmentError: string | null;
   contact: Contact | null;
   panelOpen: boolean;
   panelHeightRatio: number;
@@ -150,6 +151,7 @@ export function MessagingProvider({
 }) {
   const [contact, setContact] = useState<Contact | null>(null);
   const [initError, setInitError] = useState<string | null>(null);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [pendingPanelOpen, setPendingPanelOpen] = useState(false);
   const [panelHeightRatio, setPanelHeightRatioState] = useState(MESSAGING_PANEL_HEIGHT_DEFAULT);
@@ -740,6 +742,7 @@ export function MessagingProvider({
     async (files: { uri: string; fileName: string }[], caption = '') => {
       if (!contact || !activeConversationId || files.length === 0) return;
       const tempId = `temp-${Date.now()}`;
+      setAttachmentError(null);
       const optimistic: Message = {
         message_id: tempId,
         conversation_id: activeConversationId,
@@ -756,29 +759,52 @@ export function MessagingProvider({
         [activeConversationId]: [...(prev[activeConversationId] ?? []), optimistic],
       }));
       try {
-        const uploaded =
-          files.length === 1
-            ? [await uploadMessagingImage(files[0].uri, files[0].fileName)]
-            : await uploadMessagingImages(files);
-        if (uploaded.length === 1) {
-          await sendMessageApi(
-            activeConversationId,
-            contact.contact_id,
-            uploaded[0].file_id,
-            'IMAGE'
-          );
-        } else {
-          await sendMessageWithAttachments(
-            activeConversationId,
-            contact.contact_id,
-            caption,
-            uploaded.map((u) => u.file_id),
-            uploaded.map((u) => u.filename)
-          );
+        const uploaded = await uploadMessagingImages(files);
+        const fileIds = uploaded.map((u) => u.file_id);
+        const filenames = uploaded.map((u) => u.filename);
+        const mimeTypes = uploaded.map((u) => u.mime_type || '');
+
+        if (fileIds.some((id) => isTempMessageId(id))) {
+          throw new Error('Upload not finished — cannot attach temp file.');
         }
+
+        const isImg =
+          (mimeTypes[0] || '').startsWith('image/') ||
+          /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)$/i.test(filenames[0] || '');
+
+        setMessagesMap((prev) => ({
+          ...prev,
+          [activeConversationId]: (prev[activeConversationId] ?? []).map((m) =>
+            m.message_id === tempId
+              ? {
+                  ...m,
+                  message_type: isImg ? 'IMAGE' : 'FILE',
+                  attachments: fileIds.map((id, idx) => ({
+                    file_id: id,
+                    filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
+                    mime_type: mimeTypes[idx] || undefined,
+                    url: uploaded[idx]?.url,
+                  })),
+                }
+              : m
+          ),
+        }));
+
+        prewarmMessagingMediaCache(fileIds);
+
+        await sendMessageWithAttachments(
+          activeConversationId,
+          contact.contact_id,
+          caption,
+          fileIds,
+          filenames,
+          mimeTypes
+        );
         await loadMessagesFor(activeConversationId);
         setInbox((prev) => patchInboxPreview(prev, optimistic));
-      } catch {
+      } catch (e) {
+        const message = e instanceof Error ? e.message : 'Failed to send attachment';
+        setAttachmentError(message);
         setMessagesMap((prev) => ({
           ...prev,
           [activeConversationId]: (prev[activeConversationId] ?? []).filter(
@@ -932,6 +958,7 @@ export function MessagingProvider({
       isSessionActive,
       isReady,
       initError,
+      attachmentError,
       contact,
       panelOpen,
       panelHeightRatio,
@@ -991,6 +1018,7 @@ export function MessagingProvider({
       isSessionActive,
       isReady,
       initError,
+      attachmentError,
       contact,
       panelOpen,
       panelHeightRatio,

@@ -102,7 +102,7 @@ The WebSocket client connects to:
 ${wsBaseUrl}/messaging/ws/{contactId}
 ```
 
-Attachment upload and retrieval use `storageApiUrl` when configured, otherwise `apiBaseUrl`. Supported storage paths include `/storage/upload`, `/messaging/storage/upload`, `/messaging/attachments/upload`, `/messaging/files/upload`, and matching retrieve/delete paths.
+Attachment upload and retrieval use **`apiBaseUrl` only** (same as the Angular `@coreline-engineering-solutions/messaging` web package). `storageApiUrl` is ignored as of v1.2.0. The client tries `/storage/*`, then `/files/*`, then `/messaging/storage/*` and `/messaging/files/*` for upload, retrieve, and delete. Bearer auth comes from `getAccessToken` (ticketing API token).
 
 ## Configure Once
 
@@ -127,15 +127,7 @@ configureMessaging({
 
 `getAccessToken` is optional. If omitted, the package reads `AsyncStorage.getItem('access_token')`.
 
-Use `storageApiUrl` only when file storage is served from a different origin:
-
-```typescript
-configureMessaging({
-  apiBaseUrl: apiBase,
-  wsBaseUrl: apiBase.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:'),
-  storageApiUrl: process.env.EXPO_PUBLIC_STORAGE_API_URL,
-});
-```
+Do not point `storageApiUrl` at a separate file-storage API for chat attachments; it is deprecated and ignored. Host apps only need `apiBaseUrl`, `wsBaseUrl`, and a valid ticketing bearer token.
 
 ## Wrap The App
 
@@ -309,7 +301,8 @@ After integration:
 - `Messaging is not configured`: Call `configureMessaging` before rendering `MessagingProvider`, `MessagingOverlay`, or any hook that uses messaging.
 - Inbox does not load: Check `EXPO_PUBLIC_TICKETING_API_URL`, bearer token storage, and `/messaging/contacts/by-email/{email}`.
 - WebSocket does not authenticate: Check `sessionGid`, the `wsBaseUrl`, and the backend `/messaging/ws/{contactId}` auth protocol.
-- Images do not upload: Confirm `expo-image-picker` is installed, `MessagingImagePickerHost` is rendered, and the backend supports one of the storage upload paths.
+- Images do not upload: Confirm `expo-image-picker` is installed, `MessagingImagePickerHost` is rendered, `apiBaseUrl` is the ticketing API (not a separate file-storage `/store` service), and the backend exposes `/storage/upload` or `/files/upload` on that same base. Check `attachmentError` on `useMessaging()` for the last failure message.
+- Attachments send but peers do not see images: Ensure messages use `attachment_ids` + `mime_types` (v1.2.0+); reinstall the package if an older build sent `content=file_id` for single images.
 - The tab button does not navigate correctly: Replace `/(tabs)/map` with the target app's real route.
 - The package imports fail after GitHub install: Confirm the target app installed the React Native package, not the repository root Angular package.
 

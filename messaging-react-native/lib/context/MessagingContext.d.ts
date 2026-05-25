@@ -4,6 +4,8 @@ interface MessagingContextValue {
     isSessionActive: boolean;
     isReady: boolean;
     initError: string | null;
+    /** Last attachment upload/send failure (cleared on next attempt). */
+    attachmentError: string | null;
     contact: Contact | null;
     panelOpen: boolean;
     panelHeightRatio: number;

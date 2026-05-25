@@ -23,6 +23,7 @@ const MessagingContext = (0, react_1.createContext)(null);
 function MessagingProvider({ children, sessionGid, userEmail, presentation = 'overlay', }) {
     const [contact, setContact] = (0, react_1.useState)(null);
     const [initError, setInitError] = (0, react_1.useState)(null);
+    const [attachmentError, setAttachmentError] = (0, react_1.useState)(null);
     const [panelOpen, setPanelOpen] = (0, react_1.useState)(false);
     const [pendingPanelOpen, setPendingPanelOpen] = (0, react_1.useState)(false);
     const [panelHeightRatio, setPanelHeightRatioState] = (0, react_1.useState)(messagingConfig_1.MESSAGING_PANEL_HEIGHT_DEFAULT);
@@ -541,6 +542,7 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
         if (!contact || !activeConversationId || files.length === 0)
             return;
         const tempId = `temp-${Date.now()}`;
+        setAttachmentError(null);
         const optimistic = {
             message_id: tempId,
             conversation_id: activeConversationId,
@@ -557,19 +559,38 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
             [activeConversationId]: [...(prev[activeConversationId] ?? []), optimistic],
         }));
         try {
-            const uploaded = files.length === 1
-                ? [await (0, messagingFileService_1.uploadMessagingImage)(files[0].uri, files[0].fileName)]
-                : await (0, messagingFileService_1.uploadMessagingImages)(files);
-            if (uploaded.length === 1) {
-                await (0, messagingApiService_1.sendMessage)(activeConversationId, contact.contact_id, uploaded[0].file_id, 'IMAGE');
+            const uploaded = await (0, messagingFileService_1.uploadMessagingImages)(files);
+            const fileIds = uploaded.map((u) => u.file_id);
+            const filenames = uploaded.map((u) => u.filename);
+            const mimeTypes = uploaded.map((u) => u.mime_type || '');
+            if (fileIds.some((id) => (0, messagingHelpers_1.isTempMessageId)(id))) {
+                throw new Error('Upload not finished — cannot attach temp file.');
             }
-            else {
-                await (0, messagingApiService_1.sendMessageWithAttachments)(activeConversationId, contact.contact_id, caption, uploaded.map((u) => u.file_id), uploaded.map((u) => u.filename));
-            }
+            const isImg = (mimeTypes[0] || '').startsWith('image/') ||
+                /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)$/i.test(filenames[0] || '');
+            setMessagesMap((prev) => ({
+                ...prev,
+                [activeConversationId]: (prev[activeConversationId] ?? []).map((m) => m.message_id === tempId
+                    ? {
+                        ...m,
+                        message_type: isImg ? 'IMAGE' : 'FILE',
+                        attachments: fileIds.map((id, idx) => ({
+                            file_id: id,
+                            filename: filenames[idx] || filenames[0] || `Attachment ${idx + 1}`,
+                            mime_type: mimeTypes[idx] || undefined,
+                            url: uploaded[idx]?.url,
+                        })),
+                    }
+                    : m),
+            }));
+            (0, messagingFileService_1.prewarmMessagingMediaCache)(fileIds);
+            await (0, messagingApiService_1.sendMessageWithAttachments)(activeConversationId, contact.contact_id, caption, fileIds, filenames, mimeTypes);
             await loadMessagesFor(activeConversationId);
             setInbox((prev) => (0, messagingHelpers_1.patchInboxPreview)(prev, optimistic));
         }
-        catch {
+        catch (e) {
+            const message = e instanceof Error ? e.message : 'Failed to send attachment';
+            setAttachmentError(message);
             setMessagesMap((prev) => ({
                 ...prev,
                 [activeConversationId]: (prev[activeConversationId] ?? []).filter((m) => m.message_id !== tempId),
@@ -679,6 +700,7 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
         isSessionActive,
         isReady,
         initError,
+        attachmentError,
         contact,
         panelOpen,
         panelHeightRatio,
@@ -738,6 +760,7 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
         isSessionActive,
         isReady,
         initError,
+        attachmentError,
         contact,
         panelOpen,
         panelHeightRatio,

@@ -1,6 +1,6 @@
 {
   "name": "@coreline-engineering-solutions/messaging-react-native",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "React Native / Expo messaging UI with WebSocket, inbox, groups, and favorites",
   "author": "Coreline Engineering Solutions",
   "license": "MIT",

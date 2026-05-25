@@ -5,6 +5,12 @@ export function isTempMessageId(id: string | undefined | null): boolean {
   return !id || String(id).startsWith('temp-');
 }
 
+/** JSON-looking attachment ids must not be sent to storage retrieve. */
+export function isStructuredAttachmentId(id: string | undefined | null): boolean {
+  const value = String(id ?? '').trim();
+  return value.startsWith('{') || value.startsWith('[');
+}
+
 export function formatMessageTime(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -179,9 +185,17 @@ export function tryMergeOwnEcho(
 }
 
 export function resolveMessageFileId(msg: Message): string | null {
-  if (msg.attachments?.[0]?.file_id) return msg.attachments[0].file_id;
+  const fromAttachment = msg.attachments?.[0]?.file_id;
+  if (fromAttachment) {
+    return isStructuredAttachmentId(fromAttachment) ? null : fromAttachment;
+  }
   const content = String(msg.content ?? '').trim();
-  if (content && /^[a-f0-9-]{8,}$/i.test(content) && msg.message_type !== 'TEXT') {
+  if (
+    content &&
+    !isStructuredAttachmentId(content) &&
+    /^[a-f0-9-]{8,}$/i.test(content) &&
+    msg.message_type !== 'TEXT'
+  ) {
     return content;
   }
   return null;

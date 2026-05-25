@@ -38,7 +38,7 @@ export declare function getCompanyConnections(contactId: string): Promise<Compan
 export declare function sendConnectionInvite(adminContactId: string, targetCompany: string): Promise<void>;
 export declare function respondToConnection(adminContactId: string, connectionId: string, accept: boolean): Promise<void>;
 export declare function updateNotificationSettings(conversationId: string, contactId: string, settings: Record<string, unknown>): Promise<void>;
-export declare function sendMessageWithAttachments(conversationId: string, senderContactId: string, content: string, attachmentIds: string[], filenames: string[]): Promise<{
+export declare function sendMessageWithAttachments(conversationId: string, senderContactId: string, content: string, attachmentIds: string[], filenames: string[], mimeTypes?: string[]): Promise<{
     message_id?: string;
 }>;
 //# sourceMappingURL=messagingApiService.d.ts.map
