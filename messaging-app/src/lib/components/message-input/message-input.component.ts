@@ -55,11 +55,11 @@ export interface MentionOption {
 
       <div *ngIf="replyTo" class="reply-compose-preview">
         <mat-icon>reply</mat-icon>
-        <div class="reply-compose-text">
+        <div class="compose-preview-text">
           <span>Replying to {{ replyTo.senderName }}</span>
           <p>{{ replyTo.content }}</p>
         </div>
-        <button type="button" class="reply-cancel-btn" (click)="replyCancelled.emit()" title="Cancel reply">
+        <button type="button" class="compose-cancel-btn" (click)="replyCancelled.emit()" title="Cancel reply">
           <mat-icon>close</mat-icon>
         </button>
       </div>
@@ -203,12 +203,12 @@ export interface MentionOption {
       flex-shrink: 0;
     }
 
-    .reply-compose-text {
+    .compose-preview-text {
       min-width: 0;
       flex: 1;
     }
 
-    .reply-compose-text span {
+    .compose-preview-text span {
       display: block;
       font-size: 11px;
       font-weight: 700;
@@ -216,7 +216,7 @@ export interface MentionOption {
       margin-bottom: 2px;
     }
 
-    .reply-compose-text p {
+    .compose-preview-text p {
       margin: 0;
       font-size: 12px;
       color: rgba(255, 255, 255, 0.78);
@@ -225,7 +225,7 @@ export interface MentionOption {
       text-overflow: ellipsis;
     }
 
-    .reply-cancel-btn {
+    .compose-cancel-btn {
       width: 24px;
       height: 24px;
       border: none;
@@ -240,7 +240,7 @@ export interface MentionOption {
       flex-shrink: 0;
     }
 
-    .reply-cancel-btn mat-icon {
+    .compose-cancel-btn mat-icon {
       font-size: 16px;
       width: 16px;
       height: 16px;
@@ -528,13 +528,17 @@ export class MessageInputComponent implements OnChanges, AfterViewInit, OnDestro
       this.messageSent.emit({ text, forcePlainText });
     }
 
+    this.resetComposer(true);
+  }
+
+  private resetComposer(clearDraft: boolean): void {
     this.messageText = '';
     this.selectedFiles = [];
     this.mentionSuggestions = [];
     this.detectedCodeLanguage = null;
     this.codeDetectionDismissed = false;
     this.manualTextareaHeight = this.minTextareaHeight;
-    this.clearDraft(this.conversationId);
+    if (clearDraft) this.clearDraft(this.conversationId);
     if (this.fileInput) this.fileInput.nativeElement.value = '';
     this.queueAutoResize();
   }

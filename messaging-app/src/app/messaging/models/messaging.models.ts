@@ -35,6 +35,9 @@ export interface Message {
   media_url?: string;
   created_at: string;
   is_read?: boolean;
+  edited_at?: string;
+  is_deleted?: boolean;
+  deleted_at?: string;
 }
 
 export interface Conversation {
@@ -62,7 +65,7 @@ export interface CompanyConnection {
 }
 
 export interface WebSocketMessage {
-  type: 'new_message' | 'conversation_updated' | 'connection_invite_received' | 'pong' | 'auth_success' | 'error';
+  type: 'new_message' | 'conversation_updated' | 'group_updated' | 'connection_invite_received' | 'pong' | 'auth_success' | 'error';
   timestamp?: string;
   data?: any;
   message?: string;

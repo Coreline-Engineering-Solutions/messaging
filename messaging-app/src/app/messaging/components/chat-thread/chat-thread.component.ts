@@ -1,5 +1,5 @@
 import {
-  Component, OnInit, OnDestroy, Input, ViewChild, ElementRef, AfterViewChecked,
+  Component, OnInit, OnDestroy, Input, ViewChild, ViewChildren, QueryList, ElementRef, AfterViewChecked,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MatIconModule } from '@angular/material/icon';
@@ -69,12 +69,54 @@ import { MessageInputComponent } from '../message-input/message-input.component'
                   <img [src]="msg.media_url || msg.content" alt="Image" />
                 </div>
                 <div *ngIf="msg.message_type === 'TEXT'" class="text-content">
-                  {{ msg.content }}
+                  <ng-container *ngIf="isEditingMessage(msg); else messageText">
+                    <div class="inline-edit-wrap" (click)="$event.stopPropagation()">
+                      <textarea
+                        #inlineEditTextarea
+                        class="inline-edit-textarea"
+                        [value]="editingDraft"
+                        (input)="onInlineEditInput($event)"
+                        (keydown)="onInlineEditKeydown($event)"
+                        rows="2"
+                      ></textarea>
+                      <div class="inline-edit-actions">
+                        <button type="button" class="inline-edit-cancel" (click)="cancelInlineEdit($event)">Cancel</button>
+                        <button
+                          type="button"
+                          class="inline-edit-save"
+                          [disabled]="!canSaveInlineEdit()"
+                          (click)="saveInlineEdit($event)"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  </ng-container>
+                  <ng-template #messageText>{{ getMessageBody(msg) }}</ng-template>
                 </div>
                 <div class="message-meta">
+                  <span *ngIf="msg.edited_at && !isDeletedMessage(msg)" class="edited-label">edited</span>
                   <span class="msg-time">{{ formatTime(msg.created_at) }}</span>
                   <mat-icon *ngIf="msg.sender_id === myContactId && msg.is_read" class="read-icon">done_all</mat-icon>
                   <mat-icon *ngIf="msg.sender_id === myContactId && !msg.is_read" class="read-icon unread">done</mat-icon>
+                  <button
+                    *ngIf="canEditMessage(msg)"
+                    type="button"
+                    class="message-action-btn"
+                    (click)="onEditMessage(msg)"
+                    title="Edit message"
+                  >
+                    <mat-icon>edit</mat-icon>
+                  </button>
+                  <button
+                    *ngIf="canDeleteMessage(msg)"
+                    type="button"
+                    class="message-action-btn danger"
+                    (click)="onDeleteMessage(msg)"
+                    title="Delete message"
+                  >
+                    <mat-icon>delete</mat-icon>
+                  </button>
                 </div>
               </div>
             </div>
@@ -237,6 +279,84 @@ import { MessageInputComponent } from '../message-input/message-input.component'
       opacity: 0.7;
     }
 
+    .edited-label {
+      font-size: 10px;
+      font-style: italic;
+      opacity: 0.7;
+    }
+
+    .message-action-btn {
+      border: 0;
+      background: transparent;
+      color: inherit;
+      opacity: 0.72;
+      padding: 0;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .message-action-btn mat-icon {
+      font-size: 14px;
+      width: 14px;
+      height: 14px;
+    }
+
+    .message-action-btn.danger {
+      color: #fecaca;
+    }
+
+    .inline-edit-wrap {
+      min-width: 240px;
+    }
+
+    .inline-edit-textarea {
+      width: 100%;
+      min-height: 72px;
+      box-sizing: border-box;
+      border: 1px solid rgba(255, 255, 255, 0.4);
+      border-radius: 10px;
+      outline: none;
+      resize: vertical;
+      padding: 8px 10px;
+      background: rgba(255, 255, 255, 0.16);
+      color: inherit;
+      font: inherit;
+      line-height: 1.4;
+    }
+
+    .inline-edit-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .inline-edit-cancel,
+    .inline-edit-save {
+      border: 0;
+      border-radius: 8px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .inline-edit-cancel {
+      background: rgba(255, 255, 255, 0.24);
+      color: inherit;
+    }
+
+    .inline-edit-save {
+      background: #2563eb;
+      color: #fff;
+    }
+
+    .inline-edit-save:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+
     .read-icon {
       font-size: 14px;
       width: 14px;
@@ -272,11 +392,14 @@ import { MessageInputComponent } from '../message-input/message-input.component'
 })
 export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked {
   @ViewChild('scrollContainer') scrollContainer!: ElementRef;
+  @ViewChildren('inlineEditTextarea') inlineEditTextareas!: QueryList<ElementRef<HTMLTextAreaElement>>;
 
   messages: Message[] = [];
   conversationName = '';
   loading = false;
   myContactId: string | null = null;
+  editingMessage: Message | null = null;
+  editingDraft = '';
 
   private conversationId: string | null = null;
   private sub!: Subscription;
@@ -378,6 +501,94 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
     if (d.toDateString() === today.toDateString()) return 'Today';
     if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
     return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+
+  getMessageBody(message: Message): string {
+    return this.isDeletedMessage(message) ? '[This message was deleted]' : String(message.content || '');
+  }
+
+  isDeletedMessage(message: Message): boolean {
+    return Boolean(message.is_deleted || message.deleted_at || message.content === '[deleted]');
+  }
+
+  canEditMessage(message: Message): boolean {
+    return (
+      String(message.sender_id) === String(this.auth.contactId || this.myContactId) &&
+      !this.isDeletedMessage(message) &&
+      String(message.message_type || '').toUpperCase() === 'TEXT' &&
+      !String(message.message_id || '').startsWith('temp-')
+    );
+  }
+
+  canDeleteMessage(message: Message): boolean {
+    return (
+      String(message.sender_id) === String(this.auth.contactId || this.myContactId) &&
+      !this.isDeletedMessage(message)
+    );
+  }
+
+  onEditMessage(message: Message): void {
+    if (!this.canEditMessage(message)) return;
+    this.editingMessage = message;
+    this.editingDraft = this.getMessageBody(message);
+    setTimeout(() => {
+      const textarea = this.inlineEditTextareas?.first?.nativeElement;
+      textarea?.focus();
+      textarea?.select();
+    });
+  }
+
+  isEditingMessage(message: Message): boolean {
+    return !!this.editingMessage && String(this.editingMessage.message_id) === String(message.message_id);
+  }
+
+  onInlineEditInput(event: Event): void {
+    this.editingDraft = (event.target as HTMLTextAreaElement).value;
+  }
+
+  onInlineEditKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      this.clearEdit();
+      return;
+    }
+
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+      event.preventDefault();
+      this.saveInlineEdit(event);
+    }
+  }
+
+  canSaveInlineEdit(): boolean {
+    const message = this.editingMessage;
+    if (!message || !this.canEditMessage(message)) return false;
+    const trimmed = this.editingDraft.trim();
+    return !!trimmed && trimmed !== this.getMessageBody(message).trim();
+  }
+
+  saveInlineEdit(event?: Event): void {
+    event?.stopPropagation();
+    const message = this.editingMessage;
+    if (!message || !this.canSaveInlineEdit()) return;
+    this.store.editMessage(message.message_id, this.editingDraft.trim());
+    this.clearEdit();
+  }
+
+  cancelInlineEdit(event?: Event): void {
+    event?.stopPropagation();
+    this.clearEdit();
+  }
+
+  clearEdit(): void {
+    this.editingMessage = null;
+    this.editingDraft = '';
+  }
+
+  onDeleteMessage(message: Message): void {
+    if (!this.canDeleteMessage(message)) return;
+    if (window.confirm('Delete this message?')) {
+      this.store.deleteMessage(message.message_id);
+    }
   }
 
   private scrollToBottom(): void {

@@ -865,6 +865,51 @@ export class MessagingStoreService implements OnDestroy {
     });
   }
 
+  editMessage(messageId: string, content: string): void {
+    const contactId = this.auth.contactId;
+    const conversationId = this.activeConversationId$.value;
+    const nextContent = content.trim();
+    if (!contactId || !conversationId || !messageId || !nextContent) return;
+
+    this.api.editMessage(messageId, contactId, nextContent).subscribe({
+      next: (res) => {
+        const serverMessage = res?.message ? this.normalizeMessageShape(res.message) : null;
+        this.updateMessageInConversation(
+          conversationId,
+          messageId,
+          serverMessage || {
+            content: nextContent,
+            edited_at: res?.edited_at || new Date().toISOString(),
+          }
+        );
+        this.loadInbox();
+      },
+      error: () => {},
+    });
+  }
+
+  deleteMessage(messageId: string): void {
+    const contactId = this.auth.contactId;
+    const conversationId = this.activeConversationId$.value;
+    if (!contactId || !conversationId || !messageId) return;
+
+    if (String(messageId).startsWith('temp-')) {
+      this.removeMessageFromConversation(conversationId, messageId);
+      return;
+    }
+
+    this.api.deleteMessage(messageId, contactId).subscribe({
+      next: () => {
+        this.updateMessageInConversation(conversationId, messageId, {
+          content: '[deleted]',
+          is_deleted: true,
+        });
+        this.loadInbox();
+      },
+      error: () => {},
+    });
+  }
+
   getActiveConversationId(): string | null {
     return this.activeConversationId$.value;
   }
@@ -902,7 +947,7 @@ export class MessagingStoreService implements OnDestroy {
         this.handleNewMessage(this.wsEventPayload(msg));
         break;
       case 'conversation_updated':
-        this.loadInbox();
+        this.handleConversationUpdated(this.wsEventPayload(msg));
         break;
       case 'group_updated':
         this.handleGroupUpdated(this.wsEventPayload(msg));
@@ -913,8 +958,17 @@ export class MessagingStoreService implements OnDestroy {
     }
   }
 
-  private handleGroupUpdated(data: any): void {
+  private handleConversationUpdated(data: any): void {
     this.loadInbox();
+    const activeId = this.activeConversationId$.value;
+    const eventConversationId = data?.conversation_id ?? data?.conversationId;
+    if (activeId && (!eventConversationId || String(eventConversationId) === String(activeId))) {
+      this.loadMessages(activeId, undefined, true);
+    }
+  }
+
+  private handleGroupUpdated(data: any): void {
+    this.handleConversationUpdated(data);
   }
 
   private handleWebSocketError(errorMessage: string | undefined): void {
@@ -1034,6 +1088,32 @@ export class MessagingStoreService implements OnDestroy {
     map.set(message.conversation_id, msgs);
     this.messagesMap$.next(map);
     this.refreshMessageReactions(message.message_id);
+  }
+
+  private updateMessageInConversation(
+    conversationId: string,
+    messageId: string,
+    patch: Partial<Message>
+  ): void {
+    const map = new Map(this.messagesMap$.value);
+    const current = map.get(conversationId) || [];
+    const next = current.map((message) =>
+      String(message.message_id) === String(messageId)
+        ? this.normalizeMessageShape({ ...message, ...patch })
+        : message
+    );
+    map.set(conversationId, next);
+    this.messagesMap$.next(map);
+  }
+
+  private removeMessageFromConversation(conversationId: string, messageId: string): void {
+    const map = new Map(this.messagesMap$.value);
+    const current = map.get(conversationId) || [];
+    map.set(
+      conversationId,
+      current.filter((message) => String(message.message_id) !== String(messageId))
+    );
+    this.messagesMap$.next(map);
   }
 
   private mergeMessageAttachments(existing: Message, incoming: Message): Message {
@@ -1223,6 +1303,9 @@ export class MessagingStoreService implements OnDestroy {
       media_url: raw?.media_url ?? raw?.mediaUrl ?? raw?.url ?? raw?.file_url,
       created_at: raw?.created_at ?? raw?.createdAt ?? new Date().toISOString(),
       is_read: raw?.is_read,
+      edited_at: raw?.edited_at ?? raw?.editedAt,
+      is_deleted: Boolean(raw?.is_deleted ?? raw?.isDeleted ?? false),
+      deleted_at: raw?.deleted_at ?? raw?.deletedAt,
       reactions: raw?.reactions,
       mentions: raw?.mentions,
       attachments: raw?.attachments,

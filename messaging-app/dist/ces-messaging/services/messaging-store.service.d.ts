@@ -137,6 +137,8 @@ export declare class MessagingStoreService implements OnDestroy {
     private removeConversationFromUi;
     addReaction(messageId: string, emoji: string): void;
     removeReaction(messageId: string, emoji: string): void;
+    editMessage(messageId: string, content: string): void;
+    deleteMessage(messageId: string): void;
     getActiveConversationId(): string | null;
     getMessagesForConversation(conversationId: string): Message[];
     getCurrentInbox(): InboxItem[];
@@ -146,12 +148,15 @@ export declare class MessagingStoreService implements OnDestroy {
     private wsEventPayload;
     private listenWebSocket;
     private handleWsMessage;
+    private handleConversationUpdated;
     private handleGroupUpdated;
     private handleWebSocketError;
     private handleNewMessage;
     /** Public — lets components add an optimistic message without a round-trip. */
     appendOptimisticMessage(message: Message): void;
     private appendMessage;
+    private updateMessageInConversation;
+    private removeMessageFromConversation;
     private mergeMessageAttachments;
     private normalizeAttachmentList;
     private updateInboxPreview;

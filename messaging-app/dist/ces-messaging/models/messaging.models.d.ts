@@ -50,6 +50,7 @@ export interface Message {
     is_read?: boolean | string;
     read_at?: string;
     edited_at?: string;
+    is_deleted?: boolean;
     deleted_at?: string;
     read_by?: Array<string | number | {
         contact_id?: string | number;

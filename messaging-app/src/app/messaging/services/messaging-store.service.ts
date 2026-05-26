@@ -250,6 +250,47 @@ export class MessagingStoreService implements OnDestroy {
     });
   }
 
+  editMessage(messageId: string, content: string): void {
+    const contactId = this.auth.contactId;
+    const conversationId = this.activeConversationId$.value;
+    const nextContent = content.trim();
+    if (!contactId || !conversationId || !messageId || !nextContent) return;
+
+    this.api.editMessage(messageId, contactId, nextContent).subscribe({
+      next: (res) => {
+        this.updateMessageInConversation(conversationId, messageId, {
+          ...(res?.message || {}),
+          content: res?.message?.content || nextContent,
+          edited_at: res?.message?.edited_at || res?.edited_at || new Date().toISOString(),
+        });
+        this.loadInbox();
+      },
+      error: (err) => console.error('Failed to edit message:', err),
+    });
+  }
+
+  deleteMessage(messageId: string): void {
+    const contactId = this.auth.contactId;
+    const conversationId = this.activeConversationId$.value;
+    if (!contactId || !conversationId || !messageId) return;
+
+    if (String(messageId).startsWith('temp-')) {
+      this.removeMessageFromConversation(conversationId, messageId);
+      return;
+    }
+
+    this.api.deleteMessage(messageId, contactId).subscribe({
+      next: () => {
+        this.updateMessageInConversation(conversationId, messageId, {
+          content: '[deleted]',
+          is_deleted: true,
+        });
+        this.loadInbox();
+      },
+      error: (err) => console.error('Failed to delete message:', err),
+    });
+  }
+
   sendDirectMessage(recipientContactId: string, content: string): void {
     const contactId = this.auth.contactId;
     if (!contactId) return;
@@ -339,11 +380,23 @@ export class MessagingStoreService implements OnDestroy {
         this.handleNewMessage(msg.data);
         break;
       case 'conversation_updated':
-        this.loadInbox();
+        this.handleConversationUpdated(msg.data);
+        break;
+      case 'group_updated':
+        this.handleConversationUpdated(msg.data);
         break;
       case 'error':
         console.error('WebSocket error:', msg.message);
         break;
+    }
+  }
+
+  private handleConversationUpdated(data: any): void {
+    this.loadInbox();
+    const activeId = this.activeConversationId$.value;
+    const eventConversationId = data?.conversation_id ?? data?.conversationId;
+    if (activeId && (!eventConversationId || String(eventConversationId) === String(activeId))) {
+      this.loadMessages(activeId);
     }
   }
 
@@ -359,6 +412,9 @@ export class MessagingStoreService implements OnDestroy {
       content: data.content,
       media_url: data.media_url,
       created_at: data.created_at,
+      edited_at: data.edited_at,
+      is_deleted: data.is_deleted,
+      deleted_at: data.deleted_at,
     };
 
     // Don't duplicate if it's our own optimistic message
@@ -389,6 +445,37 @@ export class MessagingStoreService implements OnDestroy {
     const map = new Map(this.messagesMap$.value);
     const msgs = [...(map.get(message.conversation_id) || []), message];
     map.set(message.conversation_id, msgs);
+    this.messagesMap$.next(map);
+  }
+
+  private updateMessageInConversation(
+    conversationId: string,
+    messageId: string,
+    patch: Partial<Message>
+  ): void {
+    const map = new Map(this.messagesMap$.value);
+    const current = map.get(conversationId) || [];
+    map.set(
+      conversationId,
+      current.map((message) =>
+        String(message.message_id) === String(messageId)
+          ? { ...message, ...patch }
+          : message
+      )
+    );
+    this.messagesMap$.next(map);
+  }
+
+  private removeMessageFromConversation(
+    conversationId: string,
+    messageId: string
+  ): void {
+    const map = new Map(this.messagesMap$.value);
+    const current = map.get(conversationId) || [];
+    map.set(
+      conversationId,
+      current.filter((message) => String(message.message_id) !== String(messageId))
+    );
     this.messagesMap$.next(map);
   }
 

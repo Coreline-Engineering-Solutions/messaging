@@ -85,6 +85,19 @@ export class MessagingApiService {
     });
   }
 
+  editMessage(messageId: string, contactId: string, newContent: string): Observable<any> {
+    return this.http.put(`${this.base}/messages/${messageId}`, {
+      contactId,
+      content: newContent,
+    });
+  }
+
+  deleteMessage(messageId: string, contactId: string): Observable<any> {
+    return this.http.delete(`${this.base}/messages/${messageId}`, {
+      body: { contactId },
+    });
+  }
+
   // ── Conversations ──
   createConversation(
     creatorContactId: string,

@@ -1,5 +1,5 @@
 import {
-  Component, OnInit, OnDestroy, ViewChild, ElementRef, AfterViewChecked, ChangeDetectorRef,
+  Component, OnInit, OnDestroy, ViewChild, ViewChildren, QueryList, ElementRef, AfterViewChecked, ChangeDetectorRef,
   Output, EventEmitter,
 } from '@angular/core';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
@@ -25,10 +25,12 @@ import { MentionOption, MessageInputComponent, MessagePayload, MessageTextPayloa
   ],
   template: `
     <div
+      #threadRoot
       class="chat-thread"
       [class.drag-over]="threadDragOver"
       [style.--message-text-scale]="messageTextScale"
       [style.--code-text-scale]="codeTextScale"
+      (click)="closeMessageContextMenu()"
       (dragenter)="onThreadDragEnter($event)"
       (dragover)="onThreadDragOver($event)"
       (dragleave)="onThreadDragLeave($event)"
@@ -96,13 +98,20 @@ import { MentionOption, MessageInputComponent, MessagePayload, MessageTextPayloa
             <ng-template #chatMessage>
               <div
                 class="message-bubble-row"
-              [class.own]="isOwnMessage(msg)"
-              [class.other]="!isOwnMessage(msg)"
-            >
+                [class.own]="isOwnMessage(msg)"
+                [class.other]="!isOwnMessage(msg)"
+                (contextmenu)="openMessageContextMenu(msg, $event)"
+              >
               <div *ngIf="!isOwnMessage(msg)" class="sender-name">
                 {{ getSenderName(msg) }}
               </div>
-              <div class="message-bubble" [class.own-bubble]="isOwnMessage(msg)" (mouseenter)="hoveredMessageId = msg.message_id" (mouseleave)="hoveredMessageId = null">
+              <div
+                class="message-bubble"
+                [class.own-bubble]="isOwnMessage(msg)"
+                (mouseenter)="hoveredMessageId = msg.message_id"
+                (mouseleave)="hoveredMessageId = null"
+                (contextmenu)="openMessageContextMenu(msg, $event)"
+              >
                 <div *ngIf="getReplyPreview(msg) as reply" class="reply-context">
                   <mat-icon>reply</mat-icon>
                   <div>
@@ -214,51 +223,77 @@ import { MentionOption, MessageInputComponent, MessagePayload, MessageTextPayloa
                   </ng-template>
                 </div>
                 <ng-container *ngIf="msg.message_type === 'TEXT' && !hasFileAttachment(msg)">
-                  <div *ngIf="isCodeText(msg); else nonCodeTextMessage" class="code-message-wrap">
-                    <button type="button" class="render-copy-btn" (click)="copyCode(msg, $event)" title="Copy code">
-                      <mat-icon>content_copy</mat-icon>
-                    </button>
-                    <pre class="code-message"><code [innerHTML]="getHighlightedCode(msg)"></code></pre>
-                    <span class="code-language">{{ getCodeLanguage(msg) }}</span>
-                  </div>
-                  <ng-template #nonCodeTextMessage>
-                  <div *ngIf="isTableText(msg); else plainTextMessage" class="table-message-wrap">
-                    <button type="button" class="render-copy-btn" (click)="copyMessageText(msg, $event)" title="Copy table">
-                      <mat-icon>content_copy</mat-icon>
-                    </button>
-                    <table class="pasted-table">
-                      <tbody>
-                        <tr *ngFor="let row of getTableRows(msg); let rowIndex = index">
-                          <ng-container *ngFor="let cell of row">
-                            <th *ngIf="rowIndex === 0; else tableCell">{{ cell }}</th>
-                            <ng-template #tableCell>
-                              <td>{{ cell }}</td>
-                            </ng-template>
-                          </ng-container>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                  <ng-template #plainTextMessage>
-                    <div *ngIf="isMarkdownText(msg); else rawTextMessage" class="md-message-wrap">
-                      <button type="button" class="render-copy-btn" (click)="copyMessageText(msg, $event)" title="Copy markdown">
+                  <ng-container *ngIf="isEditingMessage(msg); else textMessageRender">
+                    <div class="inline-edit-wrap" (click)="$event.stopPropagation()" (contextmenu)="$event.stopPropagation()">
+                      <textarea
+                        #inlineEditTextarea
+                        class="inline-edit-textarea"
+                        [value]="editingDraft"
+                        (input)="onInlineEditInput($event)"
+                        (keydown)="onInlineEditKeydown($event)"
+                        rows="2"
+                      ></textarea>
+                      <div class="inline-edit-actions">
+                        <button type="button" class="inline-edit-cancel" (click)="cancelInlineEdit($event)">Cancel</button>
+                        <button
+                          type="button"
+                          class="inline-edit-save"
+                          [disabled]="!canSaveInlineEdit()"
+                          (click)="saveInlineEdit($event)"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  </ng-container>
+                  <ng-template #textMessageRender>
+                    <div *ngIf="isCodeText(msg); else nonCodeTextMessage" class="code-message-wrap">
+                      <button type="button" class="render-copy-btn" (click)="copyCode(msg, $event)" title="Copy code">
                         <mat-icon>content_copy</mat-icon>
                       </button>
-                      <div class="md-message" [innerHTML]="getMarkdownHtml(msg)"></div>
-                      <span class="md-language">md</span>
+                      <pre class="code-message"><code [innerHTML]="getHighlightedCode(msg)"></code></pre>
+                      <span class="code-language">{{ getCodeLanguage(msg) }}</span>
                     </div>
-                    <ng-template #rawTextMessage>
-                      <div
-                        class="text-content"
-                        [class.preformatted-text]="isPreformattedText(msg)"
-                      >
-                        {{ getMessageBody(msg) }}
+                    <ng-template #nonCodeTextMessage>
+                    <div *ngIf="isTableText(msg); else plainTextMessage" class="table-message-wrap">
+                      <button type="button" class="render-copy-btn" (click)="copyMessageText(msg, $event)" title="Copy table">
+                        <mat-icon>content_copy</mat-icon>
+                      </button>
+                      <table class="pasted-table">
+                        <tbody>
+                          <tr *ngFor="let row of getTableRows(msg); let rowIndex = index">
+                            <ng-container *ngFor="let cell of row">
+                              <th *ngIf="rowIndex === 0; else tableCell">{{ cell }}</th>
+                              <ng-template #tableCell>
+                                <td>{{ cell }}</td>
+                              </ng-template>
+                            </ng-container>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <ng-template #plainTextMessage>
+                      <div *ngIf="isMarkdownText(msg); else rawTextMessage" class="md-message-wrap">
+                        <button type="button" class="render-copy-btn" (click)="copyMessageText(msg, $event)" title="Copy markdown">
+                          <mat-icon>content_copy</mat-icon>
+                        </button>
+                        <div class="md-message" [innerHTML]="getMarkdownHtml(msg)"></div>
+                        <span class="md-language">md</span>
                       </div>
+                      <ng-template #rawTextMessage>
+                        <div
+                          class="text-content"
+                          [class.preformatted-text]="isPreformattedText(msg)"
+                        >
+                          {{ getMessageBody(msg) }}
+                        </div>
+                      </ng-template>
                     </ng-template>
-                  </ng-template>
+                    </ng-template>
                   </ng-template>
                 </ng-container>
                 <div class="message-meta">
+                  <span *ngIf="msg.edited_at && !isDeletedMessage(msg)" class="edited-label">edited</span>
                   <span class="msg-time">{{ formatTime(msg.created_at) }}</span>
                   <mat-icon
                     *ngIf="isOwnMessage(msg) && isMessageRead(msg)"
@@ -273,17 +308,7 @@ import { MentionOption, MessageInputComponent, MessagePayload, MessageTextPayloa
                     matTooltipPosition="above"
                   >done</mat-icon>
                 </div>
-                <button
-                  *ngIf="isGroup"
-                  type="button"
-                  class="reply-message-btn"
-                  (click)="startReply(msg, $event)"
-                  matTooltip="Reply"
-                  matTooltipPosition="above"
-                >
-                  <mat-icon>reply</mat-icon>
-                </button>
-                <div *ngIf="hoveredMessageId === msg.message_id" class="quick-reactions">
+                <div *ngIf="hoveredMessageId === msg.message_id && !isDeletedMessage(msg)" class="quick-reactions">
                   <button
                     *ngFor="let emoji of quickEmojis"
                     class="quick-emoji-btn"
@@ -293,7 +318,7 @@ import { MentionOption, MessageInputComponent, MessagePayload, MessageTextPayloa
                     {{ emoji }}
                   </button>
                 </div>
-                <div *ngIf="msg.reactions && msg.reactions.length > 0" class="reactions-row">
+                <div *ngIf="!isDeletedMessage(msg) && msg.reactions && msg.reactions.length > 0" class="reactions-row">
                   <button 
                     *ngFor="let r of msg.reactions" 
                     class="reaction-chip"
@@ -316,6 +341,54 @@ import { MentionOption, MessageInputComponent, MessagePayload, MessageTextPayloa
           <mat-icon>chat_bubble_outline</mat-icon>
           <p>No messages yet. Say hello!</p>
         </div>
+      </div>
+
+      <div
+        *ngIf="messageContextMenu as menu"
+        class="message-context-menu"
+        [style.left.px]="menu.x"
+        [style.top.px]="menu.y"
+        (click)="$event.stopPropagation()"
+        (contextmenu)="$event.preventDefault()"
+      >
+        <ng-container *ngIf="!menu.confirmDelete; else deleteConfirmMenu">
+          <button
+            *ngIf="canReplyMessage(menu.message)"
+            type="button"
+            class="context-menu-item"
+            (click)="replyFromContextMenu()"
+          >
+            <mat-icon>reply</mat-icon>
+            <span>Reply</span>
+          </button>
+          <button
+            *ngIf="canEditMessage(menu.message)"
+            type="button"
+            class="context-menu-item"
+            (click)="editFromContextMenu()"
+          >
+            <mat-icon>edit</mat-icon>
+            <span>Edit</span>
+          </button>
+          <button
+            *ngIf="canDeleteMessage(menu.message)"
+            type="button"
+            class="context-menu-item danger"
+            (click)="requestDeleteFromContextMenu()"
+          >
+            <mat-icon>delete</mat-icon>
+            <span>Delete</span>
+          </button>
+        </ng-container>
+        <ng-template #deleteConfirmMenu>
+          <div class="context-menu-confirm">
+            <div class="confirm-title">Delete this message?</div>
+            <div class="confirm-actions">
+              <button type="button" class="confirm-cancel" (click)="closeMessageContextMenu()">Cancel</button>
+              <button type="button" class="confirm-delete" (click)="confirmDeleteFromContextMenu()">Delete</button>
+            </div>
+          </div>
+        </ng-template>
       </div>
 
       <app-message-input
@@ -665,6 +738,64 @@ import { MentionOption, MessageInputComponent, MessagePayload, MessageTextPayloa
 
     .text-content.preformatted-text::-webkit-scrollbar {
       display: none;
+    }
+
+    .inline-edit-wrap {
+      width: min(76cqw, 520px);
+      min-width: min(56cqw, 260px);
+    }
+
+    .inline-edit-textarea {
+      width: 100%;
+      min-height: 72px;
+      max-height: 220px;
+      box-sizing: border-box;
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      border-radius: 10px;
+      outline: none;
+      resize: vertical;
+      padding: 9px 10px;
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+      font: inherit;
+      line-height: 1.35;
+      white-space: pre-wrap;
+    }
+
+    .inline-edit-textarea:focus {
+      border-color: rgba(191, 219, 254, 0.9);
+      box-shadow: 0 0 0 2px rgba(127, 180, 255, 0.18);
+    }
+
+    .inline-edit-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .inline-edit-cancel,
+    .inline-edit-save {
+      border: 0;
+      border-radius: 8px;
+      padding: 6px 10px;
+      color: #f8fafc;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .inline-edit-cancel {
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    .inline-edit-save {
+      background: #2563eb;
+    }
+
+    .inline-edit-save:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
     }
 
     .attachment-caption {
@@ -1126,6 +1257,12 @@ import { MentionOption, MessageInputComponent, MessagePayload, MessageTextPayloa
       color: rgba(216, 223, 246, 0.58);
     }
 
+    .edited-label {
+      font-size: 10px;
+      font-style: italic;
+      color: rgba(218, 224, 250, 0.62);
+    }
+
     .read-icon {
       font-size: 14px;
       width: 14px;
@@ -1283,10 +1420,89 @@ import { MentionOption, MessageInputComponent, MessagePayload, MessageTextPayloa
       font-size: 14px;
       margin: 0;
     }
+
+    .message-context-menu {
+      position: absolute;
+      z-index: 10000;
+      min-width: 150px;
+      padding: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 12px;
+      background: rgba(7, 17, 30, 0.98);
+      box-shadow: 0 18px 45px rgba(0, 0, 0, 0.38);
+      color: #f8fafc;
+    }
+
+    .context-menu-item {
+      width: 100%;
+      border: 0;
+      border-radius: 9px;
+      padding: 9px 10px;
+      background: transparent;
+      color: inherit;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      cursor: pointer;
+      font-size: 13px;
+      text-align: left;
+    }
+
+    .context-menu-item:hover {
+      background: rgba(255, 255, 255, 0.09);
+    }
+
+    .context-menu-item mat-icon {
+      font-size: 17px;
+      width: 17px;
+      height: 17px;
+    }
+
+    .context-menu-item.danger {
+      color: #fecaca;
+    }
+
+    .context-menu-confirm {
+      padding: 8px;
+      width: 190px;
+    }
+
+    .confirm-title {
+      color: #f8fafc;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+
+    .confirm-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .confirm-cancel,
+    .confirm-delete {
+      border: 0;
+      border-radius: 8px;
+      padding: 7px 10px;
+      color: #f8fafc;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .confirm-cancel {
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    .confirm-delete {
+      background: #dc2626;
+    }
   `],
 })
 export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked {
   @ViewChild('scrollContainer') scrollContainer!: ElementRef;
+  @ViewChild('threadRoot') threadRoot!: ElementRef<HTMLElement>;
+  @ViewChildren('inlineEditTextarea') inlineEditTextareas!: QueryList<ElementRef<HTMLTextAreaElement>>;
   @ViewChild(MessageInputComponent) messageInput?: MessageInputComponent;
   @Output() lightboxOpen = new EventEmitter<string>();
 
@@ -1300,6 +1516,8 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   loading = false;
   myContactId: string | null = null;
   replyToMessage: Message | null = null;
+  editingMessage: Message | null = null;
+  editingDraft = '';
   mentionOptions: MentionOption[] = [];
 
   conversationId: string | null = null;
@@ -1308,6 +1526,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
 
   uploading = false;
   hoveredMessageId: string | null = null;
+  messageContextMenu: { message: Message; x: number; y: number; confirmDelete: boolean } | null = null;
   quickEmojis = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
   threadDragOver = false;
   private threadDragDepth = 0;
@@ -1368,6 +1587,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
         this.conversationId = convId;
         this.resetMediaQueue();
         this.clearReply();
+        this.clearEdit();
         this.shouldScrollToBottom = true;
         const chat = chats.find((c) => c.conversationId === convId);
         this.conversationName = chat?.name || 'Chat';
@@ -1426,13 +1646,87 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
 
   startReply(message: Message, event?: Event): void {
     event?.stopPropagation();
-    if (!this.isGroup || this.isSystemMessage(message)) return;
+    if (this.isDeletedMessage(message) || this.isSystemMessage(message)) return;
+    this.clearEdit();
     this.replyToMessage = message;
     this.messageInput?.focus();
   }
 
+  openMessageContextMenu(message: Message, event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    if (this.isDeletedMessage(message) || this.isSystemMessage(message)) return;
+
+    const hasActions =
+      this.canReplyMessage(message) ||
+      this.canEditMessage(message) ||
+      this.canDeleteMessage(message);
+    if (!hasActions) return;
+
+    this.messageContextMenu = {
+      message,
+      ...this.getContextMenuPosition(event),
+      confirmDelete: false,
+    };
+  }
+
+  private getContextMenuPosition(event: MouseEvent): { x: number; y: number } {
+    const rect = this.threadRoot?.nativeElement?.getBoundingClientRect();
+    if (!rect) {
+      return {
+        x: Math.min(event.clientX, window.innerWidth - 220),
+        y: Math.min(event.clientY, window.innerHeight - 160),
+      };
+    }
+
+    const menuWidth = 210;
+    const menuHeight = 170;
+    const padding = 8;
+    const rawX = event.clientX - rect.left;
+    const rawY = event.clientY - rect.top;
+    return {
+      x: Math.max(padding, Math.min(rawX, rect.width - menuWidth - padding)),
+      y: Math.max(padding, Math.min(rawY, rect.height - menuHeight - padding)),
+    };
+  }
+
+  closeMessageContextMenu(): void {
+    this.messageContextMenu = null;
+  }
+
+  replyFromContextMenu(): void {
+    const message = this.messageContextMenu?.message;
+    if (!message || !this.canReplyMessage(message)) return;
+    this.startReply(message);
+    this.closeMessageContextMenu();
+  }
+
+  editFromContextMenu(): void {
+    const message = this.messageContextMenu?.message;
+    if (!message || !this.canEditMessage(message)) return;
+    this.closeMessageContextMenu();
+    this.startEditMessage(message);
+  }
+
+  requestDeleteFromContextMenu(): void {
+    if (!this.messageContextMenu || !this.canDeleteMessage(this.messageContextMenu.message)) return;
+    this.messageContextMenu = { ...this.messageContextMenu, confirmDelete: true };
+  }
+
+  confirmDeleteFromContextMenu(): void {
+    const message = this.messageContextMenu?.message;
+    if (!message || !this.canDeleteMessage(message)) return;
+    this.closeMessageContextMenu();
+    this.store.deleteMessage(message.message_id);
+  }
+
   clearReply(): void {
     this.replyToMessage = null;
+  }
+
+  clearEdit(): void {
+    this.editingMessage = null;
+    this.editingDraft = '';
   }
 
   getReplyPreview(message: Message): ReplyPreview | null {
@@ -1452,7 +1746,12 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   }
 
   getMessageBody(message: Message): string {
+    if (this.isDeletedMessage(message)) return '[This message was deleted]';
     return String(message.content || '');
+  }
+
+  isDeletedMessage(message: Message): boolean {
+    return Boolean(message.is_deleted || message.deleted_at || message.content === '[deleted]');
   }
 
   private truncateReplyText(value: string): string {
@@ -1708,7 +2007,95 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   }
 
   isOwnMessage(msg: Message): boolean {
-    return String(msg.sender_id) === String(this.myContactId);
+    const currentContactId = this.auth.contactId || this.myContactId;
+    if (currentContactId && String(msg.sender_id) === String(currentContactId)) return true;
+    if (String(msg.sender_name || '').trim().toLowerCase() === 'you') return true;
+
+    const current = this.auth.currentContact;
+    const senderUsername = String(msg.sender_username || '').trim().toLowerCase();
+    const currentUsername = String(current?.username || '').trim().toLowerCase();
+    if (senderUsername && currentUsername && senderUsername === currentUsername) return true;
+
+    const senderName = getMessageSenderName(msg).trim().toLowerCase();
+    const currentName = current ? getContactDisplayName(current).trim().toLowerCase() : '';
+    return !!senderName && !!currentName && senderName === currentName;
+  }
+
+  canEditMessage(msg: Message): boolean {
+    return (
+      this.isOwnMessage(msg) &&
+      !this.isDeletedMessage(msg) &&
+      String(msg.message_type || '').toUpperCase() === 'TEXT' &&
+      !String(msg.message_id || '').startsWith('temp-')
+    );
+  }
+
+  canDeleteMessage(msg: Message): boolean {
+    return (
+      this.isOwnMessage(msg) &&
+      !this.isDeletedMessage(msg)
+    );
+  }
+
+  canManageMessage(msg: Message): boolean {
+    return this.canEditMessage(msg) || this.canDeleteMessage(msg);
+  }
+
+  canReplyMessage(msg: Message): boolean {
+    return !this.isDeletedMessage(msg) && !this.isSystemMessage(msg);
+  }
+
+  isEditingMessage(msg: Message): boolean {
+    return !!this.editingMessage && String(this.editingMessage.message_id) === String(msg.message_id);
+  }
+
+  onInlineEditInput(event: Event): void {
+    this.editingDraft = (event.target as HTMLTextAreaElement).value;
+  }
+
+  onInlineEditKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      this.clearEdit();
+      return;
+    }
+
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+      event.preventDefault();
+      this.saveInlineEdit(event);
+    }
+  }
+
+  canSaveInlineEdit(): boolean {
+    const message = this.editingMessage;
+    if (!message || !this.canEditMessage(message)) return false;
+    const next = this.editingDraft.trim();
+    return !!next && next !== this.getMessageBody(message).trim();
+  }
+
+  saveInlineEdit(event?: Event): void {
+    event?.stopPropagation();
+    const message = this.editingMessage;
+    if (!message || !this.canSaveInlineEdit()) return;
+    this.store.editMessage(message.message_id, this.editingDraft.trim());
+    this.clearEdit();
+  }
+
+  cancelInlineEdit(event?: Event): void {
+    event?.stopPropagation();
+    this.clearEdit();
+  }
+
+  private startEditMessage(msg: Message): void {
+    if (!this.canEditMessage(msg)) return;
+    this.clearReply();
+    this.editingMessage = msg;
+    this.editingDraft = this.getMessageBody(msg);
+    setTimeout(() => {
+      const textarea = this.inlineEditTextareas?.first?.nativeElement;
+      textarea?.focus();
+      textarea?.select();
+    });
   }
 
   isSystemMessage(msg: Message): boolean {

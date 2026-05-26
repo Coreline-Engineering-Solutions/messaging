@@ -13,6 +13,7 @@ export declare class MessageActionsComponent {
     copy: EventEmitter<Message>;
     get canEdit(): boolean;
     get canDelete(): boolean;
+    private get isDeleted();
     onReply(): void;
     onReact(): void;
     onEdit(): void;

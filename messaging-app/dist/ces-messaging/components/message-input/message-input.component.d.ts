@@ -51,6 +51,7 @@ export declare class MessageInputComponent implements OnChanges, AfterViewInit, 
     ngOnDestroy(): void;
     get canSend(): boolean;
     send(): void;
+    private resetComposer;
     onTextChange(value: string): void;
     onPaste(event: ClipboardEvent): void;
     autoResize(): void;

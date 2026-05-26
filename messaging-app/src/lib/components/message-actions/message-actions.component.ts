@@ -89,11 +89,24 @@ export class MessageActionsComponent {
   @Output() copy = new EventEmitter<Message>();
 
   get canEdit(): boolean {
-    return this.message.sender_id === this.currentUserId;
+    return (
+      this.message.sender_id === this.currentUserId &&
+      this.message.message_type === 'TEXT' &&
+      !this.isDeleted &&
+      !String(this.message.message_id || '').startsWith('temp-')
+    );
   }
 
   get canDelete(): boolean {
-    return this.message.sender_id === this.currentUserId || this.canPin;
+    return (
+      (this.message.sender_id === this.currentUserId || this.canPin) &&
+      !this.isDeleted &&
+      !String(this.message.message_id || '').startsWith('temp-')
+    );
+  }
+
+  private get isDeleted(): boolean {
+    return Boolean(this.message.is_deleted || this.message.deleted_at || this.message.content === '[deleted]');
   }
 
   onReply() {
