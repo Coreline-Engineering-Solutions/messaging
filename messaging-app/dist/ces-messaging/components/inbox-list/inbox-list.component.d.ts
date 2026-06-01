@@ -23,6 +23,7 @@ export declare class InboxListComponent implements OnInit, OnDestroy {
     ngOnDestroy(): void;
     get filteredInbox(): InboxItem[];
     get emptyStateText(): string;
+    isProject(item: InboxItem): boolean;
     setActiveTab(tab: 'all' | 'direct' | 'groups' | 'projects' | 'settings'): void;
     private getSavedTab;
     toggleNotificationsMuted(): void;

@@ -34,11 +34,20 @@ export interface InboxItem {
   last_message_at: string;
   unread_count: number;
   is_group?: boolean;
+  is_project?: boolean;
+  project_gid?: string;
+  project_status?: 'active' | 'pending_delete' | 'archived' | 'deleted';
+  project_purge_after?: string;
+  conversation_type?: string;
   has_mention?: boolean;
   participant_count?: number;
   other_participant_id?: string;
   other_participant_name?: string;
   other_participant_email?: string;
+}
+
+export function isProjectConversation(item: InboxItem): boolean {
+  return item.is_project === true || item.conversation_type?.toLowerCase() === 'project' || !!item.project_gid;
 }
 
 export interface MessageReplyPreview {

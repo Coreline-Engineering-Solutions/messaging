@@ -24,6 +24,7 @@ export {
   ChannelPermissions,
   ParticipantRole,
   SearchFilter,
+  isProjectConversation,
   getContactDisplayName,
   getMessageSenderName,
   createContactFromUser,

@@ -7,7 +7,7 @@ import { MatRippleModule } from '@angular/material/core';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { Subscription } from 'rxjs';
 import { MessagingStoreService } from '../../services/messaging-store.service';
-import { InboxItem } from '../../models/messaging.models';
+import { InboxItem, isProjectConversation } from '../../models/messaging.models';
 
 @Component({
   selector: 'app-inbox-list',
@@ -15,7 +15,7 @@ import { InboxItem } from '../../models/messaging.models';
   imports: [CommonModule, FormsModule, MatIconModule, MatButtonModule, MatRippleModule, MatTooltipModule],
   template: `
     <div class="inbox-container">
-      <div *ngIf="activeTab !== 'projects' && activeTab !== 'settings'" class="search-bar">
+      <div *ngIf="activeTab !== 'settings'" class="search-bar">
         <mat-icon class="search-icon">search</mat-icon>
         <input
           type="text"
@@ -34,8 +34,12 @@ import { InboxItem } from '../../models/messaging.models';
           (click)="openConversation(item)"
           (contextmenu)="onContextMenu($event, item)"
         >
-          <div class="avatar" [class.group-avatar]="item.is_group">
-            <mat-icon>{{ item.is_group ? 'group' : 'person' }}</mat-icon>
+          <div
+            class="avatar"
+            [class.group-avatar]="item.is_group && !isProject(item)"
+            [class.project-avatar]="isProject(item)"
+          >
+            <mat-icon>{{ isProject(item) ? 'workspaces' : item.is_group ? 'group' : 'person' }}</mat-icon>
           </div>
           <div class="conversation-info">
             <div class="info-top">
@@ -57,20 +61,15 @@ import { InboxItem } from '../../models/messaging.models';
           </div>
         </div>
 
-        <div *ngIf="filteredInbox.length === 0 && activeTab !== 'projects' && activeTab !== 'settings'" class="empty-state">
-          <mat-icon>{{ activeTab === 'groups' ? 'group' : 'forum' }}</mat-icon>
+        <div *ngIf="filteredInbox.length === 0 && activeTab !== 'settings'" class="empty-state">
+          <mat-icon>{{ activeTab === 'projects' ? 'workspaces' : activeTab === 'groups' ? 'group' : 'forum' }}</mat-icon>
           <p>{{ emptyStateText }}</p>
-          <button *ngIf="!searchQuery && activeTab !== 'groups'" mat-stroked-button color="primary" (click)="onNewConversation()">
+          <button *ngIf="!searchQuery && activeTab !== 'groups' && activeTab !== 'projects'" mat-stroked-button color="primary" (click)="onNewConversation()">
             Start a conversation
           </button>
           <button *ngIf="!searchQuery && activeTab === 'groups'" mat-stroked-button color="primary" (click)="onCreateGroup()">
             Create a group
           </button>
-        </div>
-
-        <div *ngIf="activeTab === 'projects'" class="empty-state projects-state">
-          <mat-icon>workspaces</mat-icon>
-          <p>Coming soon</p>
         </div>
 
         <div *ngIf="activeTab === 'settings'" class="settings-panel">
@@ -391,6 +390,14 @@ WHERE status = 'Open';</code></pre>
       color: rgba(255, 255, 255, 0.7);
     }
 
+    .project-avatar {
+      background: rgba(37, 99, 235, 0.2);
+    }
+
+    .project-avatar mat-icon {
+      color: #bfdbfe;
+    }
+
     .conversation-info {
       flex: 1;
       min-width: 0;
@@ -496,10 +503,6 @@ WHERE status = 'Open';</code></pre>
     .empty-state p {
       margin: 0 0 16px;
       font-size: 14px;
-    }
-
-    .projects-state p {
-      margin-bottom: 0;
     }
 
     .settings-panel {
@@ -694,10 +697,12 @@ export class InboxListComponent implements OnInit, OnDestroy {
   }
 
   get filteredInbox(): InboxItem[] {
-    if (this.activeTab === 'projects' || this.activeTab === 'settings') return [];
+    if (this.activeTab === 'settings') return [];
     const tabbed = this.inbox.filter((item) => {
+      const project = this.isProject(item);
       if (this.activeTab === 'direct') return !item.is_group;
-      if (this.activeTab === 'groups') return item.is_group;
+      if (this.activeTab === 'groups') return item.is_group && !project;
+      if (this.activeTab === 'projects') return project;
       return true;
     });
     if (!this.searchQuery.trim()) return tabbed;
@@ -713,7 +718,12 @@ export class InboxListComponent implements OnInit, OnDestroy {
     if (this.searchQuery.trim()) return 'No matching conversations';
     if (this.activeTab === 'direct') return 'No chats yet';
     if (this.activeTab === 'groups') return 'No groups yet';
+    if (this.activeTab === 'projects') return 'No project chats yet';
     return 'No conversations yet';
+  }
+
+  isProject(item: InboxItem): boolean {
+    return isProjectConversation(item);
   }
 
   setActiveTab(tab: 'all' | 'direct' | 'groups' | 'projects' | 'settings'): void {
