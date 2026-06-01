@@ -8,7 +8,6 @@ import {
   Message,
   Contact,
   Conversation,
-  CompanyConnection,
 } from '../models/messaging.models';
 
 @Injectable({ providedIn: 'root' })
@@ -156,28 +155,4 @@ export class MessagingApiService {
     return this.http.post(`${this.base}/groups`, body);
   }
 
-  // ── Connections ──
-  sendConnectionInvite(adminContactId: string, targetCompany: string): Observable<any> {
-    return this.http.post(`${this.base}/connections/invites`, {
-      session_gid: this.auth.sessionGid,
-      adminContactId,
-      targetCompany,
-    });
-  }
-
-  respondToConnection(adminContactId: string, connectionId: string, accept: boolean): Observable<any> {
-    return this.http.post(`${this.base}/connections/${connectionId}/respond`, {
-      session_gid: this.auth.sessionGid,
-      adminContactId,
-      accept,
-    });
-  }
-
-  getCompanyConnections(contactId: string): Observable<CompanyConnection[]> {
-    const params = new HttpParams().set('session_gid', this.auth.sessionGid!);
-    return this.http.get<CompanyConnection[]>(
-      `${this.base}/contacts/${contactId}/connections`,
-      { params }
-    );
-  }
 }

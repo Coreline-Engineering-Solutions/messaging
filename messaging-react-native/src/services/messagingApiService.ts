@@ -2,7 +2,6 @@
 import { formatMessagingHttpError } from '../utils/messagingHttpError';
 import { getMessagingApiBaseUrl, resolveMessagingAccessToken } from './messagingRuntime';
 import type {
-  CompanyConnection,
   Contact,
   ConversationParticipant,
   InboxItem,
@@ -297,34 +296,6 @@ export async function getPresence(contactId: string): Promise<PresenceInfo> {
 export async function checkContactProfile(contactId: string): Promise<void> {
   await messagingHttp.post(`${base}/contacts/check`, {
     contact_id: parseInt(contactId, 10),
-  });
-}
-
-export async function getCompanyConnections(contactId: string): Promise<CompanyConnection[]> {
-  const { data } = await messagingHttp.get<CompanyConnection[]>(
-    `${base}/contacts/${contactId}/connections`
-  );
-  return data ?? [];
-}
-
-export async function sendConnectionInvite(
-  adminContactId: string,
-  targetCompany: string
-): Promise<void> {
-  await messagingHttp.post(`${base}/connections/invites`, {
-    admin_contact_id: parseInt(adminContactId, 10),
-    target_company: targetCompany,
-  });
-}
-
-export async function respondToConnection(
-  adminContactId: string,
-  connectionId: string,
-  accept: boolean
-): Promise<void> {
-  await messagingHttp.post(`${base}/connections/${connectionId}/respond`, {
-    admin_contact_id: parseInt(adminContactId, 10),
-    accept,
   });
 }
 

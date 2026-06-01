@@ -1,4 +1,4 @@
-import type { CompanyConnection, Contact, ConversationParticipant, InboxItem, Message, PresenceInfo } from '../types/messaging';
+import type { Contact, ConversationParticipant, InboxItem, Message, PresenceInfo } from '../types/messaging';
 export declare function resolveContactByEmail(email: string): Promise<Contact | null>;
 export declare function getInbox(contactId: string): Promise<InboxItem[]>;
 export declare function getVisibleContacts(contactId: string): Promise<Contact[]>;
@@ -34,9 +34,6 @@ export declare function searchMessages(contactId: string, query: string, convers
 export declare function updatePresence(contactId: string, status: string, customStatus?: string): Promise<void>;
 export declare function getPresence(contactId: string): Promise<PresenceInfo>;
 export declare function checkContactProfile(contactId: string): Promise<void>;
-export declare function getCompanyConnections(contactId: string): Promise<CompanyConnection[]>;
-export declare function sendConnectionInvite(adminContactId: string, targetCompany: string): Promise<void>;
-export declare function respondToConnection(adminContactId: string, connectionId: string, accept: boolean): Promise<void>;
 export declare function updateNotificationSettings(conversationId: string, contactId: string, settings: Record<string, unknown>): Promise<void>;
 export declare function sendMessageWithAttachments(conversationId: string, senderContactId: string, content: string, attachmentIds: string[], filenames: string[], mimeTypes?: string[]): Promise<{
     message_id?: string;

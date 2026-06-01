@@ -113,16 +113,8 @@ export interface ConversationParticipant {
   joined_at?: string;
 }
 
-export interface CompanyConnection {
-  connection_id: string;
-  requester_company: string;
-  responder_company: string;
-  status: 'PENDING' | 'ACTIVE' | 'REJECTED' | 'REVOKED';
-  created_at: string;
-}
-
 export interface WebSocketMessage {
-  type: 'new_message' | 'conversation_updated' | 'group_updated' | 'connection_invite_received' | 'pong' | 'auth_success' | 'error';
+  type: 'new_message' | 'conversation_updated' | 'group_updated' | 'pong' | 'auth_success' | 'error';
   timestamp?: string;
   data?: any;
   message?: string;

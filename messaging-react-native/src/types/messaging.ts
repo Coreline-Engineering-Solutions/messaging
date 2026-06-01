@@ -95,12 +95,6 @@ export type MessagingView =
   | 'message-search'
   | 'thread';
 
-export interface CompanyConnection {
-  connection_id: string;
-  company_name: string;
-  status: string;
-}
-
 export interface PresenceInfo {
   status: string;
   custom_status?: string;

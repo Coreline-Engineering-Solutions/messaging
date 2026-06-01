@@ -319,23 +319,6 @@ class MessagingApiService {
         formData.append('file', file, file.name);
         return this.http.post(`${this.base}/attachments/upload`, formData);
     }
-    // ── Connections ──
-    sendConnectionInvite(adminContactId, targetCompany) {
-        return this.http.post(`${this.base}/connections/invites`, {
-            admin_contact_id: parseInt(adminContactId),
-            target_company: targetCompany,
-        });
-    }
-    respondToConnection(adminContactId, connectionId, accept) {
-        return this.http.post(`${this.base}/connections/${connectionId}/respond`, {
-            admin_contact_id: parseInt(adminContactId),
-            accept,
-        });
-    }
-    getCompanyConnections(contactId) {
-        warnEmailLikeContactId(contactId);
-        return this.http.get(`${this.base}/contacts/${contactId}/connections`);
-    }
     // ── Reactions ──
     addReaction(messageId, contactId, emoji) {
         return this.http.post(`${this.base}/messages/${messageId}/reactions`, {

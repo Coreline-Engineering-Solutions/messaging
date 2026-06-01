@@ -79,11 +79,6 @@ export interface WebSocketMessage {
     message?: string;
 }
 export type MessagingView = 'inbox' | 'chat' | 'new-conversation' | 'group-manager' | 'message-search' | 'thread';
-export interface CompanyConnection {
-    connection_id: string;
-    company_name: string;
-    status: string;
-}
 export interface PresenceInfo {
     status: string;
     custom_status?: string;

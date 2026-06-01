@@ -2,7 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { MessagingConfig } from '../messaging.config';
 import { AuthService } from './auth.service';
-import { InboxItem, Message, Contact, Conversation, ConversationParticipant, CompanyConnection } from '../models/messaging.models';
+import { InboxItem, Message, Contact, Conversation, ConversationParticipant } from '../models/messaging.models';
 import * as i0 from "@angular/core";
 export declare class MessagingApiService {
     private http;
@@ -25,9 +25,6 @@ export declare class MessagingApiService {
     clearConversation(conversationId: string, contactId: string): Observable<any>;
     deleteGroup(conversationId: string, contactId: string): Observable<any>;
     uploadAttachment(file: File): Observable<any>;
-    sendConnectionInvite(adminContactId: string, targetCompany: string): Observable<any>;
-    respondToConnection(adminContactId: string, connectionId: string, accept: boolean): Observable<any>;
-    getCompanyConnections(contactId: string): Observable<CompanyConnection[]>;
     addReaction(messageId: string, contactId: string, emoji: string): Observable<any>;
     removeReaction(messageId: string, contactId: string, emoji: string): Observable<any>;
     getReactions(messageId: string): Observable<any[]>;

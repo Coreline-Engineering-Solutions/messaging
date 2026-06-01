@@ -10,7 +10,6 @@ import {
   Contact,
   Conversation,
   ConversationParticipant,
-  CompanyConnection,
 } from '../models/messaging.models';
 
 @Injectable({ providedIn: 'root' })
@@ -165,28 +164,6 @@ export class MessagingApiService {
     const formData = new FormData();
     formData.append('file', file, file.name);
     return this.http.post(`${this.base}/attachments/upload`, formData);
-  }
-
-  // ── Connections ──
-  sendConnectionInvite(adminContactId: string, targetCompany: string): Observable<any> {
-    return this.http.post(`${this.base}/connections/invites`, {
-      admin_contact_id: parseInt(adminContactId),
-      target_company: targetCompany,
-    });
-  }
-
-  respondToConnection(adminContactId: string, connectionId: string, accept: boolean): Observable<any> {
-    return this.http.post(`${this.base}/connections/${connectionId}/respond`, {
-      admin_contact_id: parseInt(adminContactId),
-      accept,
-    });
-  }
-
-  getCompanyConnections(contactId: string): Observable<CompanyConnection[]> {
-    warnEmailLikeContactId(contactId);
-    return this.http.get<CompanyConnection[]>(
-      `${this.base}/contacts/${contactId}/connections`
-    );
   }
 
   // ── Reactions ──

@@ -30,9 +30,6 @@ exports.searchMessages = searchMessages;
 exports.updatePresence = updatePresence;
 exports.getPresence = getPresence;
 exports.checkContactProfile = checkContactProfile;
-exports.getCompanyConnections = getCompanyConnections;
-exports.sendConnectionInvite = sendConnectionInvite;
-exports.respondToConnection = respondToConnection;
 exports.updateNotificationSettings = updateNotificationSettings;
 exports.sendMessageWithAttachments = sendMessageWithAttachments;
 const axios_1 = __importDefault(require("axios"));
@@ -212,22 +209,6 @@ async function getPresence(contactId) {
 async function checkContactProfile(contactId) {
     await messagingHttp.post(`${base}/contacts/check`, {
         contact_id: parseInt(contactId, 10),
-    });
-}
-async function getCompanyConnections(contactId) {
-    const { data } = await messagingHttp.get(`${base}/contacts/${contactId}/connections`);
-    return data ?? [];
-}
-async function sendConnectionInvite(adminContactId, targetCompany) {
-    await messagingHttp.post(`${base}/connections/invites`, {
-        admin_contact_id: parseInt(adminContactId, 10),
-        target_company: targetCompany,
-    });
-}
-async function respondToConnection(adminContactId, connectionId, accept) {
-    await messagingHttp.post(`${base}/connections/${connectionId}/respond`, {
-        admin_contact_id: parseInt(adminContactId, 10),
-        accept,
     });
 }
 async function updateNotificationSettings(conversationId, contactId, settings) {

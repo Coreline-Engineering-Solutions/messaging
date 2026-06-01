@@ -28,7 +28,6 @@ export type {
   WebSocketMessage,
   WsStatus,
   GroupEditState,
-  CompanyConnection,
 } from './types/messaging';
 export {
   getContactDisplayName,

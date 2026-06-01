@@ -9,7 +9,6 @@ export {
   Message,
   Conversation,
   ConversationParticipant,
-  CompanyConnection,
   WebSocketMessage,
   ChatWindow,
   Attachment,
