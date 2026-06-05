@@ -10,6 +10,14 @@ __pycache__/
 
 # Environment
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
 
 # Build output (leading slash = only repo-root dist/; bare `dist/` would ignore all dist trees e.g. messaging-app/dist)
 /dist/

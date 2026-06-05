@@ -10,6 +10,9 @@ export declare class MessagingApiService {
     private config;
     private base;
     constructor(http: HttpClient, auth: AuthService, config: MessagingConfig);
+    private authOptions;
+    private sessionParams;
+    private sessionBody;
     getInbox(contactId: string): Observable<InboxItem[]>;
     getMessages(conversationId: string, contactId: string, beforeMessageId?: string, limit?: number): Observable<Message[]>;
     sendMessage(conversationId: string, senderContactId: string, content: string, messageType?: 'TEXT' | 'IMAGE' | 'SYSTEM', mediaUrl?: string): Observable<any>;

@@ -49,12 +49,12 @@ export class MessagingWebSocketService implements OnDestroy {
 
   subscribe(conversationId: string): void {
     this.subscribedConversations.add(conversationId);
-    this.send({ action: 'subscribe', conversation_id: conversationId });
+    this.send({ type: 'subscribe', conversation_id: conversationId });
   }
 
   unsubscribe(conversationId: string): void {
     this.subscribedConversations.delete(conversationId);
-    this.send({ action: 'unsubscribe', conversation_id: conversationId });
+    this.send({ type: 'unsubscribe', conversation_id: conversationId });
   }
 
   subscribeAll(conversationIds: string[]): void {
@@ -108,12 +108,12 @@ export class MessagingWebSocketService implements OnDestroy {
   }
 
   private authenticate(): void {
-    this.send({ action: 'auth', session_gid: this.sessionGid });
+    this.send({ type: 'auth', session_gid: this.sessionGid });
   }
 
   private resubscribe(): void {
     this.subscribedConversations.forEach((id) => {
-      this.send({ action: 'subscribe', conversation_id: id });
+      this.send({ type: 'subscribe', conversation_id: id });
     });
   }
 
@@ -128,7 +128,7 @@ export class MessagingWebSocketService implements OnDestroy {
   private startPing(): void {
     this.stopPing();
     this.pingInterval = setInterval(() => {
-      this.send({ action: 'ping' });
+      this.send({ type: 'ping' });
     }, 25000);
   }
 

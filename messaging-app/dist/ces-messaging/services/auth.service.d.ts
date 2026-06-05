@@ -19,6 +19,7 @@ export declare class AuthService {
     setDemoSession(sessionGid: string, contact: Contact): void;
     logout(): void;
     isAuthenticated(): boolean;
+    refreshMessagingSession(): Observable<Contact | null>;
     private persistSession;
     static ɵfac: i0.ɵɵFactoryDeclaration<AuthService, never>;
     static ɵprov: i0.ɵɵInjectableDeclaration<AuthService>;

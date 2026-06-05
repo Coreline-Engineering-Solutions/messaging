@@ -1,7 +1,7 @@
 import * as i0 from '@angular/core';
 import { InjectionToken, Inject, Injectable, Component, EventEmitter, ViewChild, Output, Input, ViewChildren, ViewEncapsulation } from '@angular/core';
-import { BehaviorSubject, Subject, of, from, throwError, Observable, forkJoin, combineLatest, Subscription, debounceTime } from 'rxjs';
-import { tap, concatMap, toArray, catchError, map } from 'rxjs/operators';
+import { BehaviorSubject, of, Subject, from, throwError, Observable, forkJoin, combineLatest, Subscription, debounceTime } from 'rxjs';
+import { tap, map, catchError, concatMap, toArray } from 'rxjs/operators';
 import * as i1 from '@angular/common/http';
 import { HttpParams } from '@angular/common/http';
 import * as i1$1 from '@angular/common';
@@ -196,6 +196,36 @@ class AuthService {
     isAuthenticated() {
         return !!this.sessionGid$.value && !!this.currentContact$.value;
     }
+    refreshMessagingSession() {
+        const token = this.sessionGid$.value;
+        if (!token)
+            return of(null);
+        return this.http.get(`${this.config.apiBaseUrl}/messaging/auth/me`, {
+            headers: {
+                'X-Messaging-Session': token,
+            },
+        }).pipe(map((res) => {
+            const existing = this.currentContact$.value;
+            const contact = {
+                contact_id: String(res.contact_id),
+                user_gid: String(res.user_gid || existing?.user_gid || ''),
+                email: String(res.email || existing?.email || ''),
+                username: existing?.username,
+                first_name: existing?.first_name,
+                last_name: existing?.last_name,
+                company_name: existing?.company_name || '',
+                profile_image_url: existing?.profile_image_url,
+                phone: existing?.phone,
+                is_active: true,
+            };
+            this.currentContact$.next(contact);
+            this.persistSession();
+            return contact;
+        }), catchError(() => {
+            this.logout();
+            return of(null);
+        }));
+    }
     persistSession() {
         const data = {
             session_gid: this.sessionGid$.value,
@@ -225,93 +255,105 @@ class MessagingApiService {
         this.config = config;
         this.base = `${this.config.apiBaseUrl}/messaging`;
     }
+    authOptions(options = {}) {
+        const sessionGid = this.auth.sessionGid;
+        if (!sessionGid)
+            return options;
+        return {
+            ...options,
+            headers: {
+                ...(options.headers || {}),
+                'X-Messaging-Session': sessionGid,
+            },
+        };
+    }
+    sessionParams(params = new HttpParams()) {
+        const sessionGid = this.auth.sessionGid;
+        return sessionGid ? params.set('session_gid', sessionGid) : params;
+    }
+    sessionBody(body = {}) {
+        const sessionGid = this.auth.sessionGid;
+        return sessionGid ? { session_gid: sessionGid, ...body } : body;
+    }
     // ── Inbox ──
     getInbox(contactId) {
         warnEmailLikeContactId(contactId);
-        return this.http.get(`${this.base}/contacts/${contactId}/inbox`);
+        return this.http.get(`${this.base}/my-inbox`, this.authOptions({ params: this.sessionParams() }));
     }
     // ── Messages ──
     getMessages(conversationId, contactId, beforeMessageId, limit = 50) {
-        let params = new HttpParams()
-            .set('contact_id', contactId)
-            .set('limit', limit.toString());
+        let params = this.sessionParams(new HttpParams().set('limit', limit.toString()));
         if (beforeMessageId) {
             params = params.set('before', beforeMessageId);
         }
-        return this.http.get(`${this.base}/conversations/${conversationId}/messages`, { params });
+        return this.http.get(`${this.base}/conversations/${conversationId}/messages`, this.authOptions({ params }));
     }
     sendMessage(conversationId, senderContactId, content, messageType = 'TEXT', mediaUrl) {
-        const body = {
-            sender_id: parseInt(senderContactId),
+        const body = this.sessionBody({
             content,
-        };
-        return this.http.post(`${this.base}/conversations/${conversationId}/messages`, body);
+        });
+        return this.http.post(`${this.base}/conversations/${conversationId}/messages`, body, this.authOptions());
     }
     sendDirectMessage(senderContactId, recipientContactId, content, messageType = 'TEXT') {
-        return this.http.post(`${this.base}/direct-messages`, {
-            sender_id: parseInt(senderContactId),
+        return this.http.post(`${this.base}/direct-messages`, this.sessionBody({
             recipient_id: parseInt(recipientContactId),
             content,
-        });
+        }), this.authOptions());
     }
     markConversationRead(conversationId, contactId) {
-        return this.http.post(`${this.base}/conversations/${conversationId}/read`, {
-            contact_id: parseInt(contactId, 10),
-        });
+        return this.http.post(`${this.base}/conversations/${conversationId}/read`, this.sessionBody(), this.authOptions());
     }
     // ── Conversations ──
     createConversation(creatorContactId, participantContactIds, name) {
-        return this.http.post(`${this.base}/conversations`, {
-            creator_id: parseInt(creatorContactId),
+        return this.http.post(`${this.base}/conversations`, this.sessionBody({
             participants: participantContactIds.map(id => parseInt(id)),
             name: name || null,
-        });
+        }), this.authOptions());
     }
     getDirectConversation(contactA, contactB) {
-        const params = new HttpParams()
+        const params = this.sessionParams(new HttpParams()
             .set('contactA', contactA)
-            .set('contactB', contactB);
-        return this.http.get(`${this.base}/conversations/direct`, { params });
+            .set('contactB', contactB));
+        return this.http.get(`${this.base}/conversations/direct`, this.authOptions({ params }));
     }
     getConversationParticipants(conversationId) {
-        return this.http.get(`${this.base}/conversations/${conversationId}/participants`);
+        return this.http.get(`${this.base}/conversations/${conversationId}/participants`, this.authOptions());
     }
     // ── Contacts ──
     getVisibleContacts(contactId) {
         warnEmailLikeContactId(contactId);
-        return this.http.get(`${this.base}/contacts/${contactId}/visible-contacts`);
+        return this.http.get(`${this.base}/my-visible-contacts`, this.authOptions({ params: this.sessionParams() }));
     }
     checkContactProfile(contactId, updates) {
-        return this.http.post(`${this.base}/contacts/check`, {
-            contact_id: parseInt(contactId),
-        });
+        return this.http.post(`${this.base}/contacts/check`, this.sessionBody(), this.authOptions());
     }
     // ── Groups ──
     manageGroup(contactId, action, conversationId, groupName, participantContactIds) {
-        const payload = {
-            contact_id: parseInt(contactId),
-        };
+        const payload = {};
         if (conversationId)
             payload.conversation_id = parseInt(conversationId);
         if (groupName)
             payload.name = groupName;
         if (participantContactIds)
             payload.participant_ids = participantContactIds.map(id => parseInt(id));
+        if (action === 'remove')
+            payload.contact_id = parseInt(contactId);
         return this.http.post(`${this.base}/groups`, {
+            ...this.sessionBody(),
             action,
             payload,
-        });
+        }, this.authOptions());
     }
     // ── Delete / Clear ──
     deleteConversation(conversationId, contactId) {
         return this.http.post(`${this.base}/conversations/${conversationId}/delete`, {
             contactId,
-        });
+        }, this.authOptions());
     }
     clearConversation(conversationId, contactId) {
         return this.http.post(`${this.base}/conversations/${conversationId}/clear`, {
             contactId,
-        });
+        }, this.authOptions());
     }
     deleteGroup(conversationId, contactId) {
         return this.manageGroup(contactId, 'remove', conversationId);
@@ -320,89 +362,79 @@ class MessagingApiService {
     uploadAttachment(file) {
         const formData = new FormData();
         formData.append('file', file, file.name);
-        return this.http.post(`${this.base}/attachments/upload`, formData);
+        return this.http.post(`${this.base}/attachments/upload`, formData, this.authOptions());
     }
     // ── Reactions ──
     addReaction(messageId, contactId, emoji) {
-        return this.http.post(`${this.base}/messages/${messageId}/reactions`, {
-            contact_id: parseInt(contactId),
+        return this.http.post(`${this.base}/messages/${messageId}/reactions`, this.sessionBody({
             emoji,
-        });
+        }), this.authOptions());
     }
     removeReaction(messageId, contactId, emoji) {
-        return this.http.delete(`${this.base}/messages/${messageId}/reactions`, {
-            body: {
-                contact_id: parseInt(contactId),
+        return this.http.delete(`${this.base}/messages/${messageId}/reactions`, this.authOptions({
+            body: this.sessionBody({
                 emoji,
-            },
-        });
+            }),
+        }));
     }
     getReactions(messageId) {
-        return this.http.get(`${this.base}/messages/${messageId}/reactions`);
+        return this.http.get(`${this.base}/messages/${messageId}/reactions`, this.authOptions());
     }
     // ── Threads ──
     getThreadMessages(parentMessageId, contactId) {
-        const params = new HttpParams()
-            .set('contact_id', contactId);
-        return this.http.get(`${this.base}/messages/${parentMessageId}/thread`, { params });
+        return this.http.get(`${this.base}/messages/${parentMessageId}/thread`, this.authOptions());
     }
     sendThreadReply(parentMessageId, senderContactId, content) {
-        return this.http.post(`${this.base}/messages/${parentMessageId}/replies`, {
-            sender_id: parseInt(senderContactId),
+        return this.http.post(`${this.base}/messages/${parentMessageId}/replies`, this.sessionBody({
             content,
-        });
+        }), this.authOptions());
     }
     // ── Message Actions ──
     editMessage(messageId, contactId, newContent) {
-        return this.http.put(`${this.base}/messages/${messageId}`, {
-            contactId,
+        return this.http.put(`${this.base}/messages/${messageId}`, this.sessionBody({
             content: newContent,
-        });
+        }), this.authOptions());
     }
     deleteMessage(messageId, contactId) {
-        return this.http.delete(`${this.base}/messages/${messageId}`, {
-            body: {
-                contactId,
-            },
-        });
+        return this.http.delete(`${this.base}/messages/${messageId}`, this.authOptions({
+            body: this.sessionBody(),
+        }));
     }
     pinMessage(messageId, conversationId, contactId) {
         return this.http.post(`${this.base}/messages/${messageId}/pin`, {
             conversationId,
             contactId,
-        });
+        }, this.authOptions());
     }
     unpinMessage(messageId, contactId) {
-        return this.http.delete(`${this.base}/messages/${messageId}/pin`, {
+        return this.http.delete(`${this.base}/messages/${messageId}/pin`, this.authOptions({
             body: {
                 contactId,
             },
-        });
+        }));
     }
     // ── Presence ──
     updatePresence(contactId, status, customStatus) {
         warnEmailLikeContactId(contactId);
-        const params = new HttpParams().set('status', status);
-        return this.http.put(`${this.base}/contacts/${contactId}/presence`, null, { params });
+        return this.http.put(`${this.base}/contacts/${contactId}/presence`, this.sessionBody({ status, custom_status: customStatus }), this.authOptions());
     }
     getPresence(contactId) {
         warnEmailLikeContactId(contactId);
-        return this.http.get(`${this.base}/contacts/${contactId}/presence`);
+        return this.http.get(`${this.base}/contacts/${contactId}/presence`, this.authOptions());
     }
     // ── Search ──
     searchMessages(contactId, query, conversationId) {
-        return this.http.post(`${this.base}/search`, {
-            contact_id: parseInt(contactId),
+        return this.http.post(`${this.base}/search`, this.sessionBody({
             query,
             conversation_id: conversationId ? parseInt(conversationId) : null,
-        });
+        }), this.authOptions());
     }
     // ── Notifications ──
     updateNotificationSettings(conversationId, contactId, settings) {
         return this.http.put(`${this.base}/conversations/${conversationId}/notifications`, {
             contactId,
             ...settings,
-        });
+        }, this.authOptions());
     }
     static ɵfac = i0.ɵɵngDeclareFactory({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: MessagingApiService, deps: [{ token: i1.HttpClient }, { token: AuthService }, { token: MESSAGING_CONFIG }], target: i0.ɵɵFactoryTarget.Injectable });
     static ɵprov = i0.ɵɵngDeclareInjectable({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: MessagingApiService, providedIn: 'root' });
@@ -582,7 +614,7 @@ class MessagingFileService {
     http;
     auth;
     config;
-    /** Base URL, e.g. https://ces-ticketing-system-db.onrender.com/api */
+    /** Base URL, e.g. https://api.example.com/api */
     base;
     /** Ordered fallback lists — tried top-to-bottom on 404 / network error. */
     uploadEndpoints;
@@ -600,13 +632,31 @@ class MessagingFileService {
         this.retrieveEndpoints = [`${this.base}/storage/retrieve`, `${this.base}/files/retrieve`, `${this.base}/messaging/storage/retrieve`, `${this.base}/messaging/files/retrieve`];
         this.deleteEndpoints = [`${this.base}/storage/delete`, `${this.base}/files/delete`, `${this.base}/messaging/storage/delete`, `${this.base}/messaging/files/delete`];
     }
+    authOptions(options = {}) {
+        const token = this.auth.sessionGid;
+        if (!token)
+            return options;
+        return {
+            ...options,
+            headers: {
+                ...(options.headers || {}),
+                'X-Messaging-Session': token,
+            },
+        };
+    }
+    appendSession(fd) {
+        const sessionGid = this.auth.sessionGid;
+        if (sessionGid)
+            fd.append('session_gid', sessionGid);
+        return fd;
+    }
     // ── Upload ───────────────────────────────────────────────────────────────
     uploadFile(file, category = 'messaging_attachments') {
         const makeBody = () => {
             const fd = new FormData();
             fd.append('file', file, file.name);
             fd.append('category', category);
-            return fd;
+            return this.appendSession(fd);
         };
         return this.tryEndpoints(this.uploadEndpoints, makeBody);
     }
@@ -629,7 +679,7 @@ class MessagingFileService {
         const makeBody = () => {
             const fd = new FormData();
             fd.append('file_id', fileId);
-            return fd;
+            return this.appendSession(fd);
         };
         return this.tryEndpoints(this.retrieveEndpoints, makeBody, false).pipe(catchError((err) => {
             this.mediaFailures.add(fileId);
@@ -678,7 +728,7 @@ class MessagingFileService {
         const makeBody = () => {
             const fd = new FormData();
             fd.append('file_id', fileId);
-            return fd;
+            return this.appendSession(fd);
         };
         return this.tryEndpoints(this.deleteEndpoints, makeBody, false);
     }
@@ -691,12 +741,12 @@ class MessagingFileService {
         }
         const messagingBase = `${this.base}/messaging`;
         return this.http.post(`${messagingBase}/conversations/${conversationId}/messages`, {
-            sender_id: parseInt(senderContactId, 10),
+            session_gid: this.auth.sessionGid,
             content: content || '',
             attachment_ids: realIds,
             filenames,
             mime_types: mimeTypes,
-        });
+        }, this.authOptions());
     }
     // ── Fallback engine ───────────────────────────────────────────────────────
     /**
@@ -709,7 +759,7 @@ class MessagingFileService {
             return throwError(() => new Error('All storage endpoints exhausted.'));
         }
         const [url, ...rest] = urls;
-        return this.http.post(url, bodyFn()).pipe(catchError((err) => {
+        return this.http.post(url, bodyFn(), this.authOptions()).pipe(catchError((err) => {
             // Only fall through on not-found or network issues
             if ((err.status === 404 || (fallbackOnNetwork && err.status === 0)) && rest.length > 0) {
                 return this.tryEndpoints(rest, bodyFn, fallbackOnNetwork);
@@ -880,6 +930,18 @@ class MessagingStoreService {
     initialize() {
         if (!this.auth.isAuthenticated())
             return;
+        this.auth.refreshMessagingSession().subscribe({
+            next: (contact) => {
+                if (!contact) {
+                    this.teardown();
+                    return;
+                }
+                this.initializeWithVerifiedSession();
+            },
+            error: () => this.teardown(),
+        });
+    }
+    initializeWithVerifiedSession() {
         const contactId = this.auth.contactId;
         const sessionGid = this.auth.sessionGid;
         this.loadInbox();

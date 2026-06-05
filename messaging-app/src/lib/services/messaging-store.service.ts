@@ -102,6 +102,19 @@ export class MessagingStoreService implements OnDestroy {
   initialize(): void {
     if (!this.auth.isAuthenticated()) return;
 
+    this.auth.refreshMessagingSession().subscribe({
+      next: (contact) => {
+        if (!contact) {
+          this.teardown();
+          return;
+        }
+        this.initializeWithVerifiedSession();
+      },
+      error: () => this.teardown(),
+    });
+  }
+
+  private initializeWithVerifiedSession(): void {
     const contactId = this.auth.contactId!;
     const sessionGid = this.auth.sessionGid!;
 

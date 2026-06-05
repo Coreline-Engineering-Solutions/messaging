@@ -77,6 +77,7 @@ export declare class MessagingStoreService implements OnDestroy {
     }>;
     constructor(auth: AuthService, api: MessagingApiService, wsService: MessagingWebSocketService);
     initialize(): void;
+    private initializeWithVerifiedSession;
     teardown(): void;
     private startPolling;
     private stopPolling;

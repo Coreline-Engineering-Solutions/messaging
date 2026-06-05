@@ -33,7 +33,7 @@ function isStructuredId(id: string | null | undefined): boolean {
 
 @Injectable({ providedIn: 'root' })
 export class MessagingFileService {
-  /** Base URL, e.g. https://ces-ticketing-system-db.onrender.com/api */
+  /** Base URL, e.g. https://api.example.com/api */
   private readonly base: string;
 
   /** Ordered fallback lists — tried top-to-bottom on 404 / network error. */
@@ -57,6 +57,26 @@ export class MessagingFileService {
     this.deleteEndpoints   = [`${this.base}/storage/delete`,   `${this.base}/files/delete`,   `${this.base}/messaging/storage/delete`,   `${this.base}/messaging/files/delete`];
   }
 
+  private authOptions(
+    options: { headers?: Record<string, string> } = {}
+  ): { headers?: Record<string, string> } {
+    const token = this.auth.sessionGid;
+    if (!token) return options;
+    return {
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+        'X-Messaging-Session': token,
+      },
+    };
+  }
+
+  private appendSession(fd: FormData): FormData {
+    const sessionGid = this.auth.sessionGid;
+    if (sessionGid) fd.append('session_gid', sessionGid);
+    return fd;
+  }
+
   // ── Upload ───────────────────────────────────────────────────────────────
 
   uploadFile(file: File, category = 'messaging_attachments'): Observable<FileUploadResponse> {
@@ -64,7 +84,7 @@ export class MessagingFileService {
       const fd = new FormData();
       fd.append('file', file, file.name);
       fd.append('category', category);
-      return fd;
+      return this.appendSession(fd);
     };
     return this.tryEndpoints<FileUploadResponse>(this.uploadEndpoints, makeBody);
   }
@@ -92,7 +112,7 @@ export class MessagingFileService {
     const makeBody = () => {
       const fd = new FormData();
       fd.append('file_id', fileId);
-      return fd;
+      return this.appendSession(fd);
     };
     return this.tryEndpoints<FileRetrieveResponse>(this.retrieveEndpoints, makeBody, false).pipe(
       catchError((err) => {
@@ -150,7 +170,7 @@ export class MessagingFileService {
     const makeBody = () => {
       const fd = new FormData();
       fd.append('file_id', fileId);
-      return fd;
+      return this.appendSession(fd);
     };
     return this.tryEndpoints(this.deleteEndpoints, makeBody, false);
   }
@@ -172,12 +192,12 @@ export class MessagingFileService {
     }
     const messagingBase = `${this.base}/messaging`;
     return this.http.post(`${messagingBase}/conversations/${conversationId}/messages`, {
-      sender_id: parseInt(senderContactId, 10),
+      session_gid: this.auth.sessionGid,
       content: content || '',
       attachment_ids: realIds,
       filenames,
       mime_types: mimeTypes,
-    });
+    }, this.authOptions());
   }
 
   // ── Fallback engine ───────────────────────────────────────────────────────
@@ -193,7 +213,7 @@ export class MessagingFileService {
     }
 
     const [url, ...rest] = urls;
-    return this.http.post<T>(url, bodyFn()).pipe(
+    return this.http.post<T>(url, bodyFn(), this.authOptions()).pipe(
       catchError((err: HttpErrorResponse) => {
         // Only fall through on not-found or network issues
         if ((err.status === 404 || (fallbackOnNetwork && err.status === 0)) && rest.length > 0) {

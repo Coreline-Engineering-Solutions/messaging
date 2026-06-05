@@ -4,7 +4,8 @@ import { InjectionToken } from '@angular/core';
  *
  * **WebSocket URL (built by the library)**
  * The client opens:
- * `${wsBaseUrl}/messaging/ws/${contactId}`
+ * `${wsBaseUrl}/messaging/ws/${contactId}` and then sends
+ * `{ type: 'auth', session_gid }` as the first WebSocket message.
  * so `wsBaseUrl` must be the **origin + path prefix** where your server upgrades WebSockets
  * (no trailing slash).
  *
@@ -29,6 +30,7 @@ export interface MessagingConfig {
     /**
      * Base URL for the messaging WebSocket. Final URL:
      * `${wsBaseUrl}/messaging/ws/${contactId}`.
+     * The client authenticates with `{ type: 'auth', session_gid }` after connect.
      * Use the same scheme/host/path prefix as HTTP when your app is behind one gateway (e.g. `wss://host/api` if REST is `https://host/api`).
      */
     wsBaseUrl: string;

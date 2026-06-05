@@ -20,7 +20,7 @@ export declare class MessagingFileService {
     private http;
     private auth;
     private config;
-    /** Base URL, e.g. https://ces-ticketing-system-db.onrender.com/api */
+    /** Base URL, e.g. https://api.example.com/api */
     private readonly base;
     /** Ordered fallback lists — tried top-to-bottom on 404 / network error. */
     private readonly uploadEndpoints;
@@ -30,6 +30,8 @@ export declare class MessagingFileService {
     private readonly mediaCache;
     private readonly mediaFailures;
     constructor(http: HttpClient, auth: AuthService, config: MessagingConfig);
+    private authOptions;
+    private appendSession;
     uploadFile(file: File, category?: string): Observable<FileUploadResponse>;
     uploadFiles(files: File[]): Observable<FileUploadResponse[]>;
     retrieveFile(fileId: string): Observable<FileRetrieveResponse>;

@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { BehaviorSubject, Observable, of } from 'rxjs';
-import { tap, catchError } from 'rxjs/operators';
+import { map, tap, catchError } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 import { AuthSession, Contact } from '../models/messaging.models';
 
@@ -92,6 +92,39 @@ export class AuthService {
 
   isAuthenticated(): boolean {
     return !!this.sessionGid$.value && !!this.currentContact$.value;
+  }
+
+  refreshMessagingSession(): Observable<Contact | null> {
+    const token = this.sessionGid$.value;
+    if (!token) return of(null);
+
+    return this.http.get<any>(`${environment.apiBaseUrl}/messaging/auth/me`, {
+      headers: {
+        'X-Messaging-Session': token,
+      },
+    }).pipe(
+      map((res) => {
+        const existing = this.currentContact$.value;
+        const contact: Contact = {
+          contact_id: String(res.contact_id),
+          user_gid: String(res.user_gid || existing?.user_gid || ''),
+          email: String(res.email || existing?.email || ''),
+          first_name: existing?.first_name || '',
+          last_name: existing?.last_name || '',
+          company_name: existing?.company_name || '',
+          profile_image_url: existing?.profile_image_url,
+          phone: existing?.phone,
+          is_active: true,
+        };
+        this.currentContact$.next(contact);
+        this.persistSession();
+        return contact;
+      }),
+      catchError(() => {
+        this.logout();
+        return of(null);
+      })
+    );
   }
 
   private persistSession(): void {
