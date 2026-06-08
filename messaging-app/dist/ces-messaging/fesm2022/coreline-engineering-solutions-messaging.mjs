@@ -61,11 +61,9 @@ function getMessageSenderName(msg) {
  * Reduces boilerplate when integrating with existing auth systems.
  *
  * **`contact_id` must match your backend**
- * Many APIs (including typical CES / FastAPI bigint routes) expect a **numeric** contact id in
- * URL paths such as `/messaging/contacts/{contact_id}/...`. Email is a common human identifier
- * but is often **wrong** for those routes. Prefer:
- * - resolving the server contact id first (e.g. `GET .../messaging/contacts/by-email?email=...` when your API provides it), then passing that id as `contact_id`, or
- * - `contactIdHint: 'id'` / `'userId'` when your auth user already carries the numeric messaging id.
+ * The current CES messaging API resolves the canonical contact through
+ * `/messaging/auth/me` using `X-Messaging-Session`. Prefer that session refresh path
+ * over building contacts from email in host apps.
  *
  * @param user - User object with email and optional fields
  * @param sessionGid - Session GUID from authentication
@@ -73,8 +71,9 @@ function getMessageSenderName(msg) {
  * @returns Contact object ready for `setSession()`
  *
  * @example
- * // Backend expects numeric id — use server lookup first, then set contact_id
- * // const numericId = await fetchByEmail(user.email);
+ * // Backend expects numeric id — use AuthService.refreshMessagingSession() first,
+ * // then set contact_id from the returned contact.
+ * // const numericId = refreshedContact.contact_id;
  * // createContactFromUser({ ...user, id: numericId }, sessionGid, 'id');
  *
  * @example
@@ -124,7 +123,7 @@ function warnEmailLikeContactId(contactId) {
     if (warnedEmailLikeContactIds.has(contactId))
         return;
     warnedEmailLikeContactIds.add(contactId);
-    console.warn('[@coreline-engineering-solutions/messaging] contact_id looks like an email. Many backends expect a numeric contact id in REST paths and WebSockets. Resolve the numeric id first when your API supports it (for example GET .../messaging/contacts/by-email?email=...), then set Contact.contact_id to that value.');
+    console.warn('[@coreline-engineering-solutions/messaging] contact_id looks like an email. The current CES API resolves the numeric contact id with GET /messaging/auth/me and X-Messaging-Session; call AuthService.refreshMessagingSession() before loading inbox data.');
 }
 function warnIfWsBaseUrlMissingApiPrefixWhenApiHasIt(apiBaseUrl, wsBaseUrl) {
     if (warnedWsApiPrefixMismatch)
@@ -267,22 +266,17 @@ class MessagingApiService {
             },
         };
     }
-    sessionParams(params = new HttpParams()) {
-        const sessionGid = this.auth.sessionGid;
-        return sessionGid ? params.set('session_gid', sessionGid) : params;
-    }
     sessionBody(body = {}) {
-        const sessionGid = this.auth.sessionGid;
-        return sessionGid ? { session_gid: sessionGid, ...body } : body;
+        return body;
     }
     // ── Inbox ──
     getInbox(contactId) {
         warnEmailLikeContactId(contactId);
-        return this.http.get(`${this.base}/my-inbox`, this.authOptions({ params: this.sessionParams() }));
+        return this.http.get(`${this.base}/my-inbox`, this.authOptions());
     }
     // ── Messages ──
     getMessages(conversationId, contactId, beforeMessageId, limit = 50) {
-        let params = this.sessionParams(new HttpParams().set('limit', limit.toString()));
+        let params = new HttpParams().set('limit', limit.toString());
         if (beforeMessageId) {
             params = params.set('before', beforeMessageId);
         }
@@ -311,9 +305,7 @@ class MessagingApiService {
         }), this.authOptions());
     }
     getDirectConversation(contactA, contactB) {
-        const params = this.sessionParams(new HttpParams()
-            .set('contactA', contactA)
-            .set('contactB', contactB));
+        const params = new HttpParams().set('contactB', contactB);
         return this.http.get(`${this.base}/conversations/direct`, this.authOptions({ params }));
     }
     getConversationParticipants(conversationId) {
@@ -322,7 +314,7 @@ class MessagingApiService {
     // ── Contacts ──
     getVisibleContacts(contactId) {
         warnEmailLikeContactId(contactId);
-        return this.http.get(`${this.base}/my-visible-contacts`, this.authOptions({ params: this.sessionParams() }));
+        return this.http.get(`${this.base}/my-visible-contacts`, this.authOptions());
     }
     checkContactProfile(contactId, updates) {
         return this.http.post(`${this.base}/contacts/check`, this.sessionBody(), this.authOptions());
@@ -644,19 +636,13 @@ class MessagingFileService {
             },
         };
     }
-    appendSession(fd) {
-        const sessionGid = this.auth.sessionGid;
-        if (sessionGid)
-            fd.append('session_gid', sessionGid);
-        return fd;
-    }
     // ── Upload ───────────────────────────────────────────────────────────────
     uploadFile(file, category = 'messaging_attachments') {
         const makeBody = () => {
             const fd = new FormData();
             fd.append('file', file, file.name);
             fd.append('category', category);
-            return this.appendSession(fd);
+            return fd;
         };
         return this.tryEndpoints(this.uploadEndpoints, makeBody);
     }
@@ -679,7 +665,7 @@ class MessagingFileService {
         const makeBody = () => {
             const fd = new FormData();
             fd.append('file_id', fileId);
-            return this.appendSession(fd);
+            return fd;
         };
         return this.tryEndpoints(this.retrieveEndpoints, makeBody, false).pipe(catchError((err) => {
             this.mediaFailures.add(fileId);
@@ -728,7 +714,7 @@ class MessagingFileService {
         const makeBody = () => {
             const fd = new FormData();
             fd.append('file_id', fileId);
-            return this.appendSession(fd);
+            return fd;
         };
         return this.tryEndpoints(this.deleteEndpoints, makeBody, false);
     }
@@ -741,7 +727,6 @@ class MessagingFileService {
         }
         const messagingBase = `${this.base}/messaging`;
         return this.http.post(`${messagingBase}/conversations/${conversationId}/messages`, {
-            session_gid: this.auth.sessionGid,
             content: content || '',
             attachment_ids: realIds,
             filenames,

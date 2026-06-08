@@ -14,12 +14,10 @@ import { InjectionToken } from '@angular/core';
  * use the **same** path prefix for WebSockets, e.g. `wss://host/api`, not `wss://host`
  * unless your gateway intentionally serves WS at the host root.
  *
- * **Numeric `contact_id` vs email**
- * Many backends treat `{contactId}` in paths as a bigint or integer. In that case
- * `Contact.contact_id` must be that **numeric** string (or digits-only), not an email.
- * When your API exposes a lookup (e.g. `GET .../messaging/contacts/by-email?email=...`),
- * resolve that first, then call `setSession` with the returned id. See `createContactFromUser`
- * JSDoc in `messaging.models.ts` and integration guides.
+ * **Session-based identity**
+ * The current CES messaging API resolves the contact with `GET /messaging/auth/me`
+ * and `X-Messaging-Session`; host apps should not look up contacts by email or put
+ * session IDs in query strings.
  */
 export interface MessagingConfig {
     /**
@@ -46,8 +44,8 @@ export interface MessagingConfig {
      * - any other string: use `user[contactIdHint]`
      *
      * If not provided, `createContactFromUser` defaults `contact_id` from email.
-     * For backends that expect bigint contact ids, resolve via by-email (or similar) first,
-     * then pass the numeric id via `contactIdHint: 'id'` or build `Contact` manually.
+     * Prefer `AuthService.refreshMessagingSession()` when using the current CES API;
+     * it resolves the canonical numeric contact id from `/messaging/auth/me`.
      */
     contactIdHint?: 'email' | 'id' | 'userId' | 'customId' | string;
 }

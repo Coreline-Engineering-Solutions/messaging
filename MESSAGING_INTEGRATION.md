@@ -19,13 +19,12 @@ If your backend is mounted under `/api`, configure:
 
 Do not use root `wss://host` unless your websocket endpoint is intentionally mounted at root.
 
-## Required `contact_id` Rules
+## Required Session Rules
 
-- `Contact.contact_id` must be a string.
-- For CES/FastAPI-style backends that cast IDs to `int`/`bigint`, it must be a numeric value.
-- Do not pass raw email as `contact_id` for path-based routes.
-- Resolve by email first when needed:
-  - `GET /api/messaging/contacts/by-email/{email}`
+- REST requests authenticate with `X-Messaging-Session: <session_gid>`.
+- Do not put `session_gid` in query strings.
+- Resolve the current messaging contact with `GET /api/messaging/auth/me`.
+- Use `GET /api/messaging/my-inbox` and `GET /api/messaging/my-visible-contacts`.
 
 ## Angular Consumer Setup (Minimum)
 
@@ -49,28 +48,25 @@ const messagingConfig: MessagingConfig = {
 Session init:
 
 ```typescript
-const contact: Contact = {
-  contact_id: String(numericContactId),
-  user_gid: sessionGid,
-  email,
-  company_name,
-  is_active: true,
-};
-messagingAuth.setSession(sessionGid, contact);
+const contact = await messagingAuth.refreshMessagingSession();
+if (!contact) {
+  // Keep messaging logged out until the auth API accepts the session.
+  return;
+}
 ```
 
 Recommended defensive behavior in host apps:
 
 - Clear stale messaging session before initializing a new one.
-- Keep messaging logged out if no valid numeric contact ID is available.
-- Coerce `contact_id` to string before calling `setSession`.
+- Keep messaging logged out if `/messaging/auth/me` cannot resolve the current session.
+- Do not call legacy email lookup endpoints from host-app bootstrap code.
 
 ## CES Incident Summary (Known Failure Pattern)
 
 Observed failure mode:
 
 1. Frontend pointed messaging calls to an old host -> messaging routes returned 404.
-2. By-email lookup also hit old host -> `GET /api/messaging/contacts/by-email/{email}` returned 404.
+2. Host app attempted a legacy email lookup instead of `/api/messaging/auth/me`.
 3. Stale/invalid contact state reached library init -> runtime error:
    - `TypeError: contactId?.includes is not a function`
 
@@ -79,7 +75,7 @@ Fix that worked:
 - Split API bases: messaging uses its own host.
 - Keep non-messaging auth/app APIs on their own host.
 - Set messaging config to `/api` for both REST and WS base.
-- Update by-email lookup to the messaging host.
+- Update host bootstrap to call `/api/messaging/auth/me` with `X-Messaging-Session`.
 - Add defensive session cleanup and `contact_id` coercion.
 
 Current result: build passes and messaging loads correctly.

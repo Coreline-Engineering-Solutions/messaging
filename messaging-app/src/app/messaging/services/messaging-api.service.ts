@@ -30,19 +30,13 @@ export class MessagingApiService {
     };
   }
 
-  private sessionParams(params = new HttpParams()): HttpParams {
-    const sessionGid = this.auth.sessionGid;
-    return sessionGid ? params.set('session_gid', sessionGid) : params;
-  }
-
   private sessionBody(body: any = {}): any {
-    const sessionGid = this.auth.sessionGid;
-    return sessionGid ? { session_gid: sessionGid, ...body } : body;
+    return body;
   }
 
   // ── Inbox ──
   getInbox(contactId: string): Observable<InboxItem[]> {
-    return this.http.get<InboxItem[]>(`${this.base}/my-inbox`, this.authOptions({ params: this.sessionParams() }));
+    return this.http.get<InboxItem[]>(`${this.base}/my-inbox`, this.authOptions());
   }
 
   // ── Messages ──
@@ -52,7 +46,7 @@ export class MessagingApiService {
     beforeMessageId?: string,
     limit = 50
   ): Observable<Message[]> {
-    let params = this.sessionParams(new HttpParams().set('limit', limit.toString()));
+    let params = new HttpParams().set('limit', limit.toString());
     if (beforeMessageId) {
       params = params.set('before', beforeMessageId);
     }
@@ -114,9 +108,7 @@ export class MessagingApiService {
   }
 
   getDirectConversation(contactA: string, contactB: string): Observable<any> {
-    const params = this.sessionParams(new HttpParams()
-      .set('contactA', contactA)
-      .set('contactB', contactB));
+    const params = new HttpParams().set('contactB', contactB);
     return this.http.get(`${this.base}/conversations/direct`, this.authOptions({ params }));
   }
 
@@ -124,7 +116,7 @@ export class MessagingApiService {
   getVisibleContacts(contactId: string): Observable<Contact[]> {
     return this.http.get<Contact[]>(
       `${this.base}/my-visible-contacts`,
-      this.authOptions({ params: this.sessionParams() })
+      this.authOptions()
     );
   }
 

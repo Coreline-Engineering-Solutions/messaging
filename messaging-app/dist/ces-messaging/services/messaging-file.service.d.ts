@@ -31,7 +31,6 @@ export declare class MessagingFileService {
     private readonly mediaFailures;
     constructor(http: HttpClient, auth: AuthService, config: MessagingConfig);
     private authOptions;
-    private appendSession;
     uploadFile(file: File, category?: string): Observable<FileUploadResponse>;
     uploadFiles(files: File[]): Observable<FileUploadResponse[]>;
     retrieveFile(fileId: string): Observable<FileRetrieveResponse>;

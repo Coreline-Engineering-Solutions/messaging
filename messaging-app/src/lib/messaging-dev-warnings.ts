@@ -11,7 +11,7 @@ export function warnEmailLikeContactId(contactId: string | null | undefined): vo
   if (warnedEmailLikeContactIds.has(contactId)) return;
   warnedEmailLikeContactIds.add(contactId);
   console.warn(
-    '[@coreline-engineering-solutions/messaging] contact_id looks like an email. Many backends expect a numeric contact id in REST paths and WebSockets. Resolve the numeric id first when your API supports it (for example GET .../messaging/contacts/by-email?email=...), then set Contact.contact_id to that value.'
+    '[@coreline-engineering-solutions/messaging] contact_id looks like an email. The current CES API resolves the numeric contact id with GET /messaging/auth/me and X-Messaging-Session; call AuthService.refreshMessagingSession() before loading inbox data.'
   );
 }
 

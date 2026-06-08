@@ -201,11 +201,9 @@ export type SidebarSide = 'left' | 'right';
  * Reduces boilerplate when integrating with existing auth systems.
  *
  * **`contact_id` must match your backend**
- * Many APIs (including typical CES / FastAPI bigint routes) expect a **numeric** contact id in
- * URL paths such as `/messaging/contacts/{contact_id}/...`. Email is a common human identifier
- * but is often **wrong** for those routes. Prefer:
- * - resolving the server contact id first (e.g. `GET .../messaging/contacts/by-email?email=...` when your API provides it), then passing that id as `contact_id`, or
- * - `contactIdHint: 'id'` / `'userId'` when your auth user already carries the numeric messaging id.
+ * The current CES messaging API resolves the canonical contact through
+ * `/messaging/auth/me` using `X-Messaging-Session`. Prefer that session refresh path
+ * over building contacts from email in host apps.
  *
  * @param user - User object with email and optional fields
  * @param sessionGid - Session GUID from authentication
@@ -213,8 +211,9 @@ export type SidebarSide = 'left' | 'right';
  * @returns Contact object ready for `setSession()`
  *
  * @example
- * // Backend expects numeric id — use server lookup first, then set contact_id
- * // const numericId = await fetchByEmail(user.email);
+ * // Backend expects numeric id — use AuthService.refreshMessagingSession() first,
+ * // then set contact_id from the returned contact.
+ * // const numericId = refreshedContact.contact_id;
  * // createContactFromUser({ ...user, id: numericId }, sessionGid, 'id');
  *
  * @example

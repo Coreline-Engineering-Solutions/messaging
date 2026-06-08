@@ -11,7 +11,6 @@ export declare class MessagingApiService {
     private base;
     constructor(http: HttpClient, auth: AuthService, config: MessagingConfig);
     private authOptions;
-    private sessionParams;
     private sessionBody;
     getInbox(contactId: string): Observable<InboxItem[]>;
     getMessages(conversationId: string, contactId: string, beforeMessageId?: string, limit?: number): Observable<Message[]>;

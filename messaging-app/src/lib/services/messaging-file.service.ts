@@ -71,12 +71,6 @@ export class MessagingFileService {
     };
   }
 
-  private appendSession(fd: FormData): FormData {
-    const sessionGid = this.auth.sessionGid;
-    if (sessionGid) fd.append('session_gid', sessionGid);
-    return fd;
-  }
-
   // ── Upload ───────────────────────────────────────────────────────────────
 
   uploadFile(file: File, category = 'messaging_attachments'): Observable<FileUploadResponse> {
@@ -84,7 +78,7 @@ export class MessagingFileService {
       const fd = new FormData();
       fd.append('file', file, file.name);
       fd.append('category', category);
-      return this.appendSession(fd);
+      return fd;
     };
     return this.tryEndpoints<FileUploadResponse>(this.uploadEndpoints, makeBody);
   }
@@ -112,7 +106,7 @@ export class MessagingFileService {
     const makeBody = () => {
       const fd = new FormData();
       fd.append('file_id', fileId);
-      return this.appendSession(fd);
+      return fd;
     };
     return this.tryEndpoints<FileRetrieveResponse>(this.retrieveEndpoints, makeBody, false).pipe(
       catchError((err) => {
@@ -170,7 +164,7 @@ export class MessagingFileService {
     const makeBody = () => {
       const fd = new FormData();
       fd.append('file_id', fileId);
-      return this.appendSession(fd);
+      return fd;
     };
     return this.tryEndpoints(this.deleteEndpoints, makeBody, false);
   }
@@ -192,7 +186,6 @@ export class MessagingFileService {
     }
     const messagingBase = `${this.base}/messaging`;
     return this.http.post(`${messagingBase}/conversations/${conversationId}/messages`, {
-      session_gid: this.auth.sessionGid,
       content: content || '',
       attachment_ids: realIds,
       filenames,
