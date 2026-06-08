@@ -100,8 +100,8 @@ function MessagingChatThread() {
                 }
             }
         }
-        catch (e) {
-            console.warn('[MessagingChatThread] image pick failed:', e);
+        catch {
+            /* ignore picker cancellation/failures */
         }
         finally {
             if (panelWasOpen && source === 'camera')

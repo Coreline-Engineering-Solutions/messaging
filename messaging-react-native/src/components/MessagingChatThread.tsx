@@ -134,8 +134,8 @@ export function MessagingChatThread() {
           setPendingFiles((prev) => [...prev, file].slice(0, 5));
         }
       }
-    } catch (e) {
-      console.warn('[MessagingChatThread] image pick failed:', e);
+    } catch {
+      /* ignore picker cancellation/failures */
     } finally {
       if (panelWasOpen && source === 'camera') openPanel();
       setPickingImage(false);

@@ -28,7 +28,6 @@ function needsMediaLibraryPermissionRequest(): boolean {
 export async function pickImage(): Promise<{ uri: string; fileName: string } | null> {
   try {
     if (isImagePickerActive) {
-      console.warn('[pickImage] Skipping launch: picker already active');
       return null;
     }
 
@@ -50,7 +49,6 @@ export async function pickImage(): Promise<{ uri: string; fileName: string } | n
     if (!result.canceled && result.assets && result.assets.length > 0) {
       const asset = result.assets[0];
       if (!asset?.uri) {
-        console.warn('[pickImage] Asset URI is undefined');
         return null;
       }
       const fileName = asset.uri.split('/').pop() || `photo_${Date.now()}.jpg`;
@@ -66,7 +64,6 @@ export async function pickImage(): Promise<{ uri: string; fileName: string } | n
 export async function takePhoto(): Promise<{ uri: string; fileName: string } | null> {
   try {
     if (isImagePickerActive) {
-      console.warn('[takePhoto] Skipping launch: picker already active');
       return null;
     }
 
@@ -84,19 +81,16 @@ export async function takePhoto(): Promise<{ uri: string; fileName: string } | n
 
     if (result.canceled) return null;
     if (!result.assets || result.assets.length === 0) {
-      console.warn('[takePhoto] No assets returned from camera');
       return null;
     }
 
     const asset = result.assets[0];
     if (!asset?.uri) {
-      console.warn('[takePhoto] Asset URI is undefined');
       throw new Error('Camera did not return a valid image. This may happen on emulators without camera support.');
     }
 
     return { uri: asset.uri, fileName: `photo_${Date.now()}.jpg` };
   } catch (error: unknown) {
-    console.error('[takePhoto] Error:', error);
     const msg = error instanceof Error ? error.message : String(error);
     if (msg.includes('cancelled') || msg.includes('canceled')) {
       return null;

@@ -1,5 +1,4 @@
 ﻿import { Platform } from 'react-native';
-import { getMessagingConfig } from '../configure';
 import { getMessagingApiBaseUrl, getMessagingSessionHeaders } from './messagingRuntime';
 import { isStructuredAttachmentId, isTempMessageId } from '../utils/messagingHelpers';
 
@@ -42,16 +41,7 @@ const DELETE_PATHS = [
 const mediaCache = new Map<string, string>();
 const mediaFailures = new Set<string>();
 
-let storageBaseWarned = false;
-
 function getStorageApiBase(): string {
-  const cfg = getMessagingConfig();
-  if (cfg.storageApiUrl && !storageBaseWarned) {
-    storageBaseWarned = true;
-    console.warn(
-      '[messaging-react-native] storageApiUrl is ignored for attachments; using apiBaseUrl (same as Angular @coreline-engineering-solutions/messaging).'
-    );
-  }
   return getMessagingApiBaseUrl().replace(/\/+$/, '');
 }
 

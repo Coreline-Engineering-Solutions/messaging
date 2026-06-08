@@ -7,7 +7,6 @@ exports.deleteMessagingFile = deleteMessagingFile;
 exports.uploadMessagingImage = uploadMessagingImage;
 exports.uploadMessagingImages = uploadMessagingImages;
 const react_native_1 = require("react-native");
-const configure_1 = require("../configure");
 const messagingRuntime_1 = require("./messagingRuntime");
 const messagingHelpers_1 = require("../utils/messagingHelpers");
 /** Align with Angular MessagingFileService endpoint order. */
@@ -31,13 +30,7 @@ const DELETE_PATHS = [
 ];
 const mediaCache = new Map();
 const mediaFailures = new Set();
-let storageBaseWarned = false;
 function getStorageApiBase() {
-    const cfg = (0, configure_1.getMessagingConfig)();
-    if (cfg.storageApiUrl && !storageBaseWarned) {
-        storageBaseWarned = true;
-        console.warn('[messaging-react-native] storageApiUrl is ignored for attachments; using apiBaseUrl (same as Angular @coreline-engineering-solutions/messaging).');
-    }
     return (0, messagingRuntime_1.getMessagingApiBaseUrl)().replace(/\/+$/, '');
 }
 function getMimeType(fileName) {

@@ -165,7 +165,7 @@ export class MessagingStoreService implements OnDestroy {
         const ids = items.map((i) => i.conversation_id);
         this.wsService.subscribeAll(ids);
       },
-      error: (err) => console.error('Failed to load inbox:', err),
+      error: () => {},
     });
   }
 
@@ -176,7 +176,7 @@ export class MessagingStoreService implements OnDestroy {
 
     this.api.getVisibleContacts(contactId).subscribe({
       next: (contacts) => this.visibleContacts$.next(contacts),
-      error: (err) => console.error('Failed to load contacts:', err),
+      error: () => {},
     });
   }
 
@@ -232,8 +232,7 @@ export class MessagingStoreService implements OnDestroy {
         this.messagesMap$.next(map);
         this.loadingMessages$.next(false);
       },
-      error: (err) => {
-        console.error('Failed to load messages:', err);
+      error: () => {
         this.loadingMessages$.next(false);
       },
     });
@@ -259,7 +258,7 @@ export class MessagingStoreService implements OnDestroy {
         };
         this.appendMessage(optimistic);
       },
-      error: (err) => console.error('Failed to send message:', err),
+      error: () => {},
     });
   }
 
@@ -278,7 +277,7 @@ export class MessagingStoreService implements OnDestroy {
         });
         this.loadInbox();
       },
-      error: (err) => console.error('Failed to edit message:', err),
+      error: () => {},
     });
   }
 
@@ -300,7 +299,7 @@ export class MessagingStoreService implements OnDestroy {
         });
         this.loadInbox();
       },
-      error: (err) => console.error('Failed to delete message:', err),
+      error: () => {},
     });
   }
 
@@ -322,7 +321,7 @@ export class MessagingStoreService implements OnDestroy {
           this.openConversation(res.conversation_id, name, false);
         }
       },
-      error: (err) => console.error('Failed to send DM:', err),
+      error: () => {},
     });
   }
 
@@ -335,7 +334,7 @@ export class MessagingStoreService implements OnDestroy {
         this.loadInbox();
         this.openConversation(conv.conversation_id, name, true);
       },
-      error: (err) => console.error('Failed to create group:', err),
+      error: () => {},
     });
   }
 
@@ -368,7 +367,7 @@ export class MessagingStoreService implements OnDestroy {
 
     this.api.manageGroup(contactId, action, conversationId, groupName, participantContactIds).subscribe({
       next: () => this.loadInbox(),
-      error: (err) => console.error('Group action failed:', err),
+      error: () => {},
     });
   }
 
@@ -399,7 +398,6 @@ export class MessagingStoreService implements OnDestroy {
         this.handleConversationUpdated(msg.data);
         break;
       case 'error':
-        console.error('WebSocket error:', msg.message);
         break;
     }
   }

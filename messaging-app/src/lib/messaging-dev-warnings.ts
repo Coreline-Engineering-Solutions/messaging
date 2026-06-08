@@ -10,9 +10,6 @@ export function warnEmailLikeContactId(contactId: string | null | undefined): vo
   if (!contactId?.includes('@')) return;
   if (warnedEmailLikeContactIds.has(contactId)) return;
   warnedEmailLikeContactIds.add(contactId);
-  console.warn(
-    '[@coreline-engineering-solutions/messaging] contact_id looks like an email. The current CES API resolves the numeric contact id with GET /messaging/auth/me and X-Messaging-Session; call AuthService.refreshMessagingSession() before loading inbox data.'
-  );
 }
 
 export function warnIfWsBaseUrlMissingApiPrefixWhenApiHasIt(
@@ -24,7 +21,4 @@ export function warnIfWsBaseUrlMissingApiPrefixWhenApiHasIt(
   const ws = wsBaseUrl ?? '';
   if (!api.includes('/api') || ws.includes('/api')) return;
   warnedWsApiPrefixMismatch = true;
-  console.warn(
-    '[@coreline-engineering-solutions/messaging] apiBaseUrl includes "/api" but wsBaseUrl does not. If REST is mounted under /api, wsBaseUrl should usually use the same URL path prefix (e.g. wss://your-host/api). Some deployments mount WebSockets at the root; this is only a warning.'
-  );
 }
