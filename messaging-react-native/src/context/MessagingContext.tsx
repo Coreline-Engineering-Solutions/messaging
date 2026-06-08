@@ -16,9 +16,7 @@ import {
 } from '../constants/messagingConfig';
 import {
     addReaction as addReactionApi,
-    clearConversation as clearConversationApi,
     createConversation,
-    deleteConversation as deleteConversationApi,
     deleteGroupConversation,
     deleteMessage as deleteMessageApi,
     editMessage as editMessageApi,
@@ -29,7 +27,6 @@ import {
     getVisibleContacts,
     manageGroup,
     markConversationRead,
-    pinMessage as pinMessageApi,
     removeReaction as removeReactionApi,
     resolveContactByEmail,
     searchMessages as searchMessagesApi,
@@ -37,7 +34,6 @@ import {
     sendMessage as sendMessageApi,
     sendMessageWithAttachments,
     sendThreadReply,
-    unpinMessage as unpinMessageApi,
     updatePresence,
 } from '../services/messagingApiService';
 import {
@@ -49,6 +45,7 @@ import {
     uploadMessagingImages,
 } from '../services/messagingFileService';
 import { playMessagingNotificationSound } from '../services/messagingNotificationSound';
+import { setMessagingSessionGid } from '../services/messagingRuntime';
 import { messagingWebSocket } from '../services/messagingWebSocketService';
 import type {
     Contact,
@@ -115,8 +112,6 @@ interface MessagingContextValue {
     removeIds: string[]
   ) => Promise<void>;
   deleteGroup: () => Promise<void>;
-  clearConversation: (item: InboxItem) => Promise<void>;
-  deleteConversationItem: (item: InboxItem) => Promise<void>;
   openMessageSearch: () => void;
   searchMessages: (query: string) => Promise<Message[]>;
   threadParent: Message | null;
@@ -126,7 +121,6 @@ interface MessagingContextValue {
   sendThreadMessage: (content: string) => Promise<void>;
   editChatMessage: (messageId: string, content: string) => Promise<void>;
   deleteChatMessage: (messageId: string) => Promise<void>;
-  togglePinMessage: (message: Message) => Promise<void>;
   sendChatAttachments: (files: { uri: string; fileName: string }[], caption?: string) => Promise<void>;
   favoriteConversationIds: ReadonlySet<string>;
   isFavoriteConversation: (conversationId: string) => boolean;
@@ -175,6 +169,11 @@ export function MessagingProvider({
   const panelOpenRef = useRef(false);
   const sessionGidRef = useRef(sessionGid);
   sessionGidRef.current = sessionGid;
+
+  useEffect(() => {
+    setMessagingSessionGid(sessionGid);
+    return () => setMessagingSessionGid(null);
+  }, [sessionGid]);
 
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
@@ -840,47 +839,6 @@ export function MessagingProvider({
     [sendChatAttachments]
   );
 
-  const clearConversation = useCallback(
-    async (item: InboxItem) => {
-      if (!contact) return;
-      await clearConversationApi(item.conversation_id, contact.contact_id);
-      setMessagesMap((prev) => {
-        const next = { ...prev };
-        delete next[item.conversation_id];
-        return next;
-      });
-      if (activeConversationId === item.conversation_id) {
-        setActiveConversationId(null);
-        setActiveView('inbox');
-      }
-      await loadInbox();
-    },
-    [activeConversationId, contact, loadInbox]
-  );
-
-  const deleteConversationItem = useCallback(
-    async (item: InboxItem) => {
-      if (!contact) return;
-      if (item.is_group) {
-        await deleteGroupConversation(item.conversation_id, contact.contact_id);
-      } else {
-        await deleteConversationApi(item.conversation_id, contact.contact_id);
-      }
-      setMessagesMap((prev) => {
-        const next = { ...prev };
-        delete next[item.conversation_id];
-        return next;
-      });
-      if (activeConversationId === item.conversation_id) {
-        setActiveConversationId(null);
-        setActiveView('inbox');
-      }
-      await removeFavoriteConversation(item.conversation_id);
-      await loadInbox();
-    },
-    [activeConversationId, contact, loadInbox, removeFavoriteConversation]
-  );
-
   const openMessageSearch = useCallback(() => setActiveView('message-search'), []);
 
   const searchMessages = useCallback(
@@ -952,24 +910,6 @@ export function MessagingProvider({
     [activeConversationId, contact]
   );
 
-  const togglePinMessage = useCallback(
-    async (message: Message) => {
-      if (!contact || !activeConversationId) return;
-      if (message.is_pinned) {
-        await unpinMessageApi(message.message_id, contact.contact_id);
-      } else {
-        await pinMessageApi(message.message_id, activeConversationId, contact.contact_id);
-      }
-      setMessagesMap((prev) => ({
-        ...prev,
-        [activeConversationId]: (prev[activeConversationId] ?? []).map((m) =>
-          m.message_id === message.message_id ? { ...m, is_pinned: !m.is_pinned } : m
-        ),
-      }));
-    },
-    [activeConversationId, contact]
-  );
-
   const value = useMemo<MessagingContextValue>(
     () => ({
       isSessionActive,
@@ -1013,8 +953,6 @@ export function MessagingProvider({
       createGroup,
       saveGroupEdit,
       deleteGroup,
-      clearConversation,
-      deleteConversationItem,
       openMessageSearch,
       searchMessages,
       threadParent,
@@ -1024,7 +962,6 @@ export function MessagingProvider({
       sendThreadMessage,
       editChatMessage,
       deleteChatMessage,
-      togglePinMessage,
       favoriteConversationIds,
       isFavoriteConversation,
       toggleFavoriteConversation,
@@ -1069,8 +1006,6 @@ export function MessagingProvider({
       createGroup,
       saveGroupEdit,
       deleteGroup,
-      clearConversation,
-      deleteConversationItem,
       openMessageSearch,
       searchMessages,
       threadParent,
@@ -1080,7 +1015,6 @@ export function MessagingProvider({
       sendThreadMessage,
       editChatMessage,
       deleteChatMessage,
-      togglePinMessage,
       favoriteConversationIds,
       isFavoriteConversation,
       toggleFavoriteConversation,

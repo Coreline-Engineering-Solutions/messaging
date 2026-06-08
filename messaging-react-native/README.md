@@ -11,8 +11,7 @@ The host app must provide:
 - An installed `@coreline-engineering-solutions/messaging-react-native` package.
 - Expo / React Native with React Navigation bottom tabs or Expo Router tabs.
 - A logged-in user email.
-- A session gid or auth session identifier for WebSocket auth.
-- A bearer token available through `AsyncStorage` or a custom `getAccessToken` callback.
+- A current `session_gid` from the host app login session.
 - An API base URL that serves the messaging REST routes and WebSocket route.
 
 ## Install
@@ -102,7 +101,7 @@ The WebSocket client connects to:
 ${wsBaseUrl}/messaging/ws/{contactId}
 ```
 
-Attachment upload and retrieval use **`apiBaseUrl` only** (same as the Angular `@coreline-engineering-solutions/messaging` web package). `storageApiUrl` is ignored as of v1.2.0. The client tries `/storage/*`, then `/files/*`, then `/messaging/storage/*` and `/messaging/files/*` for upload, retrieve, and delete. Bearer auth comes from `getAccessToken` (ticketing API token).
+Attachment upload and retrieval use **`apiBaseUrl` only** (same as the Angular `@coreline-engineering-solutions/messaging` web package). `storageApiUrl` is ignored as of v1.2.0. The client tries `/storage/*`, then `/files/*`, then `/messaging/storage/*` and `/messaging/files/*` for upload, retrieve, and delete. REST and file requests authenticate with `X-Messaging-Session: {session_gid}`.
 
 ## Configure Once
 
@@ -121,13 +120,13 @@ if (!apiBase) {
 configureMessaging({
   apiBaseUrl: apiBase,
   wsBaseUrl: apiBase.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:'),
-  getAccessToken: () => AsyncStorage.getItem('access_token'),
+  getSessionGid: () => AsyncStorage.getItem('session_gid'),
 });
 ```
 
-`getAccessToken` is optional. If omitted, the package reads `AsyncStorage.getItem('access_token')`.
+`getSessionGid` is optional when `MessagingProvider` receives `sessionGid`; the provider stores the active session in the package runtime. If both are omitted, the package falls back to `AsyncStorage.getItem('session_gid')`.
 
-Do not point `storageApiUrl` at a separate file-storage API for chat attachments; it is deprecated and ignored. Host apps only need `apiBaseUrl`, `wsBaseUrl`, and a valid ticketing bearer token.
+Do not point `storageApiUrl` at a separate file-storage API for chat attachments; it is deprecated and ignored. Host apps only need `apiBaseUrl`, `wsBaseUrl`, and a valid `session_gid`.
 
 ## Wrap The App
 
@@ -192,8 +191,8 @@ Show unread counts on the tab bar with `useMessaging().totalUnread` and React Na
 
 Provider props:
 
-- `sessionGid`: Session identifier sent to the WebSocket after connect. Pass `null` while logged out.
-- `userEmail`: Current authenticated user email. The package resolves this to a messaging contact through `/messaging/contacts/by-email/{email}`. Pass `null` while logged out.
+- `sessionGid`: Current login session identifier. REST/file requests send it as `X-Messaging-Session`; WebSockets send it in the first `{ type: 'auth', session_gid }` message. Pass `null` while logged out.
+- `userEmail`: Current authenticated user email. The package keeps this for display/fallback purposes; the backend resolves the canonical contact through `/messaging/auth/me`. Pass `null` while logged out.
 - `presentation`: `'overlay'` (default) opens UI in a resizable bottom sheet; `'screen'` renders inbox/chat in a full-screen host route via `MessagingScreen`.
 
 ## Add Tab Buttons
@@ -251,7 +250,7 @@ When integrating this package into another project, an AI coding agent should co
 4. Confirm the app has `EXPO_PUBLIC_TICKETING_API_URL` or add the equivalent environment variable.
 5. Locate the app entry, root layout, or authenticated app shell.
 6. Add `configureMessaging` before rendering messaging UI.
-7. Confirm where the app stores the bearer token. Use the app's existing token getter instead of hard-coding `AsyncStorage` if needed.
+7. Confirm where the app stores the current `session_gid`. Use the app's existing session getter instead of hard-coding `AsyncStorage` if needed.
 8. Locate the authenticated user object and pass the user's email into `MessagingProvider`.
 9. Locate the session identifier used by the backend and pass it as `sessionGid`.
 10. Wrap the authenticated tab navigator or app shell with `MessagingProvider` (`presentation="overlay"` or `"screen"`).
@@ -264,11 +263,11 @@ When integrating this package into another project, an AI coding agent should co
 
 ## Backend Requirements
 
-The backend must support the messaging routes used by the package:
+The backend must support the session-based messaging routes used by the package:
 
-- `GET /messaging/contacts/by-email/{email}`
-- `GET /messaging/contacts/{contactId}/inbox`
-- `GET /messaging/contacts/{contactId}/visible-contacts`
+- `GET /messaging/auth/me`
+- `GET /messaging/my-inbox`
+- `GET /messaging/my-visible-contacts`
 - `GET /messaging/conversations/{conversationId}/messages`
 - `POST /messaging/conversations/{conversationId}/messages`
 - `POST /messaging/direct-messages`
@@ -278,9 +277,9 @@ The backend must support the messaging routes used by the package:
 - `PUT /messaging/contacts/{contactId}/presence`
 - `WS /messaging/ws/{contactId}`
 
-The package also calls message reactions, replies, edit/delete, pin/unpin, read, clear/delete conversation, connections, notifications, and storage endpoints when those UI actions are used.
+The package also calls message reactions, replies, edit/delete, read, group management, and storage endpoints when those UI actions are used.
 
-All REST requests include `Authorization: Bearer {token}` when `getAccessToken` or `AsyncStorage.getItem('access_token')` returns a token.
+All REST and file requests include `X-Messaging-Session: {session_gid}` when `MessagingProvider.sessionGid`, `getSessionGid`, or `AsyncStorage.getItem('session_gid')` returns a session.
 
 ## Verification
 
@@ -288,9 +287,9 @@ After integration:
 
 1. Start the target app.
 2. Log in as a user with a known messaging contact.
-3. Confirm the provider resolves the user email to a contact.
+3. Confirm the provider resolves `/messaging/auth/me` to a contact.
 4. Open the messaging tab/button and confirm the overlay appears.
-5. Confirm inbox data loads from `/messaging/contacts/{contactId}/inbox`.
+5. Confirm inbox data loads from `/messaging/my-inbox`.
 6. Open a conversation and send a text message.
 7. Pick and send an image if attachments are enabled.
 8. Confirm WebSocket status reaches `authenticated` and incoming messages update the UI.
@@ -299,8 +298,8 @@ After integration:
 ## Troubleshooting
 
 - `Messaging is not configured`: Call `configureMessaging` before rendering `MessagingProvider`, `MessagingOverlay`, or any hook that uses messaging.
-- Inbox does not load: Check `EXPO_PUBLIC_TICKETING_API_URL`, bearer token storage, and `/messaging/contacts/by-email/{email}`.
-- WebSocket does not authenticate: Check `sessionGid`, the `wsBaseUrl`, and the backend `/messaging/ws/{contactId}` auth protocol.
+- Inbox does not load: Check `EXPO_PUBLIC_TICKETING_API_URL`, `session_gid` storage, and `/messaging/auth/me`.
+- WebSocket does not authenticate: Check `sessionGid`, the `wsBaseUrl`, and the backend `/messaging/ws/{contactId}` first-message auth protocol.
 - Images do not upload: Confirm `expo-image-picker` is installed, `MessagingImagePickerHost` is rendered, `apiBaseUrl` is the ticketing API (not a separate file-storage `/store` service), and the backend exposes `/storage/upload` or `/files/upload` on that same base. Check `attachmentError` on `useMessaging()` for the last failure message.
 - Attachments send but peers do not see images: Ensure messages use `attachment_ids` + `mime_types` (v1.2.0+); reinstall the package if an older build sent `content=file_id` for single images.
 - The tab button does not navigate correctly: Replace `/(tabs)/map` with the target app's real route.

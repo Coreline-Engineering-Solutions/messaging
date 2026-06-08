@@ -24,7 +24,7 @@ function isMessageRead(msg) {
     return false;
 }
 function MessagingChatThread() {
-    const { contact, messages, activeConversationName, activeIsGroup, activeConversationId, visibleContacts, loadingMessages, goBackToInbox, sendChatMessage, sendChatAttachments, toggleReaction, loadOlderMessages, openGroupSettings, openMessageSearch, openThread, editChatMessage, deleteChatMessage, togglePinMessage, closePanel, openPanel, presentation, isFavoriteConversation, toggleFavoriteConversation, attachmentError, } = (0, MessagingContext_1.useMessaging)();
+    const { contact, messages, activeConversationName, activeIsGroup, activeConversationId, visibleContacts, loadingMessages, goBackToInbox, sendChatMessage, sendChatAttachments, toggleReaction, loadOlderMessages, openGroupSettings, openMessageSearch, openThread, editChatMessage, deleteChatMessage, closePanel, openPanel, presentation, isFavoriteConversation, toggleFavoriteConversation, attachmentError, } = (0, MessagingContext_1.useMessaging)();
     const [draft, setDraft] = (0, react_1.useState)('');
     const [sending, setSending] = (0, react_1.useState)(false);
     const [reactionTargetId, setReactionTargetId] = (0, react_1.useState)(null);
@@ -135,10 +135,6 @@ function MessagingChatThread() {
                     },
                 ]);
             });
-        }
-        if (!(0, messagingHelpers_1.isTempMessageId)(item.message_id)) {
-            options.push(item.is_pinned ? 'Unpin' : 'Pin');
-            handlers.push(() => void togglePinMessage(item));
         }
         options.push('Cancel');
         handlers.push(() => { });

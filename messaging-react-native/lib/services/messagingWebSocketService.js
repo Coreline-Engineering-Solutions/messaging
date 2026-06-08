@@ -84,9 +84,13 @@ class MessagingWebSocketClient {
                 /* ignore */
             }
         };
-        this.ws.onclose = () => {
+        this.ws.onclose = (event) => {
             this.setStatus('disconnected');
             this.stopPing();
+            if (event.code === 4401 || event.code === 4403) {
+                this.reconnectAttempts = this.maxReconnectAttempts;
+                return;
+            }
             this.scheduleReconnect();
         };
         this.ws.onerror = () => {

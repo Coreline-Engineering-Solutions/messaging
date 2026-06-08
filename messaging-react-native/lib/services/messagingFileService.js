@@ -55,11 +55,7 @@ function getMimeType(fileName) {
     return 'image/jpeg';
 }
 async function authHeaders() {
-    const token = await (0, messagingRuntime_1.resolveMessagingAccessToken)();
-    const headers = {};
-    if (token)
-        headers.Authorization = `Bearer ${token}`;
-    return headers;
+    return (0, messagingRuntime_1.getMessagingSessionHeaders)();
 }
 async function tryPostEndpoints(paths, bodyFn, fallbackOnNetwork = true) {
     const base = getStorageApiBase();

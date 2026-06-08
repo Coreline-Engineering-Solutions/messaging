@@ -1,7 +1,37 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.resolveContactByEmail = resolveContactByEmail;
 exports.getInbox = getInbox;
@@ -17,60 +47,59 @@ exports.sendDirectMessage = sendDirectMessage;
 exports.markConversationRead = markConversationRead;
 exports.createConversation = createConversation;
 exports.getDirectConversation = getDirectConversation;
-exports.deleteConversation = deleteConversation;
-exports.clearConversation = clearConversation;
 exports.getReactions = getReactions;
 exports.getThreadMessages = getThreadMessages;
 exports.sendThreadReply = sendThreadReply;
 exports.editMessage = editMessage;
 exports.deleteMessage = deleteMessage;
-exports.pinMessage = pinMessage;
-exports.unpinMessage = unpinMessage;
 exports.searchMessages = searchMessages;
 exports.updatePresence = updatePresence;
 exports.getPresence = getPresence;
 exports.checkContactProfile = checkContactProfile;
-exports.updateNotificationSettings = updateNotificationSettings;
 exports.sendMessageWithAttachments = sendMessageWithAttachments;
-const axios_1 = __importDefault(require("axios"));
+const axios_1 = __importStar(require("axios"));
 const messagingHttpError_1 = require("../utils/messagingHttpError");
 const messagingRuntime_1 = require("./messagingRuntime");
 const messagingHttp = axios_1.default.create();
 messagingHttp.interceptors.request.use(async (config) => {
     config.baseURL = (0, messagingRuntime_1.getMessagingApiBaseUrl)();
-    const token = await (0, messagingRuntime_1.resolveMessagingAccessToken)();
-    if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
+    const sessionGid = await (0, messagingRuntime_1.resolveMessagingSessionGid)();
+    if (sessionGid) {
+        const headers = axios_1.AxiosHeaders.from(config.headers);
+        headers.set('X-Messaging-Session', sessionGid);
+        config.headers = headers;
     }
     return config;
 });
 const base = '/messaging';
 async function resolveContactByEmail(email) {
-    const { data } = await messagingHttp.get(`${base}/contacts/by-email/${encodeURIComponent(email)}`);
+    const { data } = await messagingHttp.get(`${base}/auth/me`);
     if (!data?.contact_id)
         return null;
     return {
         contact_id: String(data.contact_id),
-        user_gid: String(data.contact_id),
+        user_gid: data.user_gid || String(data.contact_id),
         email: data.email || email,
         username: data.username,
-        company_name: 'CES',
+        company_name: data.company || 'CES',
         is_active: true,
     };
 }
 async function getInbox(contactId) {
-    const { data } = await messagingHttp.get(`${base}/contacts/${contactId}/inbox`);
+    void contactId;
+    const { data } = await messagingHttp.get(`${base}/my-inbox`);
     return data ?? [];
 }
 async function getVisibleContacts(contactId) {
-    const { data } = await messagingHttp.get(`${base}/contacts/${contactId}/visible-contacts`);
+    void contactId;
+    const { data } = await messagingHttp.get(`${base}/my-visible-contacts`);
     return data ?? [];
 }
 async function getMessages(conversationId, contactId, beforeMessageId, limit = 50) {
     const params = {
-        contact_id: contactId,
         limit: String(limit),
     };
+    void contactId;
     if (beforeMessageId)
         params.before = beforeMessageId;
     const { data } = await messagingHttp.get(`${base}/conversations/${conversationId}/messages`, {
@@ -79,8 +108,8 @@ async function getMessages(conversationId, contactId, beforeMessageId, limit = 5
     return data ?? [];
 }
 async function sendMessage(conversationId, senderContactId, content, messageType = 'TEXT') {
+    void senderContactId;
     const { data } = await messagingHttp.post(`${base}/conversations/${conversationId}/messages`, {
-        sender_id: parseInt(senderContactId, 10),
         content,
         message_type: messageType,
     });
@@ -94,9 +123,8 @@ async function getConversationParticipants(conversationId) {
     }));
 }
 async function manageGroup(contactId, action, conversationId, groupName, participantContactIds) {
-    const payload = {
-        contact_id: parseInt(contactId, 10),
-    };
+    void contactId;
+    const payload = {};
     if (conversationId)
         payload.conversation_id = parseInt(conversationId, 10);
     if (groupName)
@@ -107,99 +135,90 @@ async function manageGroup(contactId, action, conversationId, groupName, partici
     await messagingHttp.post(`${base}/groups`, { action, payload });
 }
 async function addReaction(messageId, contactId, emoji) {
+    void contactId;
     await messagingHttp.post(`${base}/messages/${messageId}/reactions`, {
-        contact_id: parseInt(contactId, 10),
         emoji,
     });
 }
 async function deleteGroupConversation(conversationId, contactId) {
-    await messagingHttp.post(`${base}/groups/${conversationId}/delete`, {
-        contactId,
+    void contactId;
+    await messagingHttp.post(`${base}/groups`, {
+        action: 'remove',
+        payload: {
+            conversation_id: parseInt(conversationId, 10),
+        },
     });
 }
 async function removeReaction(messageId, contactId, emoji) {
+    void contactId;
     await messagingHttp.delete(`${base}/messages/${messageId}/reactions`, {
         data: {
-            contact_id: parseInt(contactId, 10),
             emoji,
         },
     });
 }
 async function sendDirectMessage(senderContactId, recipientContactId, content) {
+    void senderContactId;
     await messagingHttp.post(`${base}/direct-messages`, {
-        sender_id: parseInt(senderContactId, 10),
         recipient_id: parseInt(recipientContactId, 10),
         content,
     });
 }
 async function markConversationRead(conversationId, contactId) {
-    await messagingHttp.post(`${base}/conversations/${conversationId}/read`, {
-        contact_id: parseInt(contactId, 10),
-    });
+    void contactId;
+    await messagingHttp.post(`${base}/conversations/${conversationId}/read`, {});
 }
 async function createConversation(creatorContactId, participantContactIds, name) {
+    void creatorContactId;
     const { data } = await messagingHttp.post(`${base}/conversations`, {
-        creator_id: parseInt(creatorContactId, 10),
         participants: participantContactIds.map((id) => parseInt(id, 10)),
         name: name || null,
     });
     return data;
 }
 async function getDirectConversation(contactA, contactB) {
-    const { data } = await messagingHttp.get(`${base}/conversations/direct`, { params: { contactA, contactB } });
+    void contactA;
+    const { data } = await messagingHttp.get(`${base}/conversations/direct`, { params: { contactB } });
     return data ?? null;
-}
-async function deleteConversation(conversationId, contactId) {
-    await messagingHttp.post(`${base}/conversations/${conversationId}/delete`, { contactId });
-}
-async function clearConversation(conversationId, contactId) {
-    await messagingHttp.post(`${base}/conversations/${conversationId}/clear`, { contactId });
 }
 async function getReactions(messageId) {
     const { data } = await messagingHttp.get(`${base}/messages/${messageId}/reactions`);
     return data ?? [];
 }
 async function getThreadMessages(parentMessageId, contactId) {
-    const { data } = await messagingHttp.get(`${base}/messages/${parentMessageId}/thread`, { params: { contact_id: contactId } });
+    void contactId;
+    const { data } = await messagingHttp.get(`${base}/messages/${parentMessageId}/thread`, { params: {} });
     return data ?? [];
 }
 async function sendThreadReply(parentMessageId, senderContactId, content) {
+    void senderContactId;
     const { data } = await messagingHttp.post(`${base}/messages/${parentMessageId}/replies`, {
-        sender_id: parseInt(senderContactId, 10),
         content,
     });
     return data ?? {};
 }
 async function editMessage(messageId, contactId, content) {
-    await messagingHttp.put(`${base}/messages/${messageId}`, { contactId, content });
+    void contactId;
+    await messagingHttp.put(`${base}/messages/${messageId}`, { content });
 }
 async function deleteMessage(messageId, contactId) {
+    void contactId;
     await messagingHttp.delete(`${base}/messages/${messageId}`, {
-        data: { contactId },
-    });
-}
-async function pinMessage(messageId, conversationId, contactId) {
-    await messagingHttp.post(`${base}/messages/${messageId}/pin`, {
-        conversationId,
-        contactId,
-    });
-}
-async function unpinMessage(messageId, contactId) {
-    await messagingHttp.delete(`${base}/messages/${messageId}/pin`, {
-        data: { contactId },
+        data: {},
     });
 }
 async function searchMessages(contactId, query, conversationId) {
+    void contactId;
     const { data } = await messagingHttp.post(`${base}/search`, {
-        contact_id: parseInt(contactId, 10),
         query,
         conversation_id: conversationId ? parseInt(conversationId, 10) : null,
     });
     return data ?? [];
 }
 async function updatePresence(contactId, status, customStatus) {
-    await messagingHttp.put(`${base}/contacts/${contactId}/presence`, null, {
-        params: { status, ...(customStatus ? { custom_status: customStatus } : {}) },
+    await messagingHttp.put(`${base}/contacts/${contactId}/presence`, {
+        status,
+        ...(customStatus ? { custom_status: customStatus } : {}),
     });
 }
 async function getPresence(contactId) {
@@ -207,22 +226,13 @@ async function getPresence(contactId) {
     return data ?? { status: 'offline' };
 }
 async function checkContactProfile(contactId) {
-    await messagingHttp.post(`${base}/contacts/check`, {
-        contact_id: parseInt(contactId, 10),
-    });
-}
-async function updateNotificationSettings(conversationId, contactId, settings) {
-    await messagingHttp.put(`${base}/conversations/${conversationId}/notifications`, {
-        contactId,
-        ...settings,
-    });
+    void contactId;
+    await messagingHttp.post(`${base}/contacts/check`, {});
 }
 async function sendMessageWithAttachments(conversationId, senderContactId, content, attachmentIds, filenames, mimeTypes = []) {
     const messageContent = (content || '').trim() || filenames.filter(Boolean).join(', ') || 'Attachment';
-    const senderId = String(senderContactId);
+    void senderContactId;
     const body = {
-        sender_id: parseInt(senderContactId, 10),
-        senderId,
         content: messageContent,
         attachment_ids: attachmentIds,
         attachmentIds: attachmentIds,

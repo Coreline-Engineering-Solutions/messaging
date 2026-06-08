@@ -16,6 +16,7 @@ const messagingApiService_1 = require("../services/messagingApiService");
 const messagingFavoritesCache_1 = require("../services/messagingFavoritesCache");
 const messagingFileService_1 = require("../services/messagingFileService");
 const messagingNotificationSound_1 = require("../services/messagingNotificationSound");
+const messagingRuntime_1 = require("../services/messagingRuntime");
 const messagingWebSocketService_1 = require("../services/messagingWebSocketService");
 const messaging_1 = require("../types/messaging");
 const messagingHelpers_1 = require("../utils/messagingHelpers");
@@ -46,6 +47,10 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
     const panelOpenRef = (0, react_1.useRef)(false);
     const sessionGidRef = (0, react_1.useRef)(sessionGid);
     sessionGidRef.current = sessionGid;
+    (0, react_1.useEffect)(() => {
+        (0, messagingRuntime_1.setMessagingSessionGid)(sessionGid);
+        return () => (0, messagingRuntime_1.setMessagingSessionGid)(null);
+    }, [sessionGid]);
     (0, react_1.useEffect)(() => {
         activeConversationIdRef.current = activeConversationId;
     }, [activeConversationId]);
@@ -609,42 +614,6 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
     const sendChatImage = (0, react_1.useCallback)(async (uri, fileName) => {
         await sendChatAttachments([{ uri, fileName }]);
     }, [sendChatAttachments]);
-    const clearConversation = (0, react_1.useCallback)(async (item) => {
-        if (!contact)
-            return;
-        await (0, messagingApiService_1.clearConversation)(item.conversation_id, contact.contact_id);
-        setMessagesMap((prev) => {
-            const next = { ...prev };
-            delete next[item.conversation_id];
-            return next;
-        });
-        if (activeConversationId === item.conversation_id) {
-            setActiveConversationId(null);
-            setActiveView('inbox');
-        }
-        await loadInbox();
-    }, [activeConversationId, contact, loadInbox]);
-    const deleteConversationItem = (0, react_1.useCallback)(async (item) => {
-        if (!contact)
-            return;
-        if (item.is_group) {
-            await (0, messagingApiService_1.deleteGroupConversation)(item.conversation_id, contact.contact_id);
-        }
-        else {
-            await (0, messagingApiService_1.deleteConversation)(item.conversation_id, contact.contact_id);
-        }
-        setMessagesMap((prev) => {
-            const next = { ...prev };
-            delete next[item.conversation_id];
-            return next;
-        });
-        if (activeConversationId === item.conversation_id) {
-            setActiveConversationId(null);
-            setActiveView('inbox');
-        }
-        await removeFavoriteConversation(item.conversation_id);
-        await loadInbox();
-    }, [activeConversationId, contact, loadInbox, removeFavoriteConversation]);
     const openMessageSearch = (0, react_1.useCallback)(() => setActiveView('message-search'), []);
     const searchMessages = (0, react_1.useCallback)(async (query) => {
         if (!contact || !query.trim())
@@ -691,20 +660,6 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
             [activeConversationId]: (prev[activeConversationId] ?? []).filter((m) => m.message_id !== messageId),
         }));
     }, [activeConversationId, contact]);
-    const togglePinMessage = (0, react_1.useCallback)(async (message) => {
-        if (!contact || !activeConversationId)
-            return;
-        if (message.is_pinned) {
-            await (0, messagingApiService_1.unpinMessage)(message.message_id, contact.contact_id);
-        }
-        else {
-            await (0, messagingApiService_1.pinMessage)(message.message_id, activeConversationId, contact.contact_id);
-        }
-        setMessagesMap((prev) => ({
-            ...prev,
-            [activeConversationId]: (prev[activeConversationId] ?? []).map((m) => m.message_id === message.message_id ? { ...m, is_pinned: !m.is_pinned } : m),
-        }));
-    }, [activeConversationId, contact]);
     const value = (0, react_1.useMemo)(() => ({
         isSessionActive,
         isReady,
@@ -748,8 +703,6 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
         createGroup,
         saveGroupEdit,
         deleteGroup,
-        clearConversation,
-        deleteConversationItem,
         openMessageSearch,
         searchMessages,
         threadParent,
@@ -759,7 +712,6 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
         sendThreadMessage,
         editChatMessage,
         deleteChatMessage,
-        togglePinMessage,
         favoriteConversationIds,
         isFavoriteConversation,
         toggleFavoriteConversation,
@@ -803,8 +755,6 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
         createGroup,
         saveGroupEdit,
         deleteGroup,
-        clearConversation,
-        deleteConversationItem,
         openMessageSearch,
         searchMessages,
         threadParent,
@@ -814,7 +764,6 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
         sendThreadMessage,
         editChatMessage,
         deleteChatMessage,
-        togglePinMessage,
         favoriteConversationIds,
         isFavoriteConversation,
         toggleFavoriteConversation,

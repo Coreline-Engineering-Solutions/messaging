@@ -19,8 +19,6 @@ export declare function createConversation(creatorContactId: string, participant
 export declare function getDirectConversation(contactA: string, contactB: string): Promise<{
     conversation_id?: string;
 } | null>;
-export declare function deleteConversation(conversationId: string, contactId: string): Promise<void>;
-export declare function clearConversation(conversationId: string, contactId: string): Promise<void>;
 export declare function getReactions(messageId: string): Promise<unknown[]>;
 export declare function getThreadMessages(parentMessageId: string, contactId: string): Promise<Message[]>;
 export declare function sendThreadReply(parentMessageId: string, senderContactId: string, content: string): Promise<{
@@ -28,13 +26,10 @@ export declare function sendThreadReply(parentMessageId: string, senderContactId
 }>;
 export declare function editMessage(messageId: string, contactId: string, content: string): Promise<void>;
 export declare function deleteMessage(messageId: string, contactId: string): Promise<void>;
-export declare function pinMessage(messageId: string, conversationId: string, contactId: string): Promise<void>;
-export declare function unpinMessage(messageId: string, contactId: string): Promise<void>;
 export declare function searchMessages(contactId: string, query: string, conversationId?: string): Promise<Message[]>;
 export declare function updatePresence(contactId: string, status: string, customStatus?: string): Promise<void>;
 export declare function getPresence(contactId: string): Promise<PresenceInfo>;
 export declare function checkContactProfile(contactId: string): Promise<void>;
-export declare function updateNotificationSettings(conversationId: string, contactId: string, settings: Record<string, unknown>): Promise<void>;
 export declare function sendMessageWithAttachments(conversationId: string, senderContactId: string, content: string, attachmentIds: string[], filenames: string[], mimeTypes?: string[]): Promise<{
     message_id?: string;
 }>;

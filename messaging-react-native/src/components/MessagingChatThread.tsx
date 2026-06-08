@@ -54,7 +54,6 @@ export function MessagingChatThread() {
     openThread,
     editChatMessage,
     deleteChatMessage,
-    togglePinMessage,
     closePanel,
     openPanel,
     presentation,
@@ -170,10 +169,6 @@ export function MessagingChatThread() {
           },
         ]);
       });
-    }
-    if (!isTempMessageId(item.message_id)) {
-      options.push(item.is_pinned ? 'Unpin' : 'Pin');
-      handlers.push(() => void togglePinMessage(item));
     }
     options.push('Cancel');
     handlers.push(() => {});

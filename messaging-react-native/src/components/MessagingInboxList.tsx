@@ -1,11 +1,8 @@
 ﻿import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import React, { useMemo, useState } from 'react';
 import {
-  ActionSheetIOS,
   ActivityIndicator,
-  Alert,
   FlatList,
-  Platform,
   Text,
   TextInput,
   TouchableOpacity,
@@ -44,8 +41,6 @@ export function MessagingInboxList() {
     refreshInbox,
     visibleContacts,
     openCreateGroup,
-    clearConversation,
-    deleteConversationItem,
     openMessageSearch,
     isFavoriteConversation,
     toggleFavoriteConversation,
@@ -94,51 +89,6 @@ export function MessagingInboxList() {
     );
   }
 
-  const showConversationActions = (item: InboxItem) => {
-    const title = getInboxDisplayName(item, visibleContacts);
-    const onClear = () => {
-      Alert.alert('Clear conversation', `Clear messages in "${title}"?`, [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Clear',
-          style: 'destructive',
-          onPress: () => void clearConversation(item),
-        },
-      ]);
-    };
-    const onDelete = () => {
-      Alert.alert('Delete conversation', `Delete "${title}"?`, [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => void deleteConversationItem(item),
-        },
-      ]);
-    };
-
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options: ['Clear messages', 'Delete conversation', 'Cancel'],
-          cancelButtonIndex: 2,
-          destructiveButtonIndex: 1,
-          title,
-        },
-        (idx) => {
-          if (idx === 0) onClear();
-          if (idx === 1) onDelete();
-        }
-      );
-    } else {
-      Alert.alert(title, undefined, [
-        { text: 'Clear messages', onPress: onClear },
-        { text: 'Delete conversation', style: 'destructive', onPress: onDelete },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
-    }
-  };
-
   const renderItem = ({ item }: { item: InboxItem }) => {
     const favorited = isFavoriteConversation(item.conversation_id);
     const project = isProjectConversation(item);
@@ -148,8 +98,6 @@ export function MessagingInboxList() {
         <TouchableOpacity
           style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}
           onPress={() => openConversation(item)}
-          onLongPress={() => showConversationActions(item)}
-          delayLongPress={400}
           activeOpacity={0.7}
         >
           <View style={messagingStyles.avatar}>

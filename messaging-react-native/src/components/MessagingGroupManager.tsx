@@ -130,10 +130,10 @@ export function MessagingGroupManager() {
   };
 
   const handleDelete = () => {
-    Alert.alert('Delete group', 'Remove this group for everyone?', [
+    Alert.alert('Leave group', 'Remove yourself from this group?', [
       { text: 'Cancel', style: 'cancel' },
       {
-        text: 'Delete',
+        text: 'Leave',
         style: 'destructive',
         onPress: () => void deleteGroup(),
       },
@@ -314,7 +314,7 @@ export function MessagingGroupManager() {
             disabled={saving}
             activeOpacity={0.8}
           >
-            <Text style={messagingStyles.groupDeleteBtnText}>Delete group</Text>
+            <Text style={messagingStyles.groupDeleteBtnText}>Leave group</Text>
           </TouchableOpacity>
         )}
       </View>

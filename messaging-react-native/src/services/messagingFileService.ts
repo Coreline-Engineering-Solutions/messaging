@@ -1,6 +1,6 @@
 ﻿import { Platform } from 'react-native';
 import { getMessagingConfig } from '../configure';
-import { getMessagingApiBaseUrl, resolveMessagingAccessToken } from './messagingRuntime';
+import { getMessagingApiBaseUrl, getMessagingSessionHeaders } from './messagingRuntime';
 import { isStructuredAttachmentId, isTempMessageId } from '../utils/messagingHelpers';
 
 export interface MessagingUploadResult {
@@ -66,10 +66,7 @@ function getMimeType(fileName: string): string {
 }
 
 async function authHeaders(): Promise<Record<string, string>> {
-  const token = await resolveMessagingAccessToken();
-  const headers: Record<string, string> = {};
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return headers;
+  return getMessagingSessionHeaders();
 }
 
 async function tryPostEndpoints<T>(

@@ -98,10 +98,10 @@ function MessagingGroupManager() {
         }
     };
     const handleDelete = () => {
-        react_native_1.Alert.alert('Delete group', 'Remove this group for everyone?', [
+        react_native_1.Alert.alert('Leave group', 'Remove yourself from this group?', [
             { text: 'Cancel', style: 'cancel' },
             {
-                text: 'Delete',
+                text: 'Leave',
                 style: 'destructive',
                 onPress: () => void deleteGroup(),
             },
@@ -120,5 +120,5 @@ function MessagingGroupManager() {
                         return ((0, jsx_runtime_1.jsxs)(react_native_1.TouchableOpacity, { style: [messagingStyles_1.messagingStyles.contactRow, picked && messagingStyles_1.messagingStyles.contactRowSelected], onPress: () => toggleSelect(c), activeOpacity: 0.7, children: [(0, jsx_runtime_1.jsx)(react_native_1.View, { style: messagingStyles_1.messagingStyles.avatar, children: (0, jsx_runtime_1.jsx)(MaterialIcons_1.default, { name: "person", size: 20, color: theme_1.colors.text.primary }) }), (0, jsx_runtime_1.jsx)(react_native_1.Text, { style: [messagingStyles_1.messagingStyles.convName, { flex: 1 }], children: (0, messaging_1.getContactDisplayName)(c) }), (0, jsx_runtime_1.jsx)(MaterialIcons_1.default, { name: picked ? 'check-circle' : 'person-add', size: 22, color: picked ? theme_1.colors.success : theme_1.colors.primary[500] })] }, c.contact_id));
                     })] }), (0, jsx_runtime_1.jsxs)(react_native_1.View, { style: messagingStyles_1.messagingStyles.groupActionBar, children: [(0, jsx_runtime_1.jsx)(react_native_1.TouchableOpacity, { style: messagingStyles_1.messagingStyles.groupPrimaryBtn, onPress: () => void handleSubmit(), disabled: saving || !name.trim() || (!isEditMode && selected.length < 1), activeOpacity: 0.8, children: saving ? ((0, jsx_runtime_1.jsx)(react_native_1.ActivityIndicator, { color: theme_1.colors.white })) : ((0, jsx_runtime_1.jsx)(react_native_1.Text, { style: messagingStyles_1.messagingStyles.groupPrimaryBtnText, children: isEditMode
                                 ? 'Confirm changes'
-                                : `Create group (${selected.length + 1} members)` })) }), isEditMode && ((0, jsx_runtime_1.jsx)(react_native_1.TouchableOpacity, { style: messagingStyles_1.messagingStyles.groupDeleteBtn, onPress: handleDelete, disabled: saving, activeOpacity: 0.8, children: (0, jsx_runtime_1.jsx)(react_native_1.Text, { style: messagingStyles_1.messagingStyles.groupDeleteBtnText, children: "Delete group" }) }))] })] }));
+                                : `Create group (${selected.length + 1} members)` })) }), isEditMode && ((0, jsx_runtime_1.jsx)(react_native_1.TouchableOpacity, { style: messagingStyles_1.messagingStyles.groupDeleteBtn, onPress: handleDelete, disabled: saving, activeOpacity: 0.8, children: (0, jsx_runtime_1.jsx)(react_native_1.Text, { style: messagingStyles_1.messagingStyles.groupDeleteBtnText, children: "Leave group" }) }))] })] }));
 }

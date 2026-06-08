@@ -14,10 +14,22 @@ export function getMessagingStorageApiUrl(): string {
   return cfg.storageApiUrl ?? cfg.apiBaseUrl;
 }
 
-export async function resolveMessagingAccessToken(): Promise<string | null> {
+let currentSessionGid: string | null = null;
+
+export function setMessagingSessionGid(sessionGid: string | null): void {
+  currentSessionGid = sessionGid;
+}
+
+export async function resolveMessagingSessionGid(): Promise<string | null> {
+  if (currentSessionGid) return currentSessionGid;
   const cfg = getMessagingConfig();
-  if (cfg.getAccessToken) {
-    return cfg.getAccessToken();
+  if (cfg.getSessionGid) {
+    return cfg.getSessionGid();
   }
-  return AsyncStorage.getItem('access_token');
+  return AsyncStorage.getItem('session_gid');
+}
+
+export async function getMessagingSessionHeaders(): Promise<Record<string, string>> {
+  const sessionGid = await resolveMessagingSessionGid();
+  return sessionGid ? { 'X-Messaging-Session': sessionGid } : {};
 }

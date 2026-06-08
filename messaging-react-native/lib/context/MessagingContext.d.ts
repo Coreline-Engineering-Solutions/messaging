@@ -39,8 +39,6 @@ interface MessagingContextValue {
     createGroup: (participantIds: string[], name: string) => Promise<void>;
     saveGroupEdit: (name: string, addIds: string[], removeIds: string[]) => Promise<void>;
     deleteGroup: () => Promise<void>;
-    clearConversation: (item: InboxItem) => Promise<void>;
-    deleteConversationItem: (item: InboxItem) => Promise<void>;
     openMessageSearch: () => void;
     searchMessages: (query: string) => Promise<Message[]>;
     threadParent: Message | null;
@@ -50,7 +48,6 @@ interface MessagingContextValue {
     sendThreadMessage: (content: string) => Promise<void>;
     editChatMessage: (messageId: string, content: string) => Promise<void>;
     deleteChatMessage: (messageId: string) => Promise<void>;
-    togglePinMessage: (message: Message) => Promise<void>;
     sendChatAttachments: (files: {
         uri: string;
         fileName: string;
