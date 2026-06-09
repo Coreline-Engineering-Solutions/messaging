@@ -14,6 +14,7 @@ import {
   ChatWindow,
   WebSocketMessage,
   SidebarSide,
+  isProjectConversation,
   getContactDisplayName,
   getMessageSenderName,
 } from '../models/messaging.models';
@@ -54,6 +55,7 @@ export class MessagingStoreService implements OnDestroy {
   private removedGroupIds$ = new BehaviorSubject<Set<string>>(new Set());
   private mentionConversationIds$ = new BehaviorSubject<Set<string>>(new Set());
   private groupMembershipVersion$ = new BehaviorSubject<number>(0);
+  private activeDbGid$ = new BehaviorSubject<string | null>(null);
 
   // ── Public observables ──
   readonly inbox = this.inbox$.asObservable();
@@ -79,11 +81,12 @@ export class MessagingStoreService implements OnDestroy {
   readonly removedGroupIds = this.removedGroupIds$.asObservable();
   readonly mentionConversationIds = this.mentionConversationIds$.asObservable();
   readonly groupMembershipVersion = this.groupMembershipVersion$.asObservable();
+  readonly activeDbGid = this.activeDbGid$.asObservable();
 
   private wsSub: Subscription | null = null;
   private destroy$ = new Subject<void>();
   private pollTimer: any = null;
-  private groupSettings$ = new BehaviorSubject<{ conversationId: string; name: string } | null>(null);
+  private groupSettings$ = new BehaviorSubject<{ conversationId: string; name: string; isProject?: boolean } | null>(null);
   private deletingConversationIds = new Set<string>();
   private removalToastShown = new Set<string>();
   private toastTimer: any = null;
@@ -302,6 +305,19 @@ export class MessagingStoreService implements OnDestroy {
     return this.sidebarSide$.value;
   }
 
+  setActiveDbGid(dbGid: string | null | undefined): void {
+    const normalized = String(dbGid || '').trim() || null;
+    if (normalized === this.activeDbGid$.value) return;
+
+    this.activeDbGid$.next(normalized);
+    this.api.setActiveDbGid(normalized);
+    this.removeProjectConversationsFromUi();
+
+    if (this.auth.isAuthenticated()) {
+      this.loadInbox();
+    }
+  }
+
   // ── Inbox ──
   loadInbox(): void {
     const contactId = this.auth.contactId;
@@ -311,6 +327,7 @@ export class MessagingStoreService implements OnDestroy {
       next: (items) => {
         const mapped = items.map(item => {
           const isGroup = item.is_group === true || (item.is_group as any) === 'True';
+          const isProject = isProjectConversation(item);
           const conversationId = String(item.conversation_id);
           const preview = this.replyBodyText(item.last_message_preview || '');
           const hasMention =
@@ -318,9 +335,9 @@ export class MessagingStoreService implements OnDestroy {
             (Number(item.unread_count || 0) > 0 && this.messageTextMentionsCurrentUser(preview));
           
           if (!isGroup && !item.name && item.other_participant_name) {
-            return { ...item, name: item.other_participant_name, last_message_preview: preview, is_group: false, has_mention: hasMention };
+            return { ...item, name: item.other_participant_name, last_message_preview: preview, is_group: false, is_project: isProject, has_mention: hasMention };
           }
-          return { ...item, last_message_preview: preview, is_group: isGroup, has_mention: hasMention };
+          return { ...item, last_message_preview: preview, is_group: isGroup, is_project: isProject, has_mention: hasMention };
         }).filter(item =>
           !this.deletingConversationIds.has(String(item.conversation_id)) &&
           !this.removedGroupIds$.value.has(String(item.conversation_id))
@@ -363,7 +380,7 @@ export class MessagingStoreService implements OnDestroy {
   }
 
   // ── Conversations ──
-  openConversation(conversationId: string, name: string, isGroup = false): void {
+  openConversation(conversationId: string, name: string, isGroup = false, isProject = false): void {
     if (!conversationId || conversationId === 'undefined') {
       return;
     }
@@ -375,7 +392,7 @@ export class MessagingStoreService implements OnDestroy {
     if (!chats.find((c) => c.conversationId === conversationId)) {
       this.openChats$.next([
         ...chats,
-        { conversationId, name, isGroup, isMinimized: false, unreadCount: 0 },
+        { conversationId, name, isGroup, isProject, isMinimized: false, unreadCount: 0 },
       ]);
     }
 
@@ -633,8 +650,8 @@ export class MessagingStoreService implements OnDestroy {
     });
   }
 
-  openGroupSettings(conversationId: string, name: string): void {
-    this.groupSettings$.next({ conversationId, name });
+  openGroupSettings(conversationId: string, name: string, isProject = false): void {
+    this.groupSettings$.next({ conversationId, name, isProject });
     this.setView('group-manager');
   }
 
@@ -722,6 +739,27 @@ export class MessagingStoreService implements OnDestroy {
       error: () => {
         callbacks?.error?.();
       },
+    });
+  }
+
+  setGroupAdmin(
+    conversationId: string,
+    targetContactId: string,
+    isAdmin: boolean,
+    callbacks?: { success?: () => void; error?: () => void }
+  ): void {
+    if (!this.auth.contactId) {
+      callbacks?.error?.();
+      return;
+    }
+
+    this.api.setGroupAdmin(conversationId, targetContactId, isAdmin).subscribe({
+      next: () => {
+        this.loadInbox();
+        this.notifyGroupMembershipChanged();
+        callbacks?.success?.();
+      },
+      error: () => callbacks?.error?.(),
     });
   }
 
@@ -823,6 +861,38 @@ export class MessagingStoreService implements OnDestroy {
     }
     const settings = this.groupSettings$.value;
     if (settings?.conversationId === conversationId) {
+      this.clearGroupSettings();
+    }
+  }
+
+  private removeProjectConversationsFromUi(): void {
+    const projectIds = new Set(
+      this.inbox$.value
+        .filter((item) => isProjectConversation(item))
+        .map((item) => String(item.conversation_id))
+    );
+    this.openChats$.value
+      .filter((chat) => chat.isProject)
+      .forEach((chat) => projectIds.add(String(chat.conversationId)));
+
+    if (projectIds.size === 0) return;
+
+    const items = this.inbox$.value.filter((item) => !projectIds.has(String(item.conversation_id)));
+    this.inbox$.next(items);
+    this.recalcUnread(items);
+
+    const map = new Map(this.messagesMap$.value);
+    projectIds.forEach((id) => map.delete(id));
+    this.messagesMap$.next(map);
+    this.openChats$.next(this.openChats$.value.filter((chat) => !projectIds.has(String(chat.conversationId))));
+
+    if (this.activeConversationId$.value && projectIds.has(String(this.activeConversationId$.value))) {
+      this.activeConversationId$.next(null);
+      this.activeView$.next('inbox');
+    }
+
+    const settings = this.groupSettings$.value;
+    if (settings && projectIds.has(String(settings.conversationId))) {
       this.clearGroupSettings();
     }
   }

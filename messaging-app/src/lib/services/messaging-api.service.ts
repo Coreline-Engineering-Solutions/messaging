@@ -15,6 +15,7 @@ import {
 @Injectable({ providedIn: 'root' })
 export class MessagingApiService {
   private base: string;
+  private activeDbGid: string | null = null;
 
   constructor(
     private http: HttpClient,
@@ -42,12 +43,19 @@ export class MessagingApiService {
     return body;
   }
 
+  setActiveDbGid(dbGid: string | null | undefined): void {
+    const normalized = String(dbGid || '').trim();
+    this.activeDbGid = normalized || null;
+  }
+
   // ── Inbox ──
   getInbox(contactId: string): Observable<InboxItem[]> {
     warnEmailLikeContactId(contactId);
+    let params = new HttpParams();
+    if (this.activeDbGid) params = params.set('db_gid', this.activeDbGid);
     return this.http.get<InboxItem[]>(
       `${this.base}/my-inbox`,
-      this.authOptions()
+      this.authOptions({ params })
     );
   }
 
@@ -169,6 +177,14 @@ export class MessagingApiService {
 
   deleteGroup(conversationId: string, contactId: string): Observable<any> {
     return this.manageGroup(contactId, 'remove', conversationId);
+  }
+
+  setGroupAdmin(conversationId: string, contactId: string, isAdmin: boolean): Observable<any> {
+    return this.http.post(
+      `${this.base}/groups/${encodeURIComponent(conversationId)}/admins/${encodeURIComponent(contactId)}`,
+      this.sessionBody({ is_admin: isAdmin }),
+      this.authOptions()
+    );
   }
 
   // ── Attachments ──

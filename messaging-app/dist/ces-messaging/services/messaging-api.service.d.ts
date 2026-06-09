@@ -9,9 +9,11 @@ export declare class MessagingApiService {
     private auth;
     private config;
     private base;
+    private activeDbGid;
     constructor(http: HttpClient, auth: AuthService, config: MessagingConfig);
     private authOptions;
     private sessionBody;
+    setActiveDbGid(dbGid: string | null | undefined): void;
     getInbox(contactId: string): Observable<InboxItem[]>;
     getMessages(conversationId: string, contactId: string, beforeMessageId?: string, limit?: number): Observable<Message[]>;
     sendMessage(conversationId: string, senderContactId: string, content: string, messageType?: 'TEXT' | 'IMAGE' | 'SYSTEM', mediaUrl?: string): Observable<any>;
@@ -26,6 +28,7 @@ export declare class MessagingApiService {
     deleteConversation(conversationId: string, contactId: string): Observable<any>;
     clearConversation(conversationId: string, contactId: string): Observable<any>;
     deleteGroup(conversationId: string, contactId: string): Observable<any>;
+    setGroupAdmin(conversationId: string, contactId: string, isAdmin: boolean): Observable<any>;
     uploadAttachment(file: File): Observable<any>;
     addReaction(messageId: string, contactId: string, emoji: string): Observable<any>;
     removeReaction(messageId: string, contactId: string, emoji: string): Observable<any>;

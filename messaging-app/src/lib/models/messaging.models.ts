@@ -35,6 +35,7 @@ export interface InboxItem {
   unread_count: number;
   is_group?: boolean;
   is_project?: boolean;
+  db_gid?: string;
   project_gid?: string;
   project_status?: 'active' | 'pending_delete' | 'archived' | 'deleted';
   project_purge_after?: string;
@@ -119,7 +120,10 @@ export interface ConversationParticipant {
   username: string;
   company: string;
   profile_image_url?: string;
+  role?: 'admin' | 'member' | 'guest' | string;
+  is_admin?: boolean | string;
   joined_at?: string;
+  left_at?: string;
 }
 
 export interface WebSocketMessage {
@@ -133,6 +137,7 @@ export interface ChatWindow {
   conversationId: string;
   name: string;
   isGroup: boolean;
+  isProject?: boolean;
   isMinimized: boolean;
   unreadCount: number;
 }

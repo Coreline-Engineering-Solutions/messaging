@@ -23,6 +23,7 @@ export declare class ChatThreadComponent implements OnInit, OnDestroy, AfterView
     visibleContacts: Contact[];
     conversationName: string;
     isGroup: boolean;
+    isProject: boolean;
     isRemovedFromGroup: boolean;
     messageTextScale: number;
     codeTextScale: number;

@@ -15,6 +15,7 @@ export declare class GroupManagerComponent implements OnInit, OnDestroy {
     originalGroupName: string;
     searchQuery: string;
     isEditMode: boolean;
+    isProjectGroup: boolean;
     editingConversationId: string | null;
     creatorContactId: string | null;
     loadingMembers: boolean;
@@ -29,11 +30,17 @@ export declare class GroupManagerComponent implements OnInit, OnDestroy {
     get filteredContacts(): Contact[];
     getDisplayName(contact: Contact): string;
     getMemberName(member: ConversationParticipant): string;
+    isAdminMember(member: ConversationParticipant): boolean;
+    get currentUserIsAdmin(): boolean;
+    get canManageMembers(): boolean;
+    get canRenameGroup(): boolean;
+    canRemoveMember(member: ConversationParticipant): boolean;
     get canSubmit(): boolean;
     isSelected(contact: Contact): boolean;
     toggleContact(contact: Contact): void;
     removeContact(contact: Contact): void;
     removeMember(member: ConversationParticipant): void;
+    setAdmin(member: ConversationParticipant, isAdmin: boolean): void;
     onSubmit(): void;
     requestDeleteGroup(): void;
     cancelDeleteGroup(): void;

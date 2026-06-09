@@ -246,6 +246,7 @@ class MessagingApiService {
     auth;
     config;
     base;
+    activeDbGid = null;
     constructor(http, auth, config) {
         this.http = http;
         this.auth = auth;
@@ -267,10 +268,17 @@ class MessagingApiService {
     sessionBody(body = {}) {
         return body;
     }
+    setActiveDbGid(dbGid) {
+        const normalized = String(dbGid || '').trim();
+        this.activeDbGid = normalized || null;
+    }
     // ── Inbox ──
     getInbox(contactId) {
         warnEmailLikeContactId(contactId);
-        return this.http.get(`${this.base}/my-inbox`, this.authOptions());
+        let params = new HttpParams();
+        if (this.activeDbGid)
+            params = params.set('db_gid', this.activeDbGid);
+        return this.http.get(`${this.base}/my-inbox`, this.authOptions({ params }));
     }
     // ── Messages ──
     getMessages(conversationId, contactId, beforeMessageId, limit = 50) {
@@ -347,6 +355,9 @@ class MessagingApiService {
     }
     deleteGroup(conversationId, contactId) {
         return this.manageGroup(contactId, 'remove', conversationId);
+    }
+    setGroupAdmin(conversationId, contactId, isAdmin) {
+        return this.http.post(`${this.base}/groups/${encodeURIComponent(conversationId)}/admins/${encodeURIComponent(contactId)}`, this.sessionBody({ is_admin: isAdmin }), this.authOptions());
     }
     // ── Attachments ──
     uploadAttachment(file) {
@@ -871,6 +882,7 @@ class MessagingStoreService {
     removedGroupIds$ = new BehaviorSubject(new Set());
     mentionConversationIds$ = new BehaviorSubject(new Set());
     groupMembershipVersion$ = new BehaviorSubject(0);
+    activeDbGid$ = new BehaviorSubject(null);
     // ── Public observables ──
     inbox = this.inbox$.asObservable();
     messagesMap = this.messagesMap$.asObservable();
@@ -895,6 +907,7 @@ class MessagingStoreService {
     removedGroupIds = this.removedGroupIds$.asObservable();
     mentionConversationIds = this.mentionConversationIds$.asObservable();
     groupMembershipVersion = this.groupMembershipVersion$.asObservable();
+    activeDbGid = this.activeDbGid$.asObservable();
     wsSub = null;
     destroy$ = new Subject();
     pollTimer = null;
@@ -1087,6 +1100,17 @@ class MessagingStoreService {
     getSidebarSide() {
         return this.sidebarSide$.value;
     }
+    setActiveDbGid(dbGid) {
+        const normalized = String(dbGid || '').trim() || null;
+        if (normalized === this.activeDbGid$.value)
+            return;
+        this.activeDbGid$.next(normalized);
+        this.api.setActiveDbGid(normalized);
+        this.removeProjectConversationsFromUi();
+        if (this.auth.isAuthenticated()) {
+            this.loadInbox();
+        }
+    }
     // ── Inbox ──
     loadInbox() {
         const contactId = this.auth.contactId;
@@ -1096,14 +1120,15 @@ class MessagingStoreService {
             next: (items) => {
                 const mapped = items.map(item => {
                     const isGroup = item.is_group === true || item.is_group === 'True';
+                    const isProject = isProjectConversation(item);
                     const conversationId = String(item.conversation_id);
                     const preview = this.replyBodyText(item.last_message_preview || '');
                     const hasMention = this.mentionConversationIds$.value.has(conversationId) ||
                         (Number(item.unread_count || 0) > 0 && this.messageTextMentionsCurrentUser(preview));
                     if (!isGroup && !item.name && item.other_participant_name) {
-                        return { ...item, name: item.other_participant_name, last_message_preview: preview, is_group: false, has_mention: hasMention };
+                        return { ...item, name: item.other_participant_name, last_message_preview: preview, is_group: false, is_project: isProject, has_mention: hasMention };
                     }
-                    return { ...item, last_message_preview: preview, is_group: isGroup, has_mention: hasMention };
+                    return { ...item, last_message_preview: preview, is_group: isGroup, is_project: isProject, has_mention: hasMention };
                 }).filter(item => !this.deletingConversationIds.has(String(item.conversation_id)) &&
                     !this.removedGroupIds$.value.has(String(item.conversation_id)));
                 this.inbox$.next(mapped);
@@ -1137,7 +1162,7 @@ class MessagingStoreService {
         });
     }
     // ── Conversations ──
-    openConversation(conversationId, name, isGroup = false) {
+    openConversation(conversationId, name, isGroup = false, isProject = false) {
         if (!conversationId || conversationId === 'undefined') {
             return;
         }
@@ -1148,7 +1173,7 @@ class MessagingStoreService {
         if (!chats.find((c) => c.conversationId === conversationId)) {
             this.openChats$.next([
                 ...chats,
-                { conversationId, name, isGroup, isMinimized: false, unreadCount: 0 },
+                { conversationId, name, isGroup, isProject, isMinimized: false, unreadCount: 0 },
             ]);
         }
         const existing = this.messagesMap$.value.get(conversationId);
@@ -1364,8 +1389,8 @@ class MessagingStoreService {
             },
         });
     }
-    openGroupSettings(conversationId, name) {
-        this.groupSettings$.next({ conversationId, name });
+    openGroupSettings(conversationId, name, isProject = false) {
+        this.groupSettings$.next({ conversationId, name, isProject });
         this.setView('group-manager');
     }
     clearGroupSettings() {
@@ -1431,6 +1456,20 @@ class MessagingStoreService {
             error: () => {
                 callbacks?.error?.();
             },
+        });
+    }
+    setGroupAdmin(conversationId, targetContactId, isAdmin, callbacks) {
+        if (!this.auth.contactId) {
+            callbacks?.error?.();
+            return;
+        }
+        this.api.setGroupAdmin(conversationId, targetContactId, isAdmin).subscribe({
+            next: () => {
+                this.loadInbox();
+                this.notifyGroupMembershipChanged();
+                callbacks?.success?.();
+            },
+            error: () => callbacks?.error?.(),
         });
     }
     // ── Delete / Clear ──
@@ -1521,6 +1560,31 @@ class MessagingStoreService {
         }
         const settings = this.groupSettings$.value;
         if (settings?.conversationId === conversationId) {
+            this.clearGroupSettings();
+        }
+    }
+    removeProjectConversationsFromUi() {
+        const projectIds = new Set(this.inbox$.value
+            .filter((item) => isProjectConversation(item))
+            .map((item) => String(item.conversation_id)));
+        this.openChats$.value
+            .filter((chat) => chat.isProject)
+            .forEach((chat) => projectIds.add(String(chat.conversationId)));
+        if (projectIds.size === 0)
+            return;
+        const items = this.inbox$.value.filter((item) => !projectIds.has(String(item.conversation_id)));
+        this.inbox$.next(items);
+        this.recalcUnread(items);
+        const map = new Map(this.messagesMap$.value);
+        projectIds.forEach((id) => map.delete(id));
+        this.messagesMap$.next(map);
+        this.openChats$.next(this.openChats$.value.filter((chat) => !projectIds.has(String(chat.conversationId))));
+        if (this.activeConversationId$.value && projectIds.has(String(this.activeConversationId$.value))) {
+            this.activeConversationId$.next(null);
+            this.activeView$.next('inbox');
+        }
+        const settings = this.groupSettings$.value;
+        if (settings && projectIds.has(String(settings.conversationId))) {
             this.clearGroupSettings();
         }
     }
@@ -2626,7 +2690,7 @@ class InboxListComponent {
         this.store.setCodeTextScale(Number(value));
     }
     openConversation(item) {
-        this.store.openConversation(item.conversation_id, item.name || 'Chat', item.is_group);
+        this.store.openConversation(item.conversation_id, item.name || 'Chat', item.is_group, this.isProject(item));
     }
     onNewConversation() {
         this.store.setView('new-conversation');
@@ -3730,6 +3794,7 @@ class ChatThreadComponent {
     visibleContacts = [];
     conversationName = '';
     isGroup = false;
+    isProject = false;
     isRemovedFromGroup = false;
     messageTextScale = 1;
     codeTextScale = 1;
@@ -3803,6 +3868,7 @@ class ChatThreadComponent {
                 const chat = chats.find((c) => c.conversationId === convId);
                 this.conversationName = chat?.name || 'Chat';
                 this.isGroup = chat?.isGroup || false;
+                this.isProject = chat?.isProject || false;
                 this.refreshMentionOptions(true);
             }
             if (this.conversationId) {
@@ -3845,7 +3911,7 @@ class ChatThreadComponent {
         if (this.isRemovedFromGroup)
             return;
         if (this.conversationId) {
-            this.store.openGroupSettings(this.conversationId, this.conversationName);
+            this.store.openGroupSettings(this.conversationId, this.conversationName, this.isProject);
         }
     }
     startReply(message, event) {
@@ -5927,6 +5993,7 @@ class GroupManagerComponent {
     originalGroupName = '';
     searchQuery = '';
     isEditMode = false;
+    isProjectGroup = false;
     editingConversationId = null;
     creatorContactId = null;
     loadingMembers = false;
@@ -5949,12 +6016,14 @@ class GroupManagerComponent {
                 this.editingConversationId = settings.conversationId;
                 this.groupName = settings.name;
                 this.originalGroupName = settings.name;
+                this.isProjectGroup = !!settings.isProject;
                 this.selectedContacts = [];
                 this.showDeleteConfirm = false;
                 this.loadCurrentMembers(settings.conversationId);
             }
             else {
                 this.isEditMode = false;
+                this.isProjectGroup = false;
                 this.editingConversationId = null;
                 this.groupName = '';
                 this.originalGroupName = '';
@@ -5973,6 +6042,9 @@ class GroupManagerComponent {
             next: (members) => {
                 this.currentMembers = members;
                 this.loadingMembers = false;
+                if (this.isEditMode && !this.currentUserIsAdmin) {
+                    this.selectedContacts = [];
+                }
             },
             error: () => {
                 this.loadingMembers = false;
@@ -5995,13 +6067,37 @@ class GroupManagerComponent {
     getMemberName(member) {
         return member.username || member.email || `Contact ${member.contact_id}`;
     }
+    isAdminMember(member) {
+        return member.is_admin === true ||
+            member.is_admin === 'true' ||
+            member.is_admin === 'True' ||
+            String(member.role || '').toLowerCase() === 'admin';
+    }
+    get currentUserIsAdmin() {
+        if (!this.creatorContactId)
+            return false;
+        const me = this.currentMembers.find((m) => String(m.contact_id) === String(this.creatorContactId));
+        return !!me && this.isAdminMember(me);
+    }
+    get canManageMembers() {
+        return !this.isEditMode || this.currentUserIsAdmin;
+    }
+    get canRenameGroup() {
+        return this.isEditMode && this.currentUserIsAdmin && !this.isProjectGroup;
+    }
+    canRemoveMember(member) {
+        return this.canManageMembers && String(member.contact_id) !== String(this.creatorContactId);
+    }
     get canSubmit() {
         if (this.creatingGroup)
             return false;
         if (!this.groupName.trim())
             return false;
         if (this.isEditMode) {
-            return this.groupName.trim() !== this.originalGroupName || this.selectedContacts.length > 0;
+            if (!this.canManageMembers)
+                return false;
+            const renamed = this.canRenameGroup && this.groupName.trim() !== this.originalGroupName;
+            return renamed || this.selectedContacts.length > 0;
         }
         return this.selectedContacts.length >= 1;
     }
@@ -6009,6 +6105,8 @@ class GroupManagerComponent {
         return this.selectedContacts.some((c) => c.contact_id === contact.contact_id);
     }
     toggleContact(contact) {
+        if (this.isEditMode && !this.canManageMembers)
+            return;
         if (this.isSelected(contact)) {
             this.removeContact(contact);
         }
@@ -6020,7 +6118,7 @@ class GroupManagerComponent {
         this.selectedContacts = this.selectedContacts.filter((c) => c.contact_id !== contact.contact_id);
     }
     removeMember(member) {
-        if (!this.editingConversationId)
+        if (!this.editingConversationId || !this.canRemoveMember(member))
             return;
         if (confirm(`Remove ${this.getMemberName(member)} from this group?`)) {
             this.store.manageGroup('remove', this.editingConversationId, undefined, [member.contact_id], {
@@ -6030,14 +6128,27 @@ class GroupManagerComponent {
             });
         }
     }
+    setAdmin(member, isAdmin) {
+        if (!this.editingConversationId || !this.canManageMembers)
+            return;
+        if (String(member.contact_id) === String(this.creatorContactId))
+            return;
+        this.store.setGroupAdmin(this.editingConversationId, member.contact_id, isAdmin, {
+            success: () => {
+                this.currentMembers = this.currentMembers.map((m) => String(m.contact_id) === String(member.contact_id)
+                    ? { ...m, role: isAdmin ? 'admin' : 'member', is_admin: isAdmin }
+                    : m);
+            },
+        });
+    }
     onSubmit() {
         if (!this.canSubmit)
             return;
         if (this.isEditMode && this.editingConversationId) {
-            if (this.groupName.trim() !== this.originalGroupName) {
+            if (this.canRenameGroup && this.groupName.trim() !== this.originalGroupName) {
                 this.store.manageGroup('rename', this.editingConversationId, this.groupName.trim());
             }
-            if (this.selectedContacts.length > 0) {
+            if (this.canManageMembers && this.selectedContacts.length > 0) {
                 const ids = this.selectedContacts.map((c) => c.contact_id);
                 this.store.manageGroup('add', this.editingConversationId, undefined, ids);
             }
@@ -6102,7 +6213,10 @@ class GroupManagerComponent {
             [(ngModel)]="groupName"
             placeholder="Enter group name..."
             class="text-field"
+            [readonly]="isProjectGroup || (isEditMode && !canManageMembers)"
+            [class.readonly]="isProjectGroup || (isEditMode && !canManageMembers)"
           />
+          <div *ngIf="isProjectGroup" class="field-note">Project group names are locked to the GIS project name.</div>
         </div>
 
         <ng-container *ngIf="isEditMode">
@@ -6116,11 +6230,24 @@ class GroupManagerComponent {
               <div *ngFor="let m of currentMembers" class="member-row">
                 <div class="member-avatar"><mat-icon>person</mat-icon></div>
                 <div class="member-info">
-                  <span class="member-name">{{ getMemberName(m) }}{{ m.contact_id === creatorContactId ? ' (you)' : '' }}</span>
+                  <span class="member-name">
+                    {{ getMemberName(m) }}{{ m.contact_id === creatorContactId ? ' (you)' : '' }}
+                    <span *ngIf="isAdminMember(m)" class="admin-badge">Admin</span>
+                  </span>
                   <span class="member-sub">{{ m.company || m.email }}</span>
                 </div>
                 <button 
-                  *ngIf="m.contact_id !== creatorContactId" 
+                  *ngIf="canManageMembers && m.contact_id !== creatorContactId"
+                  mat-icon-button
+                  class="admin-member-btn"
+                  (click)="setAdmin(m, !isAdminMember(m))"
+                  [matTooltip]="isAdminMember(m) ? 'Remove admin' : 'Make admin'"
+                  matTooltipPosition="left"
+                >
+                  <mat-icon>{{ isAdminMember(m) ? 'shield' : 'admin_panel_settings' }}</mat-icon>
+                </button>
+                <button 
+                  *ngIf="canRemoveMember(m)" 
                   mat-icon-button 
                   class="remove-member-btn"
                   (click)="removeMember(m)"
@@ -6134,7 +6261,7 @@ class GroupManagerComponent {
             </div>
           </div>
 
-          <div class="form-section section-gap">
+          <div *ngIf="canManageMembers" class="form-section section-gap">
             <label class="field-label">Add Members</label>
             <div class="search-bar">
               <mat-icon class="search-icon">search</mat-icon>
@@ -6153,7 +6280,7 @@ class GroupManagerComponent {
           </div>
         </ng-container>
 
-        <div *ngIf="selectedContacts.length > 0" class="selected-chips">
+        <div *ngIf="selectedContacts.length > 0 && (!isEditMode || canManageMembers)" class="selected-chips">
           <div *ngFor="let c of selectedContacts" class="chip">
             <span>{{ getDisplayName(c) }}</span>
             <button mat-icon-button class="chip-remove" (click)="removeContact(c)">
@@ -6162,7 +6289,7 @@ class GroupManagerComponent {
           </div>
         </div>
 
-        <div class="contacts-list">
+        <div *ngIf="!isEditMode || canManageMembers" class="contacts-list">
           <div
             *ngFor="let contact of filteredContacts"
             class="contact-item"
@@ -6184,6 +6311,7 @@ class GroupManagerComponent {
 
       <div class="action-bar">
         <button
+          *ngIf="!isEditMode || canManageMembers"
           mat-raised-button
           [disabled]="!canSubmit"
           (click)="onSubmit()"
@@ -6227,7 +6355,7 @@ class GroupManagerComponent {
         </div>
       </div>
     </div>
-  `, isInline: true, styles: [".group-manager{display:flex;flex-direction:column;height:100%;position:relative}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.scrollable{flex:1;overflow-y:auto}.form-section{padding:12px 16px 0}.section-gap{padding-top:16px}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.loading-row{display:flex;align-items:center;gap:8px;color:#fff9;font-size:13px;padding:8px 0}.members-list{border-radius:8px;overflow:hidden}.member-row{display:flex;align-items:center;padding:8px 12px;gap:10px;background:#ffffff12;border-bottom:1px solid rgba(255,255,255,.06)}.member-row:last-child{border-bottom:none}.member-avatar{width:30px;height:30px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.member-avatar mat-icon{color:#fff;font-size:18px}.member-info{display:flex;flex-direction:column}.member-name{font-size:13px;font-weight:500;color:#fff}.member-sub{font-size:11px;color:#ffffff80}.remove-member-btn{margin-left:auto;color:#fff9!important}.remove-member-btn:hover{color:#f87171!important;background:#f871711a!important}.empty-members{font-size:13px;color:#ffffff80;padding:8px 0}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px;flex-shrink:0}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}.confirm-overlay{position:absolute;inset:0;z-index:10;display:flex;align-items:flex-end;padding:16px;background:#0413229e;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);box-sizing:border-box}.confirm-card{width:100%;padding:16px;border-radius:14px;background:#0c1f35;border:1px solid rgba(255,255,255,.14);box-shadow:0 16px 40px #00000073;color:#fff}.confirm-icon{width:36px;height:36px;border-radius:50%;background:#f8717124;display:flex;align-items:center;justify-content:center;margin-bottom:10px}.confirm-icon mat-icon{color:#f87171}.confirm-copy h4{margin:0 0 6px;font-size:16px;font-weight:700}.confirm-copy p{margin:0;color:#ffffffb3;font-size:13px;line-height:1.4}.confirm-actions{display:flex;gap:8px;margin-top:16px}.confirm-cancel,.confirm-delete{flex:1;border-radius:10px;font-weight:600}.confirm-cancel{color:#fff!important;border-color:#ffffff40!important}.confirm-delete{background:#dc2626e6!important;color:#fff!important}.confirm-delete mat-icon{margin-right:6px;font-size:18px;width:18px;height:18px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6$1.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i9.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }] });
+  `, isInline: true, styles: [".group-manager{display:flex;flex-direction:column;height:100%;position:relative}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.scrollable{flex:1;overflow-y:auto}.form-section{padding:12px 16px 0}.section-gap{padding-top:16px}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.text-field.readonly{cursor:not-allowed;color:#ffffffbf;background:#ffffff0f;border-color:#ffffff29}.field-note{margin-top:6px;font-size:12px;color:#ffffff8c}.loading-row{display:flex;align-items:center;gap:8px;color:#fff9;font-size:13px;padding:8px 0}.members-list{border-radius:8px;overflow:hidden}.member-row{display:flex;align-items:center;padding:8px 12px;gap:10px;background:#ffffff12;border-bottom:1px solid rgba(255,255,255,.06)}.member-row:last-child{border-bottom:none}.member-avatar{width:30px;height:30px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.member-avatar mat-icon{color:#fff;font-size:18px}.member-info{display:flex;flex-direction:column;flex:1;min-width:0}.member-name{font-size:13px;font-weight:500;color:#fff}.admin-badge{display:inline-flex;align-items:center;margin-left:6px;padding:1px 6px;border-radius:999px;color:#bfdbfe;background:#2563eb38;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.member-sub{font-size:11px;color:#ffffff80}.remove-member-btn{color:#fff9!important}.admin-member-btn{color:#93c5fdf2!important}.remove-member-btn:hover{color:#f87171!important;background:#f871711a!important}.empty-members{font-size:13px;color:#ffffff80;padding:8px 0}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px;flex-shrink:0}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}.confirm-overlay{position:absolute;inset:0;z-index:10;display:flex;align-items:flex-end;padding:16px;background:#0413229e;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);box-sizing:border-box}.confirm-card{width:100%;padding:16px;border-radius:14px;background:#0c1f35;border:1px solid rgba(255,255,255,.14);box-shadow:0 16px 40px #00000073;color:#fff}.confirm-icon{width:36px;height:36px;border-radius:50%;background:#f8717124;display:flex;align-items:center;justify-content:center;margin-bottom:10px}.confirm-icon mat-icon{color:#f87171}.confirm-copy h4{margin:0 0 6px;font-size:16px;font-weight:700}.confirm-copy p{margin:0;color:#ffffffb3;font-size:13px;line-height:1.4}.confirm-actions{display:flex;gap:8px;margin-top:16px}.confirm-cancel,.confirm-delete{flex:1;border-radius:10px;font-weight:600}.confirm-cancel{color:#fff!important;border-color:#ffffff40!important}.confirm-delete{background:#dc2626e6!important;color:#fff!important}.confirm-delete mat-icon{margin-right:6px;font-size:18px;width:18px;height:18px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6$1.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i9.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: GroupManagerComponent, decorators: [{
             type: Component,
@@ -6248,7 +6376,10 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
             [(ngModel)]="groupName"
             placeholder="Enter group name..."
             class="text-field"
+            [readonly]="isProjectGroup || (isEditMode && !canManageMembers)"
+            [class.readonly]="isProjectGroup || (isEditMode && !canManageMembers)"
           />
+          <div *ngIf="isProjectGroup" class="field-note">Project group names are locked to the GIS project name.</div>
         </div>
 
         <ng-container *ngIf="isEditMode">
@@ -6262,11 +6393,24 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
               <div *ngFor="let m of currentMembers" class="member-row">
                 <div class="member-avatar"><mat-icon>person</mat-icon></div>
                 <div class="member-info">
-                  <span class="member-name">{{ getMemberName(m) }}{{ m.contact_id === creatorContactId ? ' (you)' : '' }}</span>
+                  <span class="member-name">
+                    {{ getMemberName(m) }}{{ m.contact_id === creatorContactId ? ' (you)' : '' }}
+                    <span *ngIf="isAdminMember(m)" class="admin-badge">Admin</span>
+                  </span>
                   <span class="member-sub">{{ m.company || m.email }}</span>
                 </div>
                 <button 
-                  *ngIf="m.contact_id !== creatorContactId" 
+                  *ngIf="canManageMembers && m.contact_id !== creatorContactId"
+                  mat-icon-button
+                  class="admin-member-btn"
+                  (click)="setAdmin(m, !isAdminMember(m))"
+                  [matTooltip]="isAdminMember(m) ? 'Remove admin' : 'Make admin'"
+                  matTooltipPosition="left"
+                >
+                  <mat-icon>{{ isAdminMember(m) ? 'shield' : 'admin_panel_settings' }}</mat-icon>
+                </button>
+                <button 
+                  *ngIf="canRemoveMember(m)" 
                   mat-icon-button 
                   class="remove-member-btn"
                   (click)="removeMember(m)"
@@ -6280,7 +6424,7 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
             </div>
           </div>
 
-          <div class="form-section section-gap">
+          <div *ngIf="canManageMembers" class="form-section section-gap">
             <label class="field-label">Add Members</label>
             <div class="search-bar">
               <mat-icon class="search-icon">search</mat-icon>
@@ -6299,7 +6443,7 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
           </div>
         </ng-container>
 
-        <div *ngIf="selectedContacts.length > 0" class="selected-chips">
+        <div *ngIf="selectedContacts.length > 0 && (!isEditMode || canManageMembers)" class="selected-chips">
           <div *ngFor="let c of selectedContacts" class="chip">
             <span>{{ getDisplayName(c) }}</span>
             <button mat-icon-button class="chip-remove" (click)="removeContact(c)">
@@ -6308,7 +6452,7 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
           </div>
         </div>
 
-        <div class="contacts-list">
+        <div *ngIf="!isEditMode || canManageMembers" class="contacts-list">
           <div
             *ngFor="let contact of filteredContacts"
             class="contact-item"
@@ -6330,6 +6474,7 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
 
       <div class="action-bar">
         <button
+          *ngIf="!isEditMode || canManageMembers"
           mat-raised-button
           [disabled]="!canSubmit"
           (click)="onSubmit()"
@@ -6373,7 +6518,7 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
         </div>
       </div>
     </div>
-  `, styles: [".group-manager{display:flex;flex-direction:column;height:100%;position:relative}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.scrollable{flex:1;overflow-y:auto}.form-section{padding:12px 16px 0}.section-gap{padding-top:16px}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.loading-row{display:flex;align-items:center;gap:8px;color:#fff9;font-size:13px;padding:8px 0}.members-list{border-radius:8px;overflow:hidden}.member-row{display:flex;align-items:center;padding:8px 12px;gap:10px;background:#ffffff12;border-bottom:1px solid rgba(255,255,255,.06)}.member-row:last-child{border-bottom:none}.member-avatar{width:30px;height:30px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.member-avatar mat-icon{color:#fff;font-size:18px}.member-info{display:flex;flex-direction:column}.member-name{font-size:13px;font-weight:500;color:#fff}.member-sub{font-size:11px;color:#ffffff80}.remove-member-btn{margin-left:auto;color:#fff9!important}.remove-member-btn:hover{color:#f87171!important;background:#f871711a!important}.empty-members{font-size:13px;color:#ffffff80;padding:8px 0}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px;flex-shrink:0}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}.confirm-overlay{position:absolute;inset:0;z-index:10;display:flex;align-items:flex-end;padding:16px;background:#0413229e;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);box-sizing:border-box}.confirm-card{width:100%;padding:16px;border-radius:14px;background:#0c1f35;border:1px solid rgba(255,255,255,.14);box-shadow:0 16px 40px #00000073;color:#fff}.confirm-icon{width:36px;height:36px;border-radius:50%;background:#f8717124;display:flex;align-items:center;justify-content:center;margin-bottom:10px}.confirm-icon mat-icon{color:#f87171}.confirm-copy h4{margin:0 0 6px;font-size:16px;font-weight:700}.confirm-copy p{margin:0;color:#ffffffb3;font-size:13px;line-height:1.4}.confirm-actions{display:flex;gap:8px;margin-top:16px}.confirm-cancel,.confirm-delete{flex:1;border-radius:10px;font-weight:600}.confirm-cancel{color:#fff!important;border-color:#ffffff40!important}.confirm-delete{background:#dc2626e6!important;color:#fff!important}.confirm-delete mat-icon{margin-right:6px;font-size:18px;width:18px;height:18px}\n"] }]
+  `, styles: [".group-manager{display:flex;flex-direction:column;height:100%;position:relative}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.scrollable{flex:1;overflow-y:auto}.form-section{padding:12px 16px 0}.section-gap{padding-top:16px}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.text-field.readonly{cursor:not-allowed;color:#ffffffbf;background:#ffffff0f;border-color:#ffffff29}.field-note{margin-top:6px;font-size:12px;color:#ffffff8c}.loading-row{display:flex;align-items:center;gap:8px;color:#fff9;font-size:13px;padding:8px 0}.members-list{border-radius:8px;overflow:hidden}.member-row{display:flex;align-items:center;padding:8px 12px;gap:10px;background:#ffffff12;border-bottom:1px solid rgba(255,255,255,.06)}.member-row:last-child{border-bottom:none}.member-avatar{width:30px;height:30px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.member-avatar mat-icon{color:#fff;font-size:18px}.member-info{display:flex;flex-direction:column;flex:1;min-width:0}.member-name{font-size:13px;font-weight:500;color:#fff}.admin-badge{display:inline-flex;align-items:center;margin-left:6px;padding:1px 6px;border-radius:999px;color:#bfdbfe;background:#2563eb38;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.member-sub{font-size:11px;color:#ffffff80}.remove-member-btn{color:#fff9!important}.admin-member-btn{color:#93c5fdf2!important}.remove-member-btn:hover{color:#f87171!important;background:#f871711a!important}.empty-members{font-size:13px;color:#ffffff80;padding:8px 0}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px;flex-shrink:0}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}.confirm-overlay{position:absolute;inset:0;z-index:10;display:flex;align-items:flex-end;padding:16px;background:#0413229e;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);box-sizing:border-box}.confirm-card{width:100%;padding:16px;border-radius:14px;background:#0c1f35;border:1px solid rgba(255,255,255,.14);box-shadow:0 16px 40px #00000073;color:#fff}.confirm-icon{width:36px;height:36px;border-radius:50%;background:#f8717124;display:flex;align-items:center;justify-content:center;margin-bottom:10px}.confirm-icon mat-icon{color:#f87171}.confirm-copy h4{margin:0 0 6px;font-size:16px;font-weight:700}.confirm-copy p{margin:0;color:#ffffffb3;font-size:13px;line-height:1.4}.confirm-actions{display:flex;gap:8px;margin-top:16px}.confirm-cancel,.confirm-delete{flex:1;border-radius:10px;font-weight:600}.confirm-cancel{color:#fff!important;border-color:#ffffff40!important}.confirm-delete{background:#dc2626e6!important;color:#fff!important}.confirm-delete mat-icon{margin-right:6px;font-size:18px;width:18px;height:18px}\n"] }]
         }], ctorParameters: () => [{ type: MessagingStoreService }, { type: MessagingApiService }, { type: AuthService }] });
 
 class ChatPanelComponent {

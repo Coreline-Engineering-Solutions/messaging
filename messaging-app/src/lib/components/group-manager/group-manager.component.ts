@@ -33,7 +33,10 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
             [(ngModel)]="groupName"
             placeholder="Enter group name..."
             class="text-field"
+            [readonly]="isProjectGroup || (isEditMode && !canManageMembers)"
+            [class.readonly]="isProjectGroup || (isEditMode && !canManageMembers)"
           />
+          <div *ngIf="isProjectGroup" class="field-note">Project group names are locked to the GIS project name.</div>
         </div>
 
         <ng-container *ngIf="isEditMode">
@@ -47,11 +50,24 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
               <div *ngFor="let m of currentMembers" class="member-row">
                 <div class="member-avatar"><mat-icon>person</mat-icon></div>
                 <div class="member-info">
-                  <span class="member-name">{{ getMemberName(m) }}{{ m.contact_id === creatorContactId ? ' (you)' : '' }}</span>
+                  <span class="member-name">
+                    {{ getMemberName(m) }}{{ m.contact_id === creatorContactId ? ' (you)' : '' }}
+                    <span *ngIf="isAdminMember(m)" class="admin-badge">Admin</span>
+                  </span>
                   <span class="member-sub">{{ m.company || m.email }}</span>
                 </div>
                 <button 
-                  *ngIf="m.contact_id !== creatorContactId" 
+                  *ngIf="canManageMembers && m.contact_id !== creatorContactId"
+                  mat-icon-button
+                  class="admin-member-btn"
+                  (click)="setAdmin(m, !isAdminMember(m))"
+                  [matTooltip]="isAdminMember(m) ? 'Remove admin' : 'Make admin'"
+                  matTooltipPosition="left"
+                >
+                  <mat-icon>{{ isAdminMember(m) ? 'shield' : 'admin_panel_settings' }}</mat-icon>
+                </button>
+                <button 
+                  *ngIf="canRemoveMember(m)" 
                   mat-icon-button 
                   class="remove-member-btn"
                   (click)="removeMember(m)"
@@ -65,7 +81,7 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
             </div>
           </div>
 
-          <div class="form-section section-gap">
+          <div *ngIf="canManageMembers" class="form-section section-gap">
             <label class="field-label">Add Members</label>
             <div class="search-bar">
               <mat-icon class="search-icon">search</mat-icon>
@@ -84,7 +100,7 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
           </div>
         </ng-container>
 
-        <div *ngIf="selectedContacts.length > 0" class="selected-chips">
+        <div *ngIf="selectedContacts.length > 0 && (!isEditMode || canManageMembers)" class="selected-chips">
           <div *ngFor="let c of selectedContacts" class="chip">
             <span>{{ getDisplayName(c) }}</span>
             <button mat-icon-button class="chip-remove" (click)="removeContact(c)">
@@ -93,7 +109,7 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
           </div>
         </div>
 
-        <div class="contacts-list">
+        <div *ngIf="!isEditMode || canManageMembers" class="contacts-list">
           <div
             *ngFor="let contact of filteredContacts"
             class="contact-item"
@@ -115,6 +131,7 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
 
       <div class="action-bar">
         <button
+          *ngIf="!isEditMode || canManageMembers"
           mat-raised-button
           [disabled]="!canSubmit"
           (click)="onSubmit()"
@@ -235,6 +252,18 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
 
     .text-field:focus { border-color: rgba(255, 255, 255, 0.5); }
     .text-field::placeholder { color: rgba(255, 255, 255, 0.5); }
+    .text-field.readonly {
+      cursor: not-allowed;
+      color: rgba(255, 255, 255, 0.75);
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.16);
+    }
+
+    .field-note {
+      margin-top: 6px;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.55);
+    }
 
     .loading-row {
       display: flex;
@@ -277,6 +306,8 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
     .member-info {
       display: flex;
       flex-direction: column;
+      flex: 1;
+      min-width: 0;
     }
 
     .member-name {
@@ -285,14 +316,31 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
       color: #fff;
     }
 
+    .admin-badge {
+      display: inline-flex;
+      align-items: center;
+      margin-left: 6px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      color: #bfdbfe;
+      background: rgba(37, 99, 235, 0.22);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
     .member-sub {
       font-size: 11px;
       color: rgba(255,255,255,0.5);
     }
 
     .remove-member-btn {
-      margin-left: auto;
       color: rgba(255,255,255,0.6) !important;
+    }
+
+    .admin-member-btn {
+      color: rgba(147,197,253,0.95) !important;
     }
 
     .remove-member-btn:hover {
@@ -522,6 +570,7 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
   originalGroupName = '';
   searchQuery = '';
   isEditMode = false;
+  isProjectGroup = false;
   editingConversationId: string | null = null;
   creatorContactId: string | null = null;
   loadingMembers = false;
@@ -551,11 +600,13 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
           this.editingConversationId = settings.conversationId;
           this.groupName = settings.name;
           this.originalGroupName = settings.name;
+          this.isProjectGroup = !!settings.isProject;
           this.selectedContacts = [];
           this.showDeleteConfirm = false;
           this.loadCurrentMembers(settings.conversationId);
         } else {
           this.isEditMode = false;
+          this.isProjectGroup = false;
           this.editingConversationId = null;
           this.groupName = '';
           this.originalGroupName = '';
@@ -577,6 +628,9 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
       next: (members) => {
         this.currentMembers = members;
         this.loadingMembers = false;
+        if (this.isEditMode && !this.currentUserIsAdmin) {
+          this.selectedContacts = [];
+        }
       },
       error: () => {
         this.loadingMembers = false;
@@ -608,11 +662,38 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
     return member.username || member.email || `Contact ${member.contact_id}`;
   }
 
+  isAdminMember(member: ConversationParticipant): boolean {
+    return member.is_admin === true ||
+      member.is_admin === 'true' ||
+      member.is_admin === 'True' ||
+      String(member.role || '').toLowerCase() === 'admin';
+  }
+
+  get currentUserIsAdmin(): boolean {
+    if (!this.creatorContactId) return false;
+    const me = this.currentMembers.find((m) => String(m.contact_id) === String(this.creatorContactId));
+    return !!me && this.isAdminMember(me);
+  }
+
+  get canManageMembers(): boolean {
+    return !this.isEditMode || this.currentUserIsAdmin;
+  }
+
+  get canRenameGroup(): boolean {
+    return this.isEditMode && this.currentUserIsAdmin && !this.isProjectGroup;
+  }
+
+  canRemoveMember(member: ConversationParticipant): boolean {
+    return this.canManageMembers && String(member.contact_id) !== String(this.creatorContactId);
+  }
+
   get canSubmit(): boolean {
     if (this.creatingGroup) return false;
     if (!this.groupName.trim()) return false;
     if (this.isEditMode) {
-      return this.groupName.trim() !== this.originalGroupName || this.selectedContacts.length > 0;
+      if (!this.canManageMembers) return false;
+      const renamed = this.canRenameGroup && this.groupName.trim() !== this.originalGroupName;
+      return renamed || this.selectedContacts.length > 0;
     }
     return this.selectedContacts.length >= 1;
   }
@@ -622,6 +703,7 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
   }
 
   toggleContact(contact: Contact): void {
+    if (this.isEditMode && !this.canManageMembers) return;
     if (this.isSelected(contact)) {
       this.removeContact(contact);
     } else {
@@ -636,7 +718,7 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
   }
 
   removeMember(member: ConversationParticipant): void {
-    if (!this.editingConversationId) return;
+    if (!this.editingConversationId || !this.canRemoveMember(member)) return;
     
     if (confirm(`Remove ${this.getMemberName(member)} from this group?`)) {
       this.store.manageGroup('remove', this.editingConversationId, undefined, [member.contact_id], {
@@ -647,14 +729,29 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
     }
   }
 
+  setAdmin(member: ConversationParticipant, isAdmin: boolean): void {
+    if (!this.editingConversationId || !this.canManageMembers) return;
+    if (String(member.contact_id) === String(this.creatorContactId)) return;
+
+    this.store.setGroupAdmin(this.editingConversationId, member.contact_id, isAdmin, {
+      success: () => {
+        this.currentMembers = this.currentMembers.map((m) =>
+          String(m.contact_id) === String(member.contact_id)
+            ? { ...m, role: isAdmin ? 'admin' : 'member', is_admin: isAdmin }
+            : m
+        );
+      },
+    });
+  }
+
   onSubmit(): void {
     if (!this.canSubmit) return;
 
     if (this.isEditMode && this.editingConversationId) {
-      if (this.groupName.trim() !== this.originalGroupName) {
+      if (this.canRenameGroup && this.groupName.trim() !== this.originalGroupName) {
         this.store.manageGroup('rename', this.editingConversationId, this.groupName.trim());
       }
-      if (this.selectedContacts.length > 0) {
+      if (this.canManageMembers && this.selectedContacts.length > 0) {
         const ids = this.selectedContacts.map((c) => c.contact_id);
         this.store.manageGroup('add', this.editingConversationId, undefined, ids);
       }

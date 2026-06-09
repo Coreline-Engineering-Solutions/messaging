@@ -1510,6 +1510,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   visibleContacts: Contact[] = [];
   conversationName = '';
   isGroup = false;
+  isProject = false;
   isRemovedFromGroup = false;
   messageTextScale = 1;
   codeTextScale = 1;
@@ -1592,6 +1593,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
         const chat = chats.find((c) => c.conversationId === convId);
         this.conversationName = chat?.name || 'Chat';
         this.isGroup = chat?.isGroup || false;
+        this.isProject = chat?.isProject || false;
         this.refreshMentionOptions(true);
       }
 
@@ -1640,7 +1642,7 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   onGroupSettings(): void {
     if (this.isRemovedFromGroup) return;
     if (this.conversationId) {
-      this.store.openGroupSettings(this.conversationId, this.conversationName);
+      this.store.openGroupSettings(this.conversationId, this.conversationName, this.isProject);
     }
   }
 

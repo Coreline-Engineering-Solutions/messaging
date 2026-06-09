@@ -766,7 +766,7 @@ export class InboxListComponent implements OnInit, OnDestroy {
   }
 
   openConversation(item: InboxItem): void {
-    this.store.openConversation(item.conversation_id, item.name || 'Chat', item.is_group);
+    this.store.openConversation(item.conversation_id, item.name || 'Chat', item.is_group, this.isProject(item));
   }
 
   onNewConversation(): void {

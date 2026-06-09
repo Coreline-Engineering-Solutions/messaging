@@ -32,6 +32,7 @@ export declare class MessagingStoreService implements OnDestroy {
     private removedGroupIds$;
     private mentionConversationIds$;
     private groupMembershipVersion$;
+    private activeDbGid$;
     readonly inbox: Observable<InboxItem[]>;
     readonly messagesMap: Observable<Map<string, Message[]>>;
     readonly openChats: Observable<ChatWindow[]>;
@@ -64,6 +65,7 @@ export declare class MessagingStoreService implements OnDestroy {
     readonly removedGroupIds: Observable<Set<string>>;
     readonly mentionConversationIds: Observable<Set<string>>;
     readonly groupMembershipVersion: Observable<number>;
+    readonly activeDbGid: Observable<string>;
     private wsSub;
     private destroy$;
     private pollTimer;
@@ -74,6 +76,7 @@ export declare class MessagingStoreService implements OnDestroy {
     readonly groupSettings: Observable<{
         conversationId: string;
         name: string;
+        isProject?: boolean;
     }>;
     constructor(auth: AuthService, api: MessagingApiService, wsService: MessagingWebSocketService);
     initialize(): void;
@@ -104,9 +107,10 @@ export declare class MessagingStoreService implements OnDestroy {
     createReplyPreview(message: Message): MessageReplyPreview;
     showToast(message: string, type?: 'info' | 'success' | 'error', durationMs?: number): void;
     getSidebarSide(): SidebarSide;
+    setActiveDbGid(dbGid: string | null | undefined): void;
     loadInbox(): void;
     loadVisibleContacts(): void;
-    openConversation(conversationId: string, name: string, isGroup?: boolean): void;
+    openConversation(conversationId: string, name: string, isGroup?: boolean, isProject?: boolean): void;
     closeChat(conversationId: string): void;
     markGroupRemoved(conversationId: string): void;
     exitRemovedGroup(conversationId: string): void;
@@ -122,10 +126,14 @@ export declare class MessagingStoreService implements OnDestroy {
         success?: () => void;
         error?: () => void;
     }): void;
-    openGroupSettings(conversationId: string, name: string): void;
+    openGroupSettings(conversationId: string, name: string, isProject?: boolean): void;
     clearGroupSettings(): void;
     markAsRead(conversationId: string): void;
     manageGroup(action: 'create' | 'add' | 'remove' | 'rename', conversationId?: string, groupName?: string, participantContactIds?: string[], callbacks?: {
+        success?: () => void;
+        error?: () => void;
+    }): void;
+    setGroupAdmin(conversationId: string, targetContactId: string, isAdmin: boolean, callbacks?: {
         success?: () => void;
         error?: () => void;
     }): void;
@@ -136,6 +144,7 @@ export declare class MessagingStoreService implements OnDestroy {
         error?: () => void;
     }): void;
     private removeConversationFromUi;
+    private removeProjectConversationsFromUi;
     addReaction(messageId: string, emoji: string): void;
     removeReaction(messageId: string, emoji: string): void;
     editMessage(messageId: string, content: string): void;
