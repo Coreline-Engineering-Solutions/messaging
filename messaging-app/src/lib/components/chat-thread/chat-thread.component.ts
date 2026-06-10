@@ -1511,8 +1511,11 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
   conversationName = '';
   isGroup = false;
   isProject = false;
+  isProjectSubgroup = false;
   projectDbGid: string | undefined;
   projectGid: string | undefined;
+  parentConversationId: string | undefined;
+  subgroupSubject: string | undefined;
   isRemovedFromGroup = false;
   messageTextScale = 1;
   codeTextScale = 1;
@@ -1596,8 +1599,11 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
         this.conversationName = chat?.name || 'Chat';
         this.isGroup = chat?.isGroup || false;
         this.isProject = chat?.isProject || false;
+        this.isProjectSubgroup = chat?.isProjectSubgroup || false;
         this.projectDbGid = chat?.dbGid;
         this.projectGid = chat?.projectGid;
+        this.parentConversationId = chat?.parentConversationId;
+        this.subgroupSubject = chat?.subgroupSubject;
         this.refreshMentionOptions(true);
       }
 
@@ -1650,8 +1656,11 @@ export class ChatThreadComponent implements OnInit, OnDestroy, AfterViewChecked 
         this.conversationId,
         this.conversationName,
         this.isProject,
+        this.isProjectSubgroup,
         this.projectDbGid,
         this.projectGid,
+        this.parentConversationId,
+        this.subgroupSubject,
       );
     }
   }

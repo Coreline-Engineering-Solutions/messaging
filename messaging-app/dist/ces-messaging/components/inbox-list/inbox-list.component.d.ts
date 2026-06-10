@@ -16,6 +16,7 @@ export declare class InboxListComponent implements OnInit, OnDestroy {
         y: number;
         item: InboxItem;
     } | null;
+    expandedProjectIds: Set<string>;
     private readonly tabStorageKey;
     private sub;
     constructor(store: MessagingStoreService);
@@ -23,8 +24,14 @@ export declare class InboxListComponent implements OnInit, OnDestroy {
     ngOnInit(): void;
     ngOnDestroy(): void;
     get filteredInbox(): InboxItem[];
+    get projectContainers(): InboxItem[];
+    get showEmptyState(): boolean;
     get emptyStateText(): string;
     isProject(item: InboxItem): boolean;
+    projectSubgroups(project: InboxItem, applySearch?: boolean): InboxItem[];
+    isProjectExpanded(project: InboxItem): boolean;
+    toggleProject(project: InboxItem): void;
+    createSubgroup(project: InboxItem, event: Event): void;
     setActiveTab(tab: 'all' | 'direct' | 'groups' | 'projects' | 'settings'): void;
     private getSavedTab;
     toggleNotificationsMuted(): void;

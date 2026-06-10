@@ -26,6 +26,9 @@ export interface InboxItem {
     is_project?: boolean;
     db_gid?: string;
     project_gid?: string;
+    parent_conversation_id?: string;
+    is_project_subgroup?: boolean;
+    subgroup_subject?: string;
     project_status?: 'active' | 'pending_delete' | 'archived' | 'deleted';
     project_purge_after?: string;
     conversation_type?: string;
@@ -36,6 +39,8 @@ export interface InboxItem {
     other_participant_email?: string;
 }
 export declare function isProjectConversation(item: InboxItem): boolean;
+export declare function isProjectSubgroup(item: InboxItem): boolean;
+export declare function isProjectContainer(item: InboxItem): boolean;
 export interface MessageReplyPreview {
     message_id?: string;
     sender_name?: string;
@@ -114,8 +119,11 @@ export interface ChatWindow {
     name: string;
     isGroup: boolean;
     isProject?: boolean;
+    isProjectSubgroup?: boolean;
     dbGid?: string;
     projectGid?: string;
+    parentConversationId?: string;
+    subgroupSubject?: string;
     isMinimized: boolean;
     unreadCount: number;
 }

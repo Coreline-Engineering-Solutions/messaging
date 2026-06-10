@@ -10,6 +10,11 @@ export interface EligibleProjectUsersResponse {
     project_name?: string;
     users: Contact[];
 }
+export interface ProjectSubgroupPayload {
+    name: string;
+    subject?: string | null;
+    participant_ids?: string[];
+}
 export declare class MessagingApiService {
     private http;
     private auth;
@@ -36,6 +41,8 @@ export declare class MessagingApiService {
     clearConversation(conversationId: string, contactId: string): Observable<any>;
     deleteGroup(conversationId: string, contactId: string): Observable<any>;
     setGroupAdmin(conversationId: string, contactId: string, isAdmin: boolean): Observable<any>;
+    createProjectSubgroup(parentConversationId: string, payload: ProjectSubgroupPayload): Observable<any>;
+    updateProjectSubgroup(conversationId: string, payload: ProjectSubgroupPayload): Observable<any>;
     uploadAttachment(file: File): Observable<any>;
     addReaction(messageId: string, contactId: string, emoji: string): Observable<any>;
     removeReaction(messageId: string, contactId: string, emoji: string): Observable<any>;

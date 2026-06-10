@@ -19,6 +19,12 @@ export interface EligibleProjectUsersResponse {
   users: Contact[];
 }
 
+export interface ProjectSubgroupPayload {
+  name: string;
+  subject?: string | null;
+  participant_ids?: string[];
+}
+
 @Injectable({ providedIn: 'root' })
 export class MessagingApiService {
   private base: string;
@@ -197,6 +203,28 @@ export class MessagingApiService {
     return this.http.post(
       `${this.base}/groups/${encodeURIComponent(conversationId)}/admins/${encodeURIComponent(contactId)}`,
       this.sessionBody({ is_admin: isAdmin }),
+      this.authOptions()
+    );
+  }
+
+  createProjectSubgroup(
+    parentConversationId: string,
+    payload: ProjectSubgroupPayload
+  ): Observable<any> {
+    return this.http.post(
+      `${this.base}/project-groups/${encodeURIComponent(parentConversationId)}/subgroups`,
+      this.sessionBody(payload),
+      this.authOptions()
+    );
+  }
+
+  updateProjectSubgroup(
+    conversationId: string,
+    payload: ProjectSubgroupPayload
+  ): Observable<any> {
+    return this.http.patch(
+      `${this.base}/project-subgroups/${encodeURIComponent(conversationId)}`,
+      this.sessionBody(payload),
       this.authOptions()
     );
   }

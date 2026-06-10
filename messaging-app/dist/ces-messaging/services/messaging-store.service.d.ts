@@ -79,8 +79,12 @@ export declare class MessagingStoreService implements OnDestroy {
         conversationId: string;
         name: string;
         isProject?: boolean;
+        isProjectSubgroup?: boolean;
+        isProjectSubgroupCreate?: boolean;
         dbGid?: string;
         projectGid?: string;
+        parentConversationId?: string;
+        subject?: string;
     }>;
     constructor(auth: AuthService, api: MessagingApiService, wsService: MessagingWebSocketService, config: MessagingConfig);
     get projectGroupsEnabled(): boolean;
@@ -115,7 +119,7 @@ export declare class MessagingStoreService implements OnDestroy {
     setActiveDbGid(dbGid: string | null | undefined): void;
     loadInbox(): void;
     loadVisibleContacts(): void;
-    openConversation(conversationId: string, name: string, isGroup?: boolean, isProject?: boolean, dbGid?: string, projectGid?: string): void;
+    openConversation(conversationId: string, name: string, isGroup?: boolean, isProject?: boolean, isProjectSubgroup?: boolean, dbGid?: string, projectGid?: string, parentConversationId?: string, subgroupSubject?: string): void;
     closeChat(conversationId: string): void;
     markGroupRemoved(conversationId: string): void;
     exitRemovedGroup(conversationId: string): void;
@@ -131,7 +135,8 @@ export declare class MessagingStoreService implements OnDestroy {
         success?: () => void;
         error?: () => void;
     }): void;
-    openGroupSettings(conversationId: string, name: string, isProject?: boolean, dbGid?: string, projectGid?: string): void;
+    openGroupSettings(conversationId: string, name: string, isProject?: boolean, isProjectSubgroup?: boolean, dbGid?: string, projectGid?: string, parentConversationId?: string, subject?: string): void;
+    openProjectSubgroupCreator(parent: InboxItem): void;
     clearGroupSettings(): void;
     markAsRead(conversationId: string): void;
     manageGroup(action: 'create' | 'add' | 'remove' | 'rename', conversationId?: string, groupName?: string, participantContactIds?: string[], callbacks?: {
@@ -139,6 +144,14 @@ export declare class MessagingStoreService implements OnDestroy {
         error?: () => void;
     }): void;
     setGroupAdmin(conversationId: string, targetContactId: string, isAdmin: boolean, callbacks?: {
+        success?: () => void;
+        error?: () => void;
+    }): void;
+    createProjectSubgroup(parentConversationId: string, name: string, subject: string | null | undefined, participantIds: string[], callbacks?: {
+        success?: () => void;
+        error?: () => void;
+    }): void;
+    updateProjectSubgroup(conversationId: string, name: string, subject: string | null | undefined, callbacks?: {
         success?: () => void;
         error?: () => void;
     }): void;

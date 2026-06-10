@@ -22,21 +22,33 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
         <button mat-icon-button class="hdr-btn" (click)="goBack()" matTooltip="Back" matTooltipPosition="below">
           <mat-icon>arrow_back</mat-icon>
         </button>
-        <h3>{{ isEditMode ? 'Group Settings' : 'Create Group' }}</h3>
+        <h3>{{ pageTitle }}</h3>
       </div>
 
       <div class="scrollable">
         <div class="form-section">
-          <label class="field-label">Group Name</label>
+          <label class="field-label">{{ isProjectSubgroup ? 'Subgroup Name' : 'Group Name' }}</label>
           <input
             type="text"
             [(ngModel)]="groupName"
-            placeholder="Enter group name..."
+            [placeholder]="isProjectSubgroup ? 'Enter subgroup name...' : 'Enter group name...'"
             class="text-field"
-            [readonly]="isProjectGroup || (isEditMode && !canManageMembers)"
-            [class.readonly]="isProjectGroup || (isEditMode && !canManageMembers)"
+            [readonly]="isProjectNameLocked || (isEditMode && !canManageMembers)"
+            [class.readonly]="isProjectNameLocked || (isEditMode && !canManageMembers)"
           />
-          <div *ngIf="isProjectGroup" class="field-note">Project group names are locked to the GIS project name.</div>
+          <div *ngIf="isProjectNameLocked" class="field-note">Project group names are locked to the GIS project name.</div>
+        </div>
+
+        <div *ngIf="isProjectSubgroup" class="form-section">
+          <label class="field-label">Subject</label>
+          <textarea
+            [(ngModel)]="subgroupSubject"
+            placeholder="Optional subgroup subject..."
+            class="text-field subject-field"
+            [readonly]="isEditMode && !canManageMembers"
+            [class.readonly]="isEditMode && !canManageMembers"
+            rows="3"
+          ></textarea>
         </div>
 
         <ng-container *ngIf="isEditMode">
@@ -92,7 +104,7 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
 
         <ng-container *ngIf="!isEditMode">
           <div class="form-section section-gap">
-            <label class="field-label">Add Members (min 1 other person)</label>
+            <label class="field-label">{{ isProjectSubgroup ? 'Add Members (optional)' : 'Add Members (min 1 other person)' }}</label>
             <div class="search-bar">
               <mat-icon class="search-icon">search</mat-icon>
               <input type="text" [(ngModel)]="searchQuery" placeholder="Search contacts..." class="search-input" />
@@ -138,8 +150,8 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
           class="create-btn"
         >
           <mat-icon>{{ isEditMode ? 'save' : 'group_add' }}</mat-icon>
-          <ng-container *ngIf="!isEditMode && !creatingGroup">Create Group ({{ selectedContacts.length + 1 }} members)</ng-container>
-          <ng-container *ngIf="!isEditMode && creatingGroup">Creating group...</ng-container>
+          <ng-container *ngIf="!isEditMode && !creatingGroup">{{ createButtonLabel }}</ng-container>
+          <ng-container *ngIf="!isEditMode && creatingGroup">{{ isProjectSubgroup ? 'Creating subgroup...' : 'Creating group...' }}</ng-container>
           <ng-container *ngIf="isEditMode">Save Changes</ng-container>
         </button>
         <button
@@ -252,6 +264,12 @@ import { Contact, ConversationParticipant, getContactDisplayName } from '../../m
 
     .text-field:focus { border-color: rgba(255, 255, 255, 0.5); }
     .text-field::placeholder { color: rgba(255, 255, 255, 0.5); }
+    .subject-field {
+      min-height: 74px;
+      resize: vertical;
+      font-family: inherit;
+      line-height: 1.4;
+    }
     .text-field.readonly {
       cursor: not-allowed;
       color: rgba(255, 255, 255, 0.75);
@@ -571,8 +589,13 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
   searchQuery = '';
   isEditMode = false;
   isProjectGroup = false;
+  isProjectSubgroup = false;
+  isProjectSubgroupCreate = false;
   projectDbGid: string | undefined;
   projectGid: string | undefined;
+  parentConversationId: string | undefined;
+  subgroupSubject = '';
+  originalSubgroupSubject = '';
   editingConversationId: string | null = null;
   creatorContactId: string | null = null;
   loadingMembers = false;
@@ -600,25 +623,38 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
     this.subs.push(
       this.store.groupSettings.subscribe((settings) => {
         if (settings) {
-          this.isEditMode = true;
-          this.editingConversationId = settings.conversationId;
+          this.isProjectSubgroupCreate = !!settings.isProjectSubgroupCreate;
+          this.isEditMode = !this.isProjectSubgroupCreate;
+          this.editingConversationId = this.isProjectSubgroupCreate ? null : settings.conversationId;
           this.groupName = settings.name;
           this.originalGroupName = settings.name;
           this.isProjectGroup = !!settings.isProject;
+          this.isProjectSubgroup = !!settings.isProjectSubgroup;
           this.projectDbGid = settings.dbGid;
           this.projectGid = settings.projectGid;
+          this.parentConversationId = settings.parentConversationId || settings.conversationId;
+          this.subgroupSubject = settings.subject || '';
+          this.originalSubgroupSubject = settings.subject || '';
           this.selectedContacts = [];
+          this.currentMembers = [];
           this.showDeleteConfirm = false;
-          this.loadCurrentMembers(settings.conversationId);
+          if (this.isEditMode) {
+            this.loadCurrentMembers(settings.conversationId);
+          }
           this.loadProjectEligibleContacts();
         } else {
           this.isEditMode = false;
           this.isProjectGroup = false;
+          this.isProjectSubgroup = false;
+          this.isProjectSubgroupCreate = false;
           this.projectDbGid = undefined;
           this.projectGid = undefined;
+          this.parentConversationId = undefined;
           this.editingConversationId = null;
           this.groupName = '';
           this.originalGroupName = '';
+          this.subgroupSubject = '';
+          this.originalSubgroupSubject = '';
           this.selectedContacts = [];
           this.currentMembers = [];
           this.showDeleteConfirm = false;
@@ -703,8 +739,25 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
     return !this.isEditMode || this.currentUserIsAdmin;
   }
 
+  get isProjectNameLocked(): boolean {
+    return this.isProjectGroup && !this.isProjectSubgroup;
+  }
+
+  get pageTitle(): string {
+    if (this.isProjectSubgroupCreate) return 'Create Subgroup';
+    if (this.isProjectSubgroup) return 'Subgroup Settings';
+    return this.isEditMode ? 'Group Settings' : 'Create Group';
+  }
+
+  get createButtonLabel(): string {
+    const count = this.selectedContacts.length + 1;
+    return this.isProjectSubgroup
+      ? `Create Subgroup (${count} member${count === 1 ? '' : 's'})`
+      : `Create Group (${count} members)`;
+  }
+
   get canRenameGroup(): boolean {
-    return this.isEditMode && this.currentUserIsAdmin && !this.isProjectGroup;
+    return this.isEditMode && this.currentUserIsAdmin && !this.isProjectNameLocked;
   }
 
   canRemoveMember(member: ConversationParticipant): boolean {
@@ -717,9 +770,10 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
     if (this.isEditMode) {
       if (!this.canManageMembers) return false;
       const renamed = this.canRenameGroup && this.groupName.trim() !== this.originalGroupName;
-      return renamed || this.selectedContacts.length > 0;
+      const subjectChanged = this.isProjectSubgroup && this.subgroupSubject.trim() !== this.originalSubgroupSubject;
+      return renamed || subjectChanged || this.selectedContacts.length > 0;
     }
-    return this.selectedContacts.length >= 1;
+    return this.isProjectSubgroup || this.selectedContacts.length >= 1;
   }
 
   isSelected(contact: Contact): boolean {
@@ -772,7 +826,15 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
     if (!this.canSubmit) return;
 
     if (this.isEditMode && this.editingConversationId) {
-      if (this.canRenameGroup && this.groupName.trim() !== this.originalGroupName) {
+      const renamed = this.canRenameGroup && this.groupName.trim() !== this.originalGroupName;
+      const subjectChanged = this.isProjectSubgroup && this.subgroupSubject.trim() !== this.originalSubgroupSubject;
+      if (this.isProjectSubgroup && (renamed || subjectChanged)) {
+        this.store.updateProjectSubgroup(
+          this.editingConversationId,
+          this.groupName.trim(),
+          this.subgroupSubject.trim() || null,
+        );
+      } else if (renamed) {
         this.store.manageGroup('rename', this.editingConversationId, this.groupName.trim());
       }
       if (this.canManageMembers && this.selectedContacts.length > 0) {
@@ -784,6 +846,20 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
     } else {
       this.creatingGroup = true;
       const ids = this.selectedContacts.map((c) => c.contact_id);
+      if (this.isProjectSubgroup && this.parentConversationId) {
+        this.store.createProjectSubgroup(
+          this.parentConversationId,
+          this.groupName.trim(),
+          this.subgroupSubject.trim() || null,
+          ids,
+          {
+            error: () => {
+              this.creatingGroup = false;
+            },
+          },
+        );
+        return;
+      }
       this.store.createGroupConversation(ids, this.groupName.trim(), {
         error: () => {
           this.creatingGroup = false;
@@ -818,6 +894,9 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
     if (this.isEditMode) {
       this.store.clearGroupSettings();
       this.store.setView('chat');
+    } else if (this.isProjectSubgroupCreate) {
+      this.store.clearGroupSettings();
+      this.store.setView('inbox');
     } else {
       this.store.setView('inbox');
     }

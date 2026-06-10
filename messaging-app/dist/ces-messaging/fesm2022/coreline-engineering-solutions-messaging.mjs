@@ -42,7 +42,18 @@ function getContactDisplayName(contact) {
     return contact.email;
 }
 function isProjectConversation(item) {
-    return item.is_project === true || item.conversation_type?.toLowerCase() === 'project' || !!item.project_gid;
+    const isProject = item.is_project === true || item.is_project === 'true' || item.is_project === 'True';
+    const type = item.conversation_type?.toLowerCase();
+    return isProject || type === 'project' || type === 'project_container' || type === 'project_subgroup' || !!item.project_gid;
+}
+function isProjectSubgroup(item) {
+    return item.is_project_subgroup === true ||
+        item.is_project_subgroup === 'true' ||
+        item.is_project_subgroup === 'True' ||
+        item.conversation_type?.toLowerCase() === 'project_subgroup';
+}
+function isProjectContainer(item) {
+    return isProjectConversation(item) && !isProjectSubgroup(item);
 }
 const PLAIN_TEXT_MESSAGE_PREFIX = '[messaging:plain-text]\n';
 /** Get display name from message sender fields */
@@ -361,6 +372,12 @@ class MessagingApiService {
     }
     setGroupAdmin(conversationId, contactId, isAdmin) {
         return this.http.post(`${this.base}/groups/${encodeURIComponent(conversationId)}/admins/${encodeURIComponent(contactId)}`, this.sessionBody({ is_admin: isAdmin }), this.authOptions());
+    }
+    createProjectSubgroup(parentConversationId, payload) {
+        return this.http.post(`${this.base}/project-groups/${encodeURIComponent(parentConversationId)}/subgroups`, this.sessionBody(payload), this.authOptions());
+    }
+    updateProjectSubgroup(conversationId, payload) {
+        return this.http.patch(`${this.base}/project-subgroups/${encodeURIComponent(conversationId)}`, this.sessionBody(payload), this.authOptions());
     }
     // ── Attachments ──
     uploadAttachment(file) {
@@ -1129,14 +1146,15 @@ class MessagingStoreService {
                 const mapped = items.map(item => {
                     const isGroup = item.is_group === true || item.is_group === 'True';
                     const isProject = this.projectGroupsEnabled && isProjectConversation(item);
+                    const isSubgroup = this.projectGroupsEnabled && isProjectSubgroup(item);
                     const conversationId = String(item.conversation_id);
                     const preview = this.replyBodyText(item.last_message_preview || '');
                     const hasMention = this.mentionConversationIds$.value.has(conversationId) ||
                         (Number(item.unread_count || 0) > 0 && this.messageTextMentionsCurrentUser(preview));
                     if (!isGroup && !item.name && item.other_participant_name) {
-                        return { ...item, name: item.other_participant_name, last_message_preview: preview, is_group: false, is_project: isProject, has_mention: hasMention };
+                        return { ...item, name: item.other_participant_name, last_message_preview: preview, is_group: false, is_project: isProject, is_project_subgroup: isSubgroup, has_mention: hasMention };
                     }
-                    return { ...item, last_message_preview: preview, is_group: isGroup, is_project: isProject, has_mention: hasMention };
+                    return { ...item, last_message_preview: preview, is_group: isGroup, is_project: isProject, is_project_subgroup: isSubgroup, has_mention: hasMention };
                 }).filter(item => (!isProjectConversation(item) || this.projectGroupsEnabled) &&
                     !this.deletingConversationIds.has(String(item.conversation_id)) &&
                     !this.removedGroupIds$.value.has(String(item.conversation_id)));
@@ -1171,7 +1189,7 @@ class MessagingStoreService {
         });
     }
     // ── Conversations ──
-    openConversation(conversationId, name, isGroup = false, isProject = false, dbGid, projectGid) {
+    openConversation(conversationId, name, isGroup = false, isProject = false, isProjectSubgroup = false, dbGid, projectGid, parentConversationId, subgroupSubject) {
         if (!conversationId || conversationId === 'undefined') {
             return;
         }
@@ -1182,7 +1200,19 @@ class MessagingStoreService {
         if (!chats.find((c) => c.conversationId === conversationId)) {
             this.openChats$.next([
                 ...chats,
-                { conversationId, name, isGroup, isProject, dbGid, projectGid, isMinimized: false, unreadCount: 0 },
+                {
+                    conversationId,
+                    name,
+                    isGroup,
+                    isProject,
+                    isProjectSubgroup,
+                    dbGid,
+                    projectGid,
+                    parentConversationId,
+                    subgroupSubject,
+                    isMinimized: false,
+                    unreadCount: 0,
+                },
             ]);
         }
         const existing = this.messagesMap$.value.get(conversationId);
@@ -1398,9 +1428,34 @@ class MessagingStoreService {
             },
         });
     }
-    openGroupSettings(conversationId, name, isProject = false, dbGid, projectGid) {
-        this.groupSettings$.next({ conversationId, name, isProject, dbGid, projectGid });
+    openGroupSettings(conversationId, name, isProject = false, isProjectSubgroup = false, dbGid, projectGid, parentConversationId, subject) {
+        this.groupSettings$.next({
+            conversationId,
+            name,
+            isProject,
+            isProjectSubgroup,
+            dbGid,
+            projectGid,
+            parentConversationId,
+            subject,
+        });
         this.setView('group-manager');
+    }
+    openProjectSubgroupCreator(parent) {
+        if (!this.projectGroupsEnabled || !isProjectContainer(parent))
+            return;
+        this.groupSettings$.next({
+            conversationId: String(parent.conversation_id),
+            name: '',
+            isProject: true,
+            isProjectSubgroup: true,
+            isProjectSubgroupCreate: true,
+            dbGid: parent.db_gid,
+            projectGid: parent.project_gid,
+            parentConversationId: String(parent.conversation_id),
+        });
+        this.setView('group-manager');
+        this.openPanel();
     }
     clearGroupSettings() {
         this.groupSettings$.next(null);
@@ -1474,6 +1529,38 @@ class MessagingStoreService {
         }
         this.api.setGroupAdmin(conversationId, targetContactId, isAdmin).subscribe({
             next: () => {
+                this.loadInbox();
+                this.notifyGroupMembershipChanged();
+                callbacks?.success?.();
+            },
+            error: () => callbacks?.error?.(),
+        });
+    }
+    createProjectSubgroup(parentConversationId, name, subject, participantIds, callbacks) {
+        this.api.createProjectSubgroup(parentConversationId, {
+            name,
+            subject: subject || null,
+            participant_ids: participantIds,
+        }).subscribe({
+            next: (subgroup) => {
+                const convId = String(subgroup?.conversation_id || subgroup?.id || '');
+                this.loadInbox();
+                this.clearGroupSettings();
+                if (convId) {
+                    this.openConversation(convId, subgroup?.name || name, true, true, true, subgroup?.db_gid, subgroup?.project_gid, subgroup?.parent_conversation_id || parentConversationId, subgroup?.subject || subject || undefined);
+                }
+                callbacks?.success?.();
+            },
+            error: () => callbacks?.error?.(),
+        });
+    }
+    updateProjectSubgroup(conversationId, name, subject, callbacks) {
+        this.api.updateProjectSubgroup(conversationId, { name, subject: subject || null }).subscribe({
+            next: (subgroup) => {
+                const updatedName = subgroup?.name || name;
+                this.openChats$.next(this.openChats$.value.map((chat) => String(chat.conversationId) === String(conversationId)
+                    ? { ...chat, name: updatedName, subgroupSubject: subgroup?.subject || subject || undefined }
+                    : chat));
                 this.loadInbox();
                 this.notifyGroupMembershipChanged();
                 callbacks?.success?.();
@@ -2619,6 +2706,7 @@ class InboxListComponent {
     messageTextScale = 1;
     codeTextScale = 1;
     contextMenu = null;
+    expandedProjectIds = new Set();
     tabStorageKey = 'messaging_inbox_active_tab';
     sub;
     constructor(store) {
@@ -2649,14 +2737,34 @@ class InboxListComponent {
             if (this.activeTab === 'groups')
                 return item.is_group && !project;
             if (this.activeTab === 'projects')
-                return this.projectGroupsEnabled && project;
-            return true;
+                return [];
+            return !isProjectContainer(item);
         });
         if (!this.searchQuery.trim())
             return tabbed;
         const q = this.searchQuery.toLowerCase();
         return tabbed.filter((item) => (item.name || '').toLowerCase().includes(q) ||
             (item.last_message_preview || '').toLowerCase().includes(q));
+    }
+    get projectContainers() {
+        const containers = this.inbox.filter((item) => isProjectContainer(item));
+        if (!this.searchQuery.trim())
+            return containers;
+        const q = this.searchQuery.toLowerCase();
+        return containers.filter((project) => {
+            const projectMatch = (project.name || '').toLowerCase().includes(q);
+            const subgroupMatch = this.projectSubgroups(project, false).some((item) => (item.name || '').toLowerCase().includes(q) ||
+                (item.subgroup_subject || '').toLowerCase().includes(q) ||
+                (item.last_message_preview || '').toLowerCase().includes(q));
+            return projectMatch || subgroupMatch;
+        });
+    }
+    get showEmptyState() {
+        if (this.activeTab === 'settings')
+            return false;
+        if (this.activeTab === 'projects')
+            return this.projectContainers.length === 0;
+        return this.filteredInbox.length === 0;
     }
     get emptyStateText() {
         if (this.searchQuery.trim())
@@ -2671,6 +2779,36 @@ class InboxListComponent {
     }
     isProject(item) {
         return isProjectConversation(item);
+    }
+    projectSubgroups(project, applySearch = true) {
+        const parentId = String(project.conversation_id);
+        let subgroups = this.inbox.filter((item) => isProjectSubgroup(item) && String(item.parent_conversation_id || '') === parentId);
+        if (applySearch && this.searchQuery.trim()) {
+            const q = this.searchQuery.toLowerCase();
+            subgroups = subgroups.filter((item) => (item.name || '').toLowerCase().includes(q) ||
+                (item.subgroup_subject || '').toLowerCase().includes(q) ||
+                (item.last_message_preview || '').toLowerCase().includes(q));
+        }
+        return subgroups;
+    }
+    isProjectExpanded(project) {
+        return this.expandedProjectIds.has(String(project.conversation_id));
+    }
+    toggleProject(project) {
+        const id = String(project.conversation_id);
+        const next = new Set(this.expandedProjectIds);
+        if (next.has(id)) {
+            next.delete(id);
+        }
+        else {
+            next.add(id);
+        }
+        this.expandedProjectIds = next;
+    }
+    createSubgroup(project, event) {
+        event.stopPropagation();
+        this.expandedProjectIds.add(String(project.conversation_id));
+        this.store.openProjectSubgroupCreator(project);
     }
     setActiveTab(tab) {
         if (tab === 'projects' && !this.projectGroupsEnabled)
@@ -2709,7 +2847,11 @@ class InboxListComponent {
         this.store.setCodeTextScale(Number(value));
     }
     openConversation(item) {
-        this.store.openConversation(item.conversation_id, item.name || 'Chat', item.is_group, this.isProject(item), item.db_gid, item.project_gid);
+        if (isProjectContainer(item)) {
+            this.toggleProject(item);
+            return;
+        }
+        this.store.openConversation(item.conversation_id, item.name || 'Chat', item.is_group, this.isProject(item), isProjectSubgroup(item), item.db_gid, item.project_gid, item.parent_conversation_id, item.subgroup_subject);
     }
     onNewConversation() {
         this.store.setView('new-conversation');
@@ -2777,42 +2919,102 @@ class InboxListComponent {
       </div>
 
       <div class="conversation-list">
-        <div
-          *ngFor="let item of filteredInbox"
-          class="conversation-item"
-          matRipple
-          [class.has-unread]="item.unread_count > 0"
-          (click)="openConversation(item)"
-          (contextmenu)="onContextMenu($event, item)"
-        >
-          <div
-            class="avatar"
-            [class.group-avatar]="item.is_group && !isProject(item)"
-            [class.project-avatar]="isProject(item)"
-          >
-            <mat-icon>{{ isProject(item) ? 'workspaces' : item.is_group ? 'group' : 'person' }}</mat-icon>
-          </div>
-          <div class="conversation-info">
-            <div class="info-top">
-              <span class="conv-name">{{ item.name || 'Direct Message' }}</span>
-              <span class="conv-time">{{ formatTime(item.last_message_at) }}</span>
+        <ng-container *ngIf="activeTab === 'projects' && projectGroupsEnabled; else standardConversationList">
+          <div *ngFor="let project of projectContainers" class="project-container">
+            <div class="project-header" (click)="toggleProject(project)">
+              <div class="avatar project-avatar">
+                <mat-icon>workspaces</mat-icon>
+              </div>
+              <div class="conversation-info">
+                <div class="info-top">
+                  <span class="conv-name">{{ project.name || 'Project Group' }}</span>
+                  <button
+                    type="button"
+                    class="subgroup-create"
+                    (click)="createSubgroup(project, $event)"
+                    matTooltip="Create subgroup"
+                    matTooltipPosition="above"
+                  >
+                    <mat-icon>add</mat-icon>
+                  </button>
+                </div>
+                <div class="info-bottom">
+                  <span class="conv-preview">{{ projectSubgroups(project).length }} subgroup{{ projectSubgroups(project).length === 1 ? '' : 's' }}</span>
+                  <mat-icon class="expand-icon">{{ isProjectExpanded(project) ? 'expand_less' : 'expand_more' }}</mat-icon>
+                </div>
+              </div>
             </div>
-            <div class="info-bottom">
-              <span class="conv-preview">{{ item.last_message_preview || 'No messages yet' }}</span>
-              <span
-                *ngIf="item.has_mention"
-                class="mention-badge"
-                matTooltip="You were mentioned"
-                matTooltipPosition="above"
-              >&#64;</span>
-              <span *ngIf="item.unread_count > 0" class="unread-badge">
-                {{ item.unread_count > 99 ? '99+' : item.unread_count }}
-              </span>
-            </div>
-          </div>
-        </div>
 
-        <div *ngIf="filteredInbox.length === 0 && activeTab !== 'settings'" class="empty-state">
+            <div *ngIf="isProjectExpanded(project)" class="subgroup-list">
+              <div
+                *ngFor="let item of projectSubgroups(project)"
+                class="conversation-item subgroup-item"
+                matRipple
+                [class.has-unread]="item.unread_count > 0"
+                (click)="openConversation(item)"
+                (contextmenu)="onContextMenu($event, item)"
+              >
+                <div class="avatar subgroup-avatar">
+                  <mat-icon>forum</mat-icon>
+                </div>
+                <div class="conversation-info">
+                  <div class="info-top">
+                    <span class="conv-name">{{ item.name || 'Subgroup' }}</span>
+                    <span class="conv-time">{{ formatTime(item.last_message_at) }}</span>
+                  </div>
+                  <div class="info-bottom">
+                    <span class="conv-preview">{{ item.subgroup_subject || item.last_message_preview || 'No messages yet' }}</span>
+                    <span *ngIf="item.unread_count > 0" class="unread-badge">
+                      {{ item.unread_count > 99 ? '99+' : item.unread_count }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div *ngIf="projectSubgroups(project).length === 0" class="empty-subgroups">
+                No subgroups yet
+              </div>
+            </div>
+          </div>
+        </ng-container>
+
+        <ng-template #standardConversationList>
+          <div
+            *ngFor="let item of filteredInbox"
+            class="conversation-item"
+            matRipple
+            [class.has-unread]="item.unread_count > 0"
+            (click)="openConversation(item)"
+            (contextmenu)="onContextMenu($event, item)"
+          >
+            <div
+              class="avatar"
+              [class.group-avatar]="item.is_group && !isProject(item)"
+              [class.project-avatar]="isProject(item)"
+            >
+              <mat-icon>{{ isProject(item) ? 'forum' : item.is_group ? 'group' : 'person' }}</mat-icon>
+            </div>
+            <div class="conversation-info">
+              <div class="info-top">
+                <span class="conv-name">{{ item.name || 'Direct Message' }}</span>
+                <span class="conv-time">{{ formatTime(item.last_message_at) }}</span>
+              </div>
+              <div class="info-bottom">
+                <span class="conv-preview">{{ item.subgroup_subject || item.last_message_preview || 'No messages yet' }}</span>
+                <span
+                  *ngIf="item.has_mention"
+                  class="mention-badge"
+                  matTooltip="You were mentioned"
+                  matTooltipPosition="above"
+                >&#64;</span>
+                <span *ngIf="item.unread_count > 0" class="unread-badge">
+                  {{ item.unread_count > 99 ? '99+' : item.unread_count }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </ng-template>
+
+        <div *ngIf="showEmptyState" class="empty-state">
           <mat-icon>{{ activeTab === 'projects' ? 'workspaces' : activeTab === 'groups' ? 'group' : 'forum' }}</mat-icon>
           <p>{{ emptyStateText }}</p>
           <button *ngIf="!searchQuery && activeTab !== 'groups' && activeTab !== 'projects'" mat-stroked-button color="primary" (click)="onNewConversation()">
@@ -2984,7 +3186,7 @@ WHERE status = 'Open';</code></pre>
       </div>
       <div *ngIf="contextMenu" class="ctx-backdrop" (click)="closeContextMenu()"></div>
     </div>
-  `, isInline: true, styles: [".inbox-container{display:flex;flex-direction:column;height:100%;background:transparent;container-type:inline-size}.search-bar{display:flex;align-items:center;margin:8px 16px;padding:8px 12px;background:transparent;border-radius:10px}.search-icon{color:#ffffffb3;font-size:18px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#fff9}.inbox-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;padding:10px 16px 12px;border-top:1px solid rgba(255,255,255,.1);flex-shrink:0}.inbox-tab{min-width:0;border:1px solid rgba(255,255,255,.14);background:#ffffff0f;color:#ffffffb8;border-radius:999px;padding:6px 4px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s,border-color .15s,color .15s}.inbox-tab mat-icon{font-size:clamp(17px,6cqw,21px);width:clamp(17px,6cqw,21px);height:clamp(17px,6cqw,21px);line-height:clamp(17px,6cqw,21px)}.inbox-tab:hover{background:#ffffff1f;color:#fff}.inbox-tab.active{background:#1a5fa859;border-color:#7fb4ff73;color:#fff}@container (max-width: 330px){.inbox-tabs{gap:3px;padding:8px 8px 10px}.inbox-tab{padding:6px 2px;letter-spacing:-.2px}}@container (max-width: 280px){.inbox-tabs{gap:2px;padding-left:6px;padding-right:6px}.inbox-tab{font-size:8.5px}}.conversation-list{flex:1;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}.conversation-list::-webkit-scrollbar{display:none}.conversation-item{display:flex;align-items:center;padding:12px 16px;cursor:pointer;transition:background .15s;gap:12px}.conversation-item:hover{background:#ffffff1a}.conversation-item.has-unread{background:#ffffff26}.avatar{width:48px;height:48px;border-radius:50%;background:#0d2540;display:flex;align-items:center;justify-content:center;flex-shrink:0}.avatar mat-icon{color:#ffffffb3;font-size:24px}.group-avatar{background:#0a1f38}.group-avatar mat-icon{color:#ffffffb3}.project-avatar{background:#2563eb33}.project-avatar mat-icon{color:#bfdbfe}.conversation-info{flex:1;min-width:0}.info-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px}.conv-name{font-weight:600;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}.conv-time{font-size:11px;color:#ffffffb3;flex-shrink:0;margin-left:8px}.info-bottom{display:flex;justify-content:space-between;align-items:center;gap:6px}.conv-preview{font-size:13px;color:#ffffffb3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}.has-unread .conv-name{color:#fff}.has-unread .conv-preview{color:#ffffffe6;font-weight:500}.unread-badge{background:#1a5fa8;color:#fff;border-radius:10px;min-width:20px;height:20px;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;padding:0 6px;flex-shrink:0}.mention-badge{width:20px;height:20px;border-radius:999px;background:#7fb4ff33;border:1px solid rgba(127,180,255,.55);color:#bfdbfe;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0;margin-left:6px;box-shadow:0 0 0 2px #7fb4ff0f}.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;color:#9ca3af}.empty-state mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:12px}.empty-state p{margin:0 0 16px;font-size:14px}.settings-panel{padding:16px;color:#fff;display:flex;flex-direction:column;gap:12px}.settings-card{border-radius:14px;background:#ffffff12;border:1px solid rgba(255,255,255,.12);padding:16px;box-shadow:0 10px 28px #0000002e}.settings-header{display:flex;gap:12px;align-items:flex-start;margin-bottom:16px}.settings-icon{width:36px;height:36px;border-radius:10px;background:#1a5fa859;display:flex;align-items:center;justify-content:center;flex-shrink:0}.settings-icon mat-icon{color:#bfdbfe}.settings-icon.display-icon{background:#86efac24}.settings-icon.display-icon mat-icon{color:#bbf7d0}.settings-header h4{margin:0 0 4px;font-size:15px;font-weight:700}.settings-header p{margin:0;color:#ffffffa6;font-size:12px;line-height:1.4}.settings-toggle{width:100%;justify-content:center;border-radius:10px;color:#fff!important;border-color:#fff3!important;margin-bottom:16px}.settings-toggle mat-icon{margin-right:8px;font-size:18px;width:18px;height:18px}.volume-label{display:flex;justify-content:space-between;align-items:center;color:#ffffffc7;font-size:12px;font-weight:600;margin-bottom:8px}.settings-volume{width:100%;accent-color:#7fb4ff;cursor:pointer;margin-bottom:12px}.settings-preview{margin:0 0 16px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:#ffffff0f;color:#f5f7ff;box-sizing:border-box}.message-preview{padding:9px 11px;line-height:1.35}.code-preview{padding:10px 11px;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;line-height:1.45;white-space:pre-wrap;color:#dbeafe;background:#061827;margin-bottom:0}.context-menu{position:fixed;z-index:10001;background:#071d30;border-radius:8px;padding:4px 0;box-shadow:0 8px 24px #0000004d;min-width:200px}.ctx-item{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;color:#ffffffe6;font-size:13px;transition:background .15s}.ctx-item:hover{background:#ffffff1a}.ctx-item mat-icon{font-size:18px;width:18px;height:18px}.ctx-danger{color:#f87171}.ctx-danger:hover{background:#f8717126}.ctx-backdrop{position:fixed;inset:0;z-index:10000}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "pipe", type: i1$1.DecimalPipe, name: "number" }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.RangeValueAccessor, selector: "input[type=range][formControlName],input[type=range][formControl],input[type=range][ngModel]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6$1.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }] });
+  `, isInline: true, styles: [".inbox-container{display:flex;flex-direction:column;height:100%;background:transparent;container-type:inline-size}.search-bar{display:flex;align-items:center;margin:8px 16px;padding:8px 12px;background:transparent;border-radius:10px}.search-icon{color:#ffffffb3;font-size:18px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#fff9}.inbox-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;padding:10px 16px 12px;border-top:1px solid rgba(255,255,255,.1);flex-shrink:0}.inbox-tab{min-width:0;border:1px solid rgba(255,255,255,.14);background:#ffffff0f;color:#ffffffb8;border-radius:999px;padding:6px 4px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s,border-color .15s,color .15s}.inbox-tab mat-icon{font-size:clamp(17px,6cqw,21px);width:clamp(17px,6cqw,21px);height:clamp(17px,6cqw,21px);line-height:clamp(17px,6cqw,21px)}.inbox-tab:hover{background:#ffffff1f;color:#fff}.inbox-tab.active{background:#1a5fa859;border-color:#7fb4ff73;color:#fff}@container (max-width: 330px){.inbox-tabs{gap:3px;padding:8px 8px 10px}.inbox-tab{padding:6px 2px;letter-spacing:-.2px}}@container (max-width: 280px){.inbox-tabs{gap:2px;padding-left:6px;padding-right:6px}.inbox-tab{font-size:8.5px}}.conversation-list{flex:1;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}.conversation-list::-webkit-scrollbar{display:none}.conversation-item{display:flex;align-items:center;padding:12px 16px;cursor:pointer;transition:background .15s;gap:12px}.conversation-item:hover{background:#ffffff1a}.conversation-item.has-unread{background:#ffffff26}.avatar{width:48px;height:48px;border-radius:50%;background:#0d2540;display:flex;align-items:center;justify-content:center;flex-shrink:0}.avatar mat-icon{color:#ffffffb3;font-size:24px}.group-avatar{background:#0a1f38}.group-avatar mat-icon{color:#ffffffb3}.project-avatar{background:#2563eb33}.project-avatar mat-icon{color:#bfdbfe}.project-container{border-bottom:1px solid rgba(255,255,255,.06)}.project-header{display:flex;align-items:center;padding:12px 16px;cursor:pointer;gap:12px;transition:background .15s}.project-header:hover{background:#ffffff14}.subgroup-create{width:28px;height:28px;border:1px solid rgba(191,219,254,.35);border-radius:999px;background:#2563eb2e;color:#bfdbfe;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0}.subgroup-create mat-icon{font-size:18px;width:18px;height:18px}.expand-icon{color:#fff9;font-size:20px;width:20px;height:20px;flex-shrink:0}.subgroup-list{padding-bottom:6px}.subgroup-item{padding-left:32px;background:#ffffff06}.subgroup-avatar{width:38px;height:38px;background:#3b82f624}.subgroup-avatar mat-icon{color:#dbeafe;font-size:21px}.empty-subgroups{padding:8px 16px 12px 92px;color:#ffffff8c;font-size:12px}.conversation-info{flex:1;min-width:0}.info-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px}.conv-name{font-weight:600;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}.conv-time{font-size:11px;color:#ffffffb3;flex-shrink:0;margin-left:8px}.info-bottom{display:flex;justify-content:space-between;align-items:center;gap:6px}.conv-preview{font-size:13px;color:#ffffffb3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}.has-unread .conv-name{color:#fff}.has-unread .conv-preview{color:#ffffffe6;font-weight:500}.unread-badge{background:#1a5fa8;color:#fff;border-radius:10px;min-width:20px;height:20px;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;padding:0 6px;flex-shrink:0}.mention-badge{width:20px;height:20px;border-radius:999px;background:#7fb4ff33;border:1px solid rgba(127,180,255,.55);color:#bfdbfe;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0;margin-left:6px;box-shadow:0 0 0 2px #7fb4ff0f}.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;color:#9ca3af}.empty-state mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:12px}.empty-state p{margin:0 0 16px;font-size:14px}.settings-panel{padding:16px;color:#fff;display:flex;flex-direction:column;gap:12px}.settings-card{border-radius:14px;background:#ffffff12;border:1px solid rgba(255,255,255,.12);padding:16px;box-shadow:0 10px 28px #0000002e}.settings-header{display:flex;gap:12px;align-items:flex-start;margin-bottom:16px}.settings-icon{width:36px;height:36px;border-radius:10px;background:#1a5fa859;display:flex;align-items:center;justify-content:center;flex-shrink:0}.settings-icon mat-icon{color:#bfdbfe}.settings-icon.display-icon{background:#86efac24}.settings-icon.display-icon mat-icon{color:#bbf7d0}.settings-header h4{margin:0 0 4px;font-size:15px;font-weight:700}.settings-header p{margin:0;color:#ffffffa6;font-size:12px;line-height:1.4}.settings-toggle{width:100%;justify-content:center;border-radius:10px;color:#fff!important;border-color:#fff3!important;margin-bottom:16px}.settings-toggle mat-icon{margin-right:8px;font-size:18px;width:18px;height:18px}.volume-label{display:flex;justify-content:space-between;align-items:center;color:#ffffffc7;font-size:12px;font-weight:600;margin-bottom:8px}.settings-volume{width:100%;accent-color:#7fb4ff;cursor:pointer;margin-bottom:12px}.settings-preview{margin:0 0 16px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:#ffffff0f;color:#f5f7ff;box-sizing:border-box}.message-preview{padding:9px 11px;line-height:1.35}.code-preview{padding:10px 11px;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;line-height:1.45;white-space:pre-wrap;color:#dbeafe;background:#061827;margin-bottom:0}.context-menu{position:fixed;z-index:10001;background:#071d30;border-radius:8px;padding:4px 0;box-shadow:0 8px 24px #0000004d;min-width:200px}.ctx-item{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;color:#ffffffe6;font-size:13px;transition:background .15s}.ctx-item:hover{background:#ffffff1a}.ctx-item mat-icon{font-size:18px;width:18px;height:18px}.ctx-danger{color:#f87171}.ctx-danger:hover{background:#f8717126}.ctx-backdrop{position:fixed;inset:0;z-index:10000}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "pipe", type: i1$1.DecimalPipe, name: "number" }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.RangeValueAccessor, selector: "input[type=range][formControlName],input[type=range][formControl],input[type=range][ngModel]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6$1.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: InboxListComponent, decorators: [{
             type: Component,
@@ -3001,42 +3203,102 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
       </div>
 
       <div class="conversation-list">
-        <div
-          *ngFor="let item of filteredInbox"
-          class="conversation-item"
-          matRipple
-          [class.has-unread]="item.unread_count > 0"
-          (click)="openConversation(item)"
-          (contextmenu)="onContextMenu($event, item)"
-        >
-          <div
-            class="avatar"
-            [class.group-avatar]="item.is_group && !isProject(item)"
-            [class.project-avatar]="isProject(item)"
-          >
-            <mat-icon>{{ isProject(item) ? 'workspaces' : item.is_group ? 'group' : 'person' }}</mat-icon>
-          </div>
-          <div class="conversation-info">
-            <div class="info-top">
-              <span class="conv-name">{{ item.name || 'Direct Message' }}</span>
-              <span class="conv-time">{{ formatTime(item.last_message_at) }}</span>
+        <ng-container *ngIf="activeTab === 'projects' && projectGroupsEnabled; else standardConversationList">
+          <div *ngFor="let project of projectContainers" class="project-container">
+            <div class="project-header" (click)="toggleProject(project)">
+              <div class="avatar project-avatar">
+                <mat-icon>workspaces</mat-icon>
+              </div>
+              <div class="conversation-info">
+                <div class="info-top">
+                  <span class="conv-name">{{ project.name || 'Project Group' }}</span>
+                  <button
+                    type="button"
+                    class="subgroup-create"
+                    (click)="createSubgroup(project, $event)"
+                    matTooltip="Create subgroup"
+                    matTooltipPosition="above"
+                  >
+                    <mat-icon>add</mat-icon>
+                  </button>
+                </div>
+                <div class="info-bottom">
+                  <span class="conv-preview">{{ projectSubgroups(project).length }} subgroup{{ projectSubgroups(project).length === 1 ? '' : 's' }}</span>
+                  <mat-icon class="expand-icon">{{ isProjectExpanded(project) ? 'expand_less' : 'expand_more' }}</mat-icon>
+                </div>
+              </div>
             </div>
-            <div class="info-bottom">
-              <span class="conv-preview">{{ item.last_message_preview || 'No messages yet' }}</span>
-              <span
-                *ngIf="item.has_mention"
-                class="mention-badge"
-                matTooltip="You were mentioned"
-                matTooltipPosition="above"
-              >&#64;</span>
-              <span *ngIf="item.unread_count > 0" class="unread-badge">
-                {{ item.unread_count > 99 ? '99+' : item.unread_count }}
-              </span>
-            </div>
-          </div>
-        </div>
 
-        <div *ngIf="filteredInbox.length === 0 && activeTab !== 'settings'" class="empty-state">
+            <div *ngIf="isProjectExpanded(project)" class="subgroup-list">
+              <div
+                *ngFor="let item of projectSubgroups(project)"
+                class="conversation-item subgroup-item"
+                matRipple
+                [class.has-unread]="item.unread_count > 0"
+                (click)="openConversation(item)"
+                (contextmenu)="onContextMenu($event, item)"
+              >
+                <div class="avatar subgroup-avatar">
+                  <mat-icon>forum</mat-icon>
+                </div>
+                <div class="conversation-info">
+                  <div class="info-top">
+                    <span class="conv-name">{{ item.name || 'Subgroup' }}</span>
+                    <span class="conv-time">{{ formatTime(item.last_message_at) }}</span>
+                  </div>
+                  <div class="info-bottom">
+                    <span class="conv-preview">{{ item.subgroup_subject || item.last_message_preview || 'No messages yet' }}</span>
+                    <span *ngIf="item.unread_count > 0" class="unread-badge">
+                      {{ item.unread_count > 99 ? '99+' : item.unread_count }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div *ngIf="projectSubgroups(project).length === 0" class="empty-subgroups">
+                No subgroups yet
+              </div>
+            </div>
+          </div>
+        </ng-container>
+
+        <ng-template #standardConversationList>
+          <div
+            *ngFor="let item of filteredInbox"
+            class="conversation-item"
+            matRipple
+            [class.has-unread]="item.unread_count > 0"
+            (click)="openConversation(item)"
+            (contextmenu)="onContextMenu($event, item)"
+          >
+            <div
+              class="avatar"
+              [class.group-avatar]="item.is_group && !isProject(item)"
+              [class.project-avatar]="isProject(item)"
+            >
+              <mat-icon>{{ isProject(item) ? 'forum' : item.is_group ? 'group' : 'person' }}</mat-icon>
+            </div>
+            <div class="conversation-info">
+              <div class="info-top">
+                <span class="conv-name">{{ item.name || 'Direct Message' }}</span>
+                <span class="conv-time">{{ formatTime(item.last_message_at) }}</span>
+              </div>
+              <div class="info-bottom">
+                <span class="conv-preview">{{ item.subgroup_subject || item.last_message_preview || 'No messages yet' }}</span>
+                <span
+                  *ngIf="item.has_mention"
+                  class="mention-badge"
+                  matTooltip="You were mentioned"
+                  matTooltipPosition="above"
+                >&#64;</span>
+                <span *ngIf="item.unread_count > 0" class="unread-badge">
+                  {{ item.unread_count > 99 ? '99+' : item.unread_count }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </ng-template>
+
+        <div *ngIf="showEmptyState" class="empty-state">
           <mat-icon>{{ activeTab === 'projects' ? 'workspaces' : activeTab === 'groups' ? 'group' : 'forum' }}</mat-icon>
           <p>{{ emptyStateText }}</p>
           <button *ngIf="!searchQuery && activeTab !== 'groups' && activeTab !== 'projects'" mat-stroked-button color="primary" (click)="onNewConversation()">
@@ -3208,7 +3470,7 @@ WHERE status = 'Open';</code></pre>
       </div>
       <div *ngIf="contextMenu" class="ctx-backdrop" (click)="closeContextMenu()"></div>
     </div>
-  `, styles: [".inbox-container{display:flex;flex-direction:column;height:100%;background:transparent;container-type:inline-size}.search-bar{display:flex;align-items:center;margin:8px 16px;padding:8px 12px;background:transparent;border-radius:10px}.search-icon{color:#ffffffb3;font-size:18px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#fff9}.inbox-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;padding:10px 16px 12px;border-top:1px solid rgba(255,255,255,.1);flex-shrink:0}.inbox-tab{min-width:0;border:1px solid rgba(255,255,255,.14);background:#ffffff0f;color:#ffffffb8;border-radius:999px;padding:6px 4px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s,border-color .15s,color .15s}.inbox-tab mat-icon{font-size:clamp(17px,6cqw,21px);width:clamp(17px,6cqw,21px);height:clamp(17px,6cqw,21px);line-height:clamp(17px,6cqw,21px)}.inbox-tab:hover{background:#ffffff1f;color:#fff}.inbox-tab.active{background:#1a5fa859;border-color:#7fb4ff73;color:#fff}@container (max-width: 330px){.inbox-tabs{gap:3px;padding:8px 8px 10px}.inbox-tab{padding:6px 2px;letter-spacing:-.2px}}@container (max-width: 280px){.inbox-tabs{gap:2px;padding-left:6px;padding-right:6px}.inbox-tab{font-size:8.5px}}.conversation-list{flex:1;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}.conversation-list::-webkit-scrollbar{display:none}.conversation-item{display:flex;align-items:center;padding:12px 16px;cursor:pointer;transition:background .15s;gap:12px}.conversation-item:hover{background:#ffffff1a}.conversation-item.has-unread{background:#ffffff26}.avatar{width:48px;height:48px;border-radius:50%;background:#0d2540;display:flex;align-items:center;justify-content:center;flex-shrink:0}.avatar mat-icon{color:#ffffffb3;font-size:24px}.group-avatar{background:#0a1f38}.group-avatar mat-icon{color:#ffffffb3}.project-avatar{background:#2563eb33}.project-avatar mat-icon{color:#bfdbfe}.conversation-info{flex:1;min-width:0}.info-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px}.conv-name{font-weight:600;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}.conv-time{font-size:11px;color:#ffffffb3;flex-shrink:0;margin-left:8px}.info-bottom{display:flex;justify-content:space-between;align-items:center;gap:6px}.conv-preview{font-size:13px;color:#ffffffb3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}.has-unread .conv-name{color:#fff}.has-unread .conv-preview{color:#ffffffe6;font-weight:500}.unread-badge{background:#1a5fa8;color:#fff;border-radius:10px;min-width:20px;height:20px;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;padding:0 6px;flex-shrink:0}.mention-badge{width:20px;height:20px;border-radius:999px;background:#7fb4ff33;border:1px solid rgba(127,180,255,.55);color:#bfdbfe;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0;margin-left:6px;box-shadow:0 0 0 2px #7fb4ff0f}.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;color:#9ca3af}.empty-state mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:12px}.empty-state p{margin:0 0 16px;font-size:14px}.settings-panel{padding:16px;color:#fff;display:flex;flex-direction:column;gap:12px}.settings-card{border-radius:14px;background:#ffffff12;border:1px solid rgba(255,255,255,.12);padding:16px;box-shadow:0 10px 28px #0000002e}.settings-header{display:flex;gap:12px;align-items:flex-start;margin-bottom:16px}.settings-icon{width:36px;height:36px;border-radius:10px;background:#1a5fa859;display:flex;align-items:center;justify-content:center;flex-shrink:0}.settings-icon mat-icon{color:#bfdbfe}.settings-icon.display-icon{background:#86efac24}.settings-icon.display-icon mat-icon{color:#bbf7d0}.settings-header h4{margin:0 0 4px;font-size:15px;font-weight:700}.settings-header p{margin:0;color:#ffffffa6;font-size:12px;line-height:1.4}.settings-toggle{width:100%;justify-content:center;border-radius:10px;color:#fff!important;border-color:#fff3!important;margin-bottom:16px}.settings-toggle mat-icon{margin-right:8px;font-size:18px;width:18px;height:18px}.volume-label{display:flex;justify-content:space-between;align-items:center;color:#ffffffc7;font-size:12px;font-weight:600;margin-bottom:8px}.settings-volume{width:100%;accent-color:#7fb4ff;cursor:pointer;margin-bottom:12px}.settings-preview{margin:0 0 16px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:#ffffff0f;color:#f5f7ff;box-sizing:border-box}.message-preview{padding:9px 11px;line-height:1.35}.code-preview{padding:10px 11px;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;line-height:1.45;white-space:pre-wrap;color:#dbeafe;background:#061827;margin-bottom:0}.context-menu{position:fixed;z-index:10001;background:#071d30;border-radius:8px;padding:4px 0;box-shadow:0 8px 24px #0000004d;min-width:200px}.ctx-item{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;color:#ffffffe6;font-size:13px;transition:background .15s}.ctx-item:hover{background:#ffffff1a}.ctx-item mat-icon{font-size:18px;width:18px;height:18px}.ctx-danger{color:#f87171}.ctx-danger:hover{background:#f8717126}.ctx-backdrop{position:fixed;inset:0;z-index:10000}\n"] }]
+  `, styles: [".inbox-container{display:flex;flex-direction:column;height:100%;background:transparent;container-type:inline-size}.search-bar{display:flex;align-items:center;margin:8px 16px;padding:8px 12px;background:transparent;border-radius:10px}.search-icon{color:#ffffffb3;font-size:18px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#fff9}.inbox-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;padding:10px 16px 12px;border-top:1px solid rgba(255,255,255,.1);flex-shrink:0}.inbox-tab{min-width:0;border:1px solid rgba(255,255,255,.14);background:#ffffff0f;color:#ffffffb8;border-radius:999px;padding:6px 4px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s,border-color .15s,color .15s}.inbox-tab mat-icon{font-size:clamp(17px,6cqw,21px);width:clamp(17px,6cqw,21px);height:clamp(17px,6cqw,21px);line-height:clamp(17px,6cqw,21px)}.inbox-tab:hover{background:#ffffff1f;color:#fff}.inbox-tab.active{background:#1a5fa859;border-color:#7fb4ff73;color:#fff}@container (max-width: 330px){.inbox-tabs{gap:3px;padding:8px 8px 10px}.inbox-tab{padding:6px 2px;letter-spacing:-.2px}}@container (max-width: 280px){.inbox-tabs{gap:2px;padding-left:6px;padding-right:6px}.inbox-tab{font-size:8.5px}}.conversation-list{flex:1;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}.conversation-list::-webkit-scrollbar{display:none}.conversation-item{display:flex;align-items:center;padding:12px 16px;cursor:pointer;transition:background .15s;gap:12px}.conversation-item:hover{background:#ffffff1a}.conversation-item.has-unread{background:#ffffff26}.avatar{width:48px;height:48px;border-radius:50%;background:#0d2540;display:flex;align-items:center;justify-content:center;flex-shrink:0}.avatar mat-icon{color:#ffffffb3;font-size:24px}.group-avatar{background:#0a1f38}.group-avatar mat-icon{color:#ffffffb3}.project-avatar{background:#2563eb33}.project-avatar mat-icon{color:#bfdbfe}.project-container{border-bottom:1px solid rgba(255,255,255,.06)}.project-header{display:flex;align-items:center;padding:12px 16px;cursor:pointer;gap:12px;transition:background .15s}.project-header:hover{background:#ffffff14}.subgroup-create{width:28px;height:28px;border:1px solid rgba(191,219,254,.35);border-radius:999px;background:#2563eb2e;color:#bfdbfe;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0}.subgroup-create mat-icon{font-size:18px;width:18px;height:18px}.expand-icon{color:#fff9;font-size:20px;width:20px;height:20px;flex-shrink:0}.subgroup-list{padding-bottom:6px}.subgroup-item{padding-left:32px;background:#ffffff06}.subgroup-avatar{width:38px;height:38px;background:#3b82f624}.subgroup-avatar mat-icon{color:#dbeafe;font-size:21px}.empty-subgroups{padding:8px 16px 12px 92px;color:#ffffff8c;font-size:12px}.conversation-info{flex:1;min-width:0}.info-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px}.conv-name{font-weight:600;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}.conv-time{font-size:11px;color:#ffffffb3;flex-shrink:0;margin-left:8px}.info-bottom{display:flex;justify-content:space-between;align-items:center;gap:6px}.conv-preview{font-size:13px;color:#ffffffb3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}.has-unread .conv-name{color:#fff}.has-unread .conv-preview{color:#ffffffe6;font-weight:500}.unread-badge{background:#1a5fa8;color:#fff;border-radius:10px;min-width:20px;height:20px;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;padding:0 6px;flex-shrink:0}.mention-badge{width:20px;height:20px;border-radius:999px;background:#7fb4ff33;border:1px solid rgba(127,180,255,.55);color:#bfdbfe;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0;margin-left:6px;box-shadow:0 0 0 2px #7fb4ff0f}.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;color:#9ca3af}.empty-state mat-icon{font-size:48px;width:48px;height:48px;margin-bottom:12px}.empty-state p{margin:0 0 16px;font-size:14px}.settings-panel{padding:16px;color:#fff;display:flex;flex-direction:column;gap:12px}.settings-card{border-radius:14px;background:#ffffff12;border:1px solid rgba(255,255,255,.12);padding:16px;box-shadow:0 10px 28px #0000002e}.settings-header{display:flex;gap:12px;align-items:flex-start;margin-bottom:16px}.settings-icon{width:36px;height:36px;border-radius:10px;background:#1a5fa859;display:flex;align-items:center;justify-content:center;flex-shrink:0}.settings-icon mat-icon{color:#bfdbfe}.settings-icon.display-icon{background:#86efac24}.settings-icon.display-icon mat-icon{color:#bbf7d0}.settings-header h4{margin:0 0 4px;font-size:15px;font-weight:700}.settings-header p{margin:0;color:#ffffffa6;font-size:12px;line-height:1.4}.settings-toggle{width:100%;justify-content:center;border-radius:10px;color:#fff!important;border-color:#fff3!important;margin-bottom:16px}.settings-toggle mat-icon{margin-right:8px;font-size:18px;width:18px;height:18px}.volume-label{display:flex;justify-content:space-between;align-items:center;color:#ffffffc7;font-size:12px;font-weight:600;margin-bottom:8px}.settings-volume{width:100%;accent-color:#7fb4ff;cursor:pointer;margin-bottom:12px}.settings-preview{margin:0 0 16px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:#ffffff0f;color:#f5f7ff;box-sizing:border-box}.message-preview{padding:9px 11px;line-height:1.35}.code-preview{padding:10px 11px;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,monospace;line-height:1.45;white-space:pre-wrap;color:#dbeafe;background:#061827;margin-bottom:0}.context-menu{position:fixed;z-index:10001;background:#071d30;border-radius:8px;padding:4px 0;box-shadow:0 8px 24px #0000004d;min-width:200px}.ctx-item{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;color:#ffffffe6;font-size:13px;transition:background .15s}.ctx-item:hover{background:#ffffff1a}.ctx-item mat-icon{font-size:18px;width:18px;height:18px}.ctx-danger{color:#f87171}.ctx-danger:hover{background:#f8717126}.ctx-backdrop{position:fixed;inset:0;z-index:10000}\n"] }]
         }], ctorParameters: () => [{ type: MessagingStoreService }] });
 
 class MessageInputComponent {
@@ -3816,8 +4078,11 @@ class ChatThreadComponent {
     conversationName = '';
     isGroup = false;
     isProject = false;
+    isProjectSubgroup = false;
     projectDbGid;
     projectGid;
+    parentConversationId;
+    subgroupSubject;
     isRemovedFromGroup = false;
     messageTextScale = 1;
     codeTextScale = 1;
@@ -3892,8 +4157,11 @@ class ChatThreadComponent {
                 this.conversationName = chat?.name || 'Chat';
                 this.isGroup = chat?.isGroup || false;
                 this.isProject = chat?.isProject || false;
+                this.isProjectSubgroup = chat?.isProjectSubgroup || false;
                 this.projectDbGid = chat?.dbGid;
                 this.projectGid = chat?.projectGid;
+                this.parentConversationId = chat?.parentConversationId;
+                this.subgroupSubject = chat?.subgroupSubject;
                 this.refreshMentionOptions(true);
             }
             if (this.conversationId) {
@@ -3936,7 +4204,7 @@ class ChatThreadComponent {
         if (this.isRemovedFromGroup)
             return;
         if (this.conversationId) {
-            this.store.openGroupSettings(this.conversationId, this.conversationName, this.isProject, this.projectDbGid, this.projectGid);
+            this.store.openGroupSettings(this.conversationId, this.conversationName, this.isProject, this.isProjectSubgroup, this.projectDbGid, this.projectGid, this.parentConversationId, this.subgroupSubject);
         }
     }
     startReply(message, event) {
@@ -6019,8 +6287,13 @@ class GroupManagerComponent {
     searchQuery = '';
     isEditMode = false;
     isProjectGroup = false;
+    isProjectSubgroup = false;
+    isProjectSubgroupCreate = false;
     projectDbGid;
     projectGid;
+    parentConversationId;
+    subgroupSubject = '';
+    originalSubgroupSubject = '';
     editingConversationId = null;
     creatorContactId = null;
     loadingMembers = false;
@@ -6042,26 +6315,39 @@ class GroupManagerComponent {
         }));
         this.subs.push(this.store.groupSettings.subscribe((settings) => {
             if (settings) {
-                this.isEditMode = true;
-                this.editingConversationId = settings.conversationId;
+                this.isProjectSubgroupCreate = !!settings.isProjectSubgroupCreate;
+                this.isEditMode = !this.isProjectSubgroupCreate;
+                this.editingConversationId = this.isProjectSubgroupCreate ? null : settings.conversationId;
                 this.groupName = settings.name;
                 this.originalGroupName = settings.name;
                 this.isProjectGroup = !!settings.isProject;
+                this.isProjectSubgroup = !!settings.isProjectSubgroup;
                 this.projectDbGid = settings.dbGid;
                 this.projectGid = settings.projectGid;
+                this.parentConversationId = settings.parentConversationId || settings.conversationId;
+                this.subgroupSubject = settings.subject || '';
+                this.originalSubgroupSubject = settings.subject || '';
                 this.selectedContacts = [];
+                this.currentMembers = [];
                 this.showDeleteConfirm = false;
-                this.loadCurrentMembers(settings.conversationId);
+                if (this.isEditMode) {
+                    this.loadCurrentMembers(settings.conversationId);
+                }
                 this.loadProjectEligibleContacts();
             }
             else {
                 this.isEditMode = false;
                 this.isProjectGroup = false;
+                this.isProjectSubgroup = false;
+                this.isProjectSubgroupCreate = false;
                 this.projectDbGid = undefined;
                 this.projectGid = undefined;
+                this.parentConversationId = undefined;
                 this.editingConversationId = null;
                 this.groupName = '';
                 this.originalGroupName = '';
+                this.subgroupSubject = '';
+                this.originalSubgroupSubject = '';
                 this.selectedContacts = [];
                 this.currentMembers = [];
                 this.showDeleteConfirm = false;
@@ -6132,8 +6418,24 @@ class GroupManagerComponent {
     get canManageMembers() {
         return !this.isEditMode || this.currentUserIsAdmin;
     }
+    get isProjectNameLocked() {
+        return this.isProjectGroup && !this.isProjectSubgroup;
+    }
+    get pageTitle() {
+        if (this.isProjectSubgroupCreate)
+            return 'Create Subgroup';
+        if (this.isProjectSubgroup)
+            return 'Subgroup Settings';
+        return this.isEditMode ? 'Group Settings' : 'Create Group';
+    }
+    get createButtonLabel() {
+        const count = this.selectedContacts.length + 1;
+        return this.isProjectSubgroup
+            ? `Create Subgroup (${count} member${count === 1 ? '' : 's'})`
+            : `Create Group (${count} members)`;
+    }
     get canRenameGroup() {
-        return this.isEditMode && this.currentUserIsAdmin && !this.isProjectGroup;
+        return this.isEditMode && this.currentUserIsAdmin && !this.isProjectNameLocked;
     }
     canRemoveMember(member) {
         return this.canManageMembers && String(member.contact_id) !== String(this.creatorContactId);
@@ -6147,9 +6449,10 @@ class GroupManagerComponent {
             if (!this.canManageMembers)
                 return false;
             const renamed = this.canRenameGroup && this.groupName.trim() !== this.originalGroupName;
-            return renamed || this.selectedContacts.length > 0;
+            const subjectChanged = this.isProjectSubgroup && this.subgroupSubject.trim() !== this.originalSubgroupSubject;
+            return renamed || subjectChanged || this.selectedContacts.length > 0;
         }
-        return this.selectedContacts.length >= 1;
+        return this.isProjectSubgroup || this.selectedContacts.length >= 1;
     }
     isSelected(contact) {
         return this.selectedContacts.some((c) => c.contact_id === contact.contact_id);
@@ -6195,7 +6498,12 @@ class GroupManagerComponent {
         if (!this.canSubmit)
             return;
         if (this.isEditMode && this.editingConversationId) {
-            if (this.canRenameGroup && this.groupName.trim() !== this.originalGroupName) {
+            const renamed = this.canRenameGroup && this.groupName.trim() !== this.originalGroupName;
+            const subjectChanged = this.isProjectSubgroup && this.subgroupSubject.trim() !== this.originalSubgroupSubject;
+            if (this.isProjectSubgroup && (renamed || subjectChanged)) {
+                this.store.updateProjectSubgroup(this.editingConversationId, this.groupName.trim(), this.subgroupSubject.trim() || null);
+            }
+            else if (renamed) {
                 this.store.manageGroup('rename', this.editingConversationId, this.groupName.trim());
             }
             if (this.canManageMembers && this.selectedContacts.length > 0) {
@@ -6208,6 +6516,14 @@ class GroupManagerComponent {
         else {
             this.creatingGroup = true;
             const ids = this.selectedContacts.map((c) => c.contact_id);
+            if (this.isProjectSubgroup && this.parentConversationId) {
+                this.store.createProjectSubgroup(this.parentConversationId, this.groupName.trim(), this.subgroupSubject.trim() || null, ids, {
+                    error: () => {
+                        this.creatingGroup = false;
+                    },
+                });
+                return;
+            }
             this.store.createGroupConversation(ids, this.groupName.trim(), {
                 error: () => {
                     this.creatingGroup = false;
@@ -6241,6 +6557,10 @@ class GroupManagerComponent {
             this.store.clearGroupSettings();
             this.store.setView('chat');
         }
+        else if (this.isProjectSubgroupCreate) {
+            this.store.clearGroupSettings();
+            this.store.setView('inbox');
+        }
         else {
             this.store.setView('inbox');
         }
@@ -6252,21 +6572,33 @@ class GroupManagerComponent {
         <button mat-icon-button class="hdr-btn" (click)="goBack()" matTooltip="Back" matTooltipPosition="below">
           <mat-icon>arrow_back</mat-icon>
         </button>
-        <h3>{{ isEditMode ? 'Group Settings' : 'Create Group' }}</h3>
+        <h3>{{ pageTitle }}</h3>
       </div>
 
       <div class="scrollable">
         <div class="form-section">
-          <label class="field-label">Group Name</label>
+          <label class="field-label">{{ isProjectSubgroup ? 'Subgroup Name' : 'Group Name' }}</label>
           <input
             type="text"
             [(ngModel)]="groupName"
-            placeholder="Enter group name..."
+            [placeholder]="isProjectSubgroup ? 'Enter subgroup name...' : 'Enter group name...'"
             class="text-field"
-            [readonly]="isProjectGroup || (isEditMode && !canManageMembers)"
-            [class.readonly]="isProjectGroup || (isEditMode && !canManageMembers)"
+            [readonly]="isProjectNameLocked || (isEditMode && !canManageMembers)"
+            [class.readonly]="isProjectNameLocked || (isEditMode && !canManageMembers)"
           />
-          <div *ngIf="isProjectGroup" class="field-note">Project group names are locked to the GIS project name.</div>
+          <div *ngIf="isProjectNameLocked" class="field-note">Project group names are locked to the GIS project name.</div>
+        </div>
+
+        <div *ngIf="isProjectSubgroup" class="form-section">
+          <label class="field-label">Subject</label>
+          <textarea
+            [(ngModel)]="subgroupSubject"
+            placeholder="Optional subgroup subject..."
+            class="text-field subject-field"
+            [readonly]="isEditMode && !canManageMembers"
+            [class.readonly]="isEditMode && !canManageMembers"
+            rows="3"
+          ></textarea>
         </div>
 
         <ng-container *ngIf="isEditMode">
@@ -6322,7 +6654,7 @@ class GroupManagerComponent {
 
         <ng-container *ngIf="!isEditMode">
           <div class="form-section section-gap">
-            <label class="field-label">Add Members (min 1 other person)</label>
+            <label class="field-label">{{ isProjectSubgroup ? 'Add Members (optional)' : 'Add Members (min 1 other person)' }}</label>
             <div class="search-bar">
               <mat-icon class="search-icon">search</mat-icon>
               <input type="text" [(ngModel)]="searchQuery" placeholder="Search contacts..." class="search-input" />
@@ -6368,8 +6700,8 @@ class GroupManagerComponent {
           class="create-btn"
         >
           <mat-icon>{{ isEditMode ? 'save' : 'group_add' }}</mat-icon>
-          <ng-container *ngIf="!isEditMode && !creatingGroup">Create Group ({{ selectedContacts.length + 1 }} members)</ng-container>
-          <ng-container *ngIf="!isEditMode && creatingGroup">Creating group...</ng-container>
+          <ng-container *ngIf="!isEditMode && !creatingGroup">{{ createButtonLabel }}</ng-container>
+          <ng-container *ngIf="!isEditMode && creatingGroup">{{ isProjectSubgroup ? 'Creating subgroup...' : 'Creating group...' }}</ng-container>
           <ng-container *ngIf="isEditMode">Save Changes</ng-container>
         </button>
         <button
@@ -6405,7 +6737,7 @@ class GroupManagerComponent {
         </div>
       </div>
     </div>
-  `, isInline: true, styles: [".group-manager{display:flex;flex-direction:column;height:100%;position:relative}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.scrollable{flex:1;overflow-y:auto}.form-section{padding:12px 16px 0}.section-gap{padding-top:16px}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.text-field.readonly{cursor:not-allowed;color:#ffffffbf;background:#ffffff0f;border-color:#ffffff29}.field-note{margin-top:6px;font-size:12px;color:#ffffff8c}.loading-row{display:flex;align-items:center;gap:8px;color:#fff9;font-size:13px;padding:8px 0}.members-list{border-radius:8px;overflow:hidden}.member-row{display:flex;align-items:center;padding:8px 12px;gap:10px;background:#ffffff12;border-bottom:1px solid rgba(255,255,255,.06)}.member-row:last-child{border-bottom:none}.member-avatar{width:30px;height:30px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.member-avatar mat-icon{color:#fff;font-size:18px}.member-info{display:flex;flex-direction:column;flex:1;min-width:0}.member-name{font-size:13px;font-weight:500;color:#fff}.admin-badge{display:inline-flex;align-items:center;margin-left:6px;padding:1px 6px;border-radius:999px;color:#bfdbfe;background:#2563eb38;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.member-sub{font-size:11px;color:#ffffff80}.remove-member-btn{color:#fff9!important}.admin-member-btn{color:#93c5fdf2!important}.remove-member-btn:hover{color:#f87171!important;background:#f871711a!important}.empty-members{font-size:13px;color:#ffffff80;padding:8px 0}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px;flex-shrink:0}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}.confirm-overlay{position:absolute;inset:0;z-index:10;display:flex;align-items:flex-end;padding:16px;background:#0413229e;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);box-sizing:border-box}.confirm-card{width:100%;padding:16px;border-radius:14px;background:#0c1f35;border:1px solid rgba(255,255,255,.14);box-shadow:0 16px 40px #00000073;color:#fff}.confirm-icon{width:36px;height:36px;border-radius:50%;background:#f8717124;display:flex;align-items:center;justify-content:center;margin-bottom:10px}.confirm-icon mat-icon{color:#f87171}.confirm-copy h4{margin:0 0 6px;font-size:16px;font-weight:700}.confirm-copy p{margin:0;color:#ffffffb3;font-size:13px;line-height:1.4}.confirm-actions{display:flex;gap:8px;margin-top:16px}.confirm-cancel,.confirm-delete{flex:1;border-radius:10px;font-weight:600}.confirm-cancel{color:#fff!important;border-color:#ffffff40!important}.confirm-delete{background:#dc2626e6!important;color:#fff!important}.confirm-delete mat-icon{margin-right:6px;font-size:18px;width:18px;height:18px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6$1.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i9.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }] });
+  `, isInline: true, styles: [".group-manager{display:flex;flex-direction:column;height:100%;position:relative}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.scrollable{flex:1;overflow-y:auto}.form-section{padding:12px 16px 0}.section-gap{padding-top:16px}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.subject-field{min-height:74px;resize:vertical;font-family:inherit;line-height:1.4}.text-field.readonly{cursor:not-allowed;color:#ffffffbf;background:#ffffff0f;border-color:#ffffff29}.field-note{margin-top:6px;font-size:12px;color:#ffffff8c}.loading-row{display:flex;align-items:center;gap:8px;color:#fff9;font-size:13px;padding:8px 0}.members-list{border-radius:8px;overflow:hidden}.member-row{display:flex;align-items:center;padding:8px 12px;gap:10px;background:#ffffff12;border-bottom:1px solid rgba(255,255,255,.06)}.member-row:last-child{border-bottom:none}.member-avatar{width:30px;height:30px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.member-avatar mat-icon{color:#fff;font-size:18px}.member-info{display:flex;flex-direction:column;flex:1;min-width:0}.member-name{font-size:13px;font-weight:500;color:#fff}.admin-badge{display:inline-flex;align-items:center;margin-left:6px;padding:1px 6px;border-radius:999px;color:#bfdbfe;background:#2563eb38;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.member-sub{font-size:11px;color:#ffffff80}.remove-member-btn{color:#fff9!important}.admin-member-btn{color:#93c5fdf2!important}.remove-member-btn:hover{color:#f87171!important;background:#f871711a!important}.empty-members{font-size:13px;color:#ffffff80;padding:8px 0}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px;flex-shrink:0}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}.confirm-overlay{position:absolute;inset:0;z-index:10;display:flex;align-items:flex-end;padding:16px;background:#0413229e;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);box-sizing:border-box}.confirm-card{width:100%;padding:16px;border-radius:14px;background:#0c1f35;border:1px solid rgba(255,255,255,.14);box-shadow:0 16px 40px #00000073;color:#fff}.confirm-icon{width:36px;height:36px;border-radius:50%;background:#f8717124;display:flex;align-items:center;justify-content:center;margin-bottom:10px}.confirm-icon mat-icon{color:#f87171}.confirm-copy h4{margin:0 0 6px;font-size:16px;font-weight:700}.confirm-copy p{margin:0;color:#ffffffb3;font-size:13px;line-height:1.4}.confirm-actions{display:flex;gap:8px;margin-top:16px}.confirm-cancel,.confirm-delete{flex:1;border-radius:10px;font-weight:600}.confirm-cancel{color:#fff!important;border-color:#ffffff40!important}.confirm-delete{background:#dc2626e6!important;color:#fff!important}.confirm-delete mat-icon{margin-right:6px;font-size:18px;width:18px;height:18px}\n"], dependencies: [{ kind: "ngmodule", type: CommonModule }, { kind: "directive", type: i1$1.NgForOf, selector: "[ngFor][ngForOf]", inputs: ["ngForOf", "ngForTrackBy", "ngForTemplate"] }, { kind: "directive", type: i1$1.NgIf, selector: "[ngIf]", inputs: ["ngIf", "ngIfThen", "ngIfElse"] }, { kind: "ngmodule", type: FormsModule }, { kind: "directive", type: i3.DefaultValueAccessor, selector: "input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]" }, { kind: "directive", type: i3.NgControlStatus, selector: "[formControlName],[ngModel],[formControl]" }, { kind: "directive", type: i3.NgModel, selector: "[ngModel]:not([formControlName]):not([formControl])", inputs: ["name", "disabled", "ngModel", "ngModelOptions"], outputs: ["ngModelChange"], exportAs: ["ngModel"] }, { kind: "ngmodule", type: MatIconModule }, { kind: "component", type: i4.MatIcon, selector: "mat-icon", inputs: ["color", "inline", "svgIcon", "fontSet", "fontIcon"], exportAs: ["matIcon"] }, { kind: "ngmodule", type: MatButtonModule }, { kind: "component", type: i6.MatButton, selector: "    button[mat-button], button[mat-raised-button], button[mat-flat-button],    button[mat-stroked-button]  ", exportAs: ["matButton"] }, { kind: "component", type: i6.MatIconButton, selector: "button[mat-icon-button]", exportAs: ["matButton"] }, { kind: "ngmodule", type: MatRippleModule }, { kind: "directive", type: i6$1.MatRipple, selector: "[mat-ripple], [matRipple]", inputs: ["matRippleColor", "matRippleUnbounded", "matRippleCentered", "matRippleRadius", "matRippleAnimation", "matRippleDisabled", "matRippleTrigger"], exportAs: ["matRipple"] }, { kind: "ngmodule", type: MatTooltipModule }, { kind: "directive", type: i7.MatTooltip, selector: "[matTooltip]", inputs: ["matTooltipPosition", "matTooltipPositionAtOrigin", "matTooltipDisabled", "matTooltipShowDelay", "matTooltipHideDelay", "matTooltipTouchGestures", "matTooltip", "matTooltipClass"], exportAs: ["matTooltip"] }, { kind: "ngmodule", type: MatProgressSpinnerModule }, { kind: "component", type: i9.MatProgressSpinner, selector: "mat-progress-spinner, mat-spinner", inputs: ["color", "mode", "value", "diameter", "strokeWidth"], exportAs: ["matProgressSpinner"] }] });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: GroupManagerComponent, decorators: [{
             type: Component,
@@ -6415,21 +6747,33 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
         <button mat-icon-button class="hdr-btn" (click)="goBack()" matTooltip="Back" matTooltipPosition="below">
           <mat-icon>arrow_back</mat-icon>
         </button>
-        <h3>{{ isEditMode ? 'Group Settings' : 'Create Group' }}</h3>
+        <h3>{{ pageTitle }}</h3>
       </div>
 
       <div class="scrollable">
         <div class="form-section">
-          <label class="field-label">Group Name</label>
+          <label class="field-label">{{ isProjectSubgroup ? 'Subgroup Name' : 'Group Name' }}</label>
           <input
             type="text"
             [(ngModel)]="groupName"
-            placeholder="Enter group name..."
+            [placeholder]="isProjectSubgroup ? 'Enter subgroup name...' : 'Enter group name...'"
             class="text-field"
-            [readonly]="isProjectGroup || (isEditMode && !canManageMembers)"
-            [class.readonly]="isProjectGroup || (isEditMode && !canManageMembers)"
+            [readonly]="isProjectNameLocked || (isEditMode && !canManageMembers)"
+            [class.readonly]="isProjectNameLocked || (isEditMode && !canManageMembers)"
           />
-          <div *ngIf="isProjectGroup" class="field-note">Project group names are locked to the GIS project name.</div>
+          <div *ngIf="isProjectNameLocked" class="field-note">Project group names are locked to the GIS project name.</div>
+        </div>
+
+        <div *ngIf="isProjectSubgroup" class="form-section">
+          <label class="field-label">Subject</label>
+          <textarea
+            [(ngModel)]="subgroupSubject"
+            placeholder="Optional subgroup subject..."
+            class="text-field subject-field"
+            [readonly]="isEditMode && !canManageMembers"
+            [class.readonly]="isEditMode && !canManageMembers"
+            rows="3"
+          ></textarea>
         </div>
 
         <ng-container *ngIf="isEditMode">
@@ -6485,7 +6829,7 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
 
         <ng-container *ngIf="!isEditMode">
           <div class="form-section section-gap">
-            <label class="field-label">Add Members (min 1 other person)</label>
+            <label class="field-label">{{ isProjectSubgroup ? 'Add Members (optional)' : 'Add Members (min 1 other person)' }}</label>
             <div class="search-bar">
               <mat-icon class="search-icon">search</mat-icon>
               <input type="text" [(ngModel)]="searchQuery" placeholder="Search contacts..." class="search-input" />
@@ -6531,8 +6875,8 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
           class="create-btn"
         >
           <mat-icon>{{ isEditMode ? 'save' : 'group_add' }}</mat-icon>
-          <ng-container *ngIf="!isEditMode && !creatingGroup">Create Group ({{ selectedContacts.length + 1 }} members)</ng-container>
-          <ng-container *ngIf="!isEditMode && creatingGroup">Creating group...</ng-container>
+          <ng-container *ngIf="!isEditMode && !creatingGroup">{{ createButtonLabel }}</ng-container>
+          <ng-container *ngIf="!isEditMode && creatingGroup">{{ isProjectSubgroup ? 'Creating subgroup...' : 'Creating group...' }}</ng-container>
           <ng-container *ngIf="isEditMode">Save Changes</ng-container>
         </button>
         <button
@@ -6568,7 +6912,7 @@ i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImpo
         </div>
       </div>
     </div>
-  `, styles: [".group-manager{display:flex;flex-direction:column;height:100%;position:relative}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.scrollable{flex:1;overflow-y:auto}.form-section{padding:12px 16px 0}.section-gap{padding-top:16px}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.text-field.readonly{cursor:not-allowed;color:#ffffffbf;background:#ffffff0f;border-color:#ffffff29}.field-note{margin-top:6px;font-size:12px;color:#ffffff8c}.loading-row{display:flex;align-items:center;gap:8px;color:#fff9;font-size:13px;padding:8px 0}.members-list{border-radius:8px;overflow:hidden}.member-row{display:flex;align-items:center;padding:8px 12px;gap:10px;background:#ffffff12;border-bottom:1px solid rgba(255,255,255,.06)}.member-row:last-child{border-bottom:none}.member-avatar{width:30px;height:30px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.member-avatar mat-icon{color:#fff;font-size:18px}.member-info{display:flex;flex-direction:column;flex:1;min-width:0}.member-name{font-size:13px;font-weight:500;color:#fff}.admin-badge{display:inline-flex;align-items:center;margin-left:6px;padding:1px 6px;border-radius:999px;color:#bfdbfe;background:#2563eb38;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.member-sub{font-size:11px;color:#ffffff80}.remove-member-btn{color:#fff9!important}.admin-member-btn{color:#93c5fdf2!important}.remove-member-btn:hover{color:#f87171!important;background:#f871711a!important}.empty-members{font-size:13px;color:#ffffff80;padding:8px 0}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px;flex-shrink:0}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}.confirm-overlay{position:absolute;inset:0;z-index:10;display:flex;align-items:flex-end;padding:16px;background:#0413229e;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);box-sizing:border-box}.confirm-card{width:100%;padding:16px;border-radius:14px;background:#0c1f35;border:1px solid rgba(255,255,255,.14);box-shadow:0 16px 40px #00000073;color:#fff}.confirm-icon{width:36px;height:36px;border-radius:50%;background:#f8717124;display:flex;align-items:center;justify-content:center;margin-bottom:10px}.confirm-icon mat-icon{color:#f87171}.confirm-copy h4{margin:0 0 6px;font-size:16px;font-weight:700}.confirm-copy p{margin:0;color:#ffffffb3;font-size:13px;line-height:1.4}.confirm-actions{display:flex;gap:8px;margin-top:16px}.confirm-cancel,.confirm-delete{flex:1;border-radius:10px;font-weight:600}.confirm-cancel{color:#fff!important;border-color:#ffffff40!important}.confirm-delete{background:#dc2626e6!important;color:#fff!important}.confirm-delete mat-icon{margin-right:6px;font-size:18px;width:18px;height:18px}\n"] }]
+  `, styles: [".group-manager{display:flex;flex-direction:column;height:100%;position:relative}.header{display:flex;align-items:center;padding:12px 8px 12px 4px;border-bottom:1px solid rgba(255,255,255,.15);gap:4px;flex-shrink:0}.header h3{margin:0;font-size:18px;font-weight:600;color:#fff}.hdr-btn{border-radius:6px!important;transition:background .15s,box-shadow .15s}.hdr-btn:hover{background:#ffffff26!important;box-shadow:0 2px 8px #0003}.hdr-btn mat-icon{color:#fffc}.scrollable{flex:1;overflow-y:auto}.form-section{padding:12px 16px 0}.section-gap{padding-top:16px}.field-label{display:block;font-size:12px;font-weight:600;color:#ffffffb3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.text-field{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;color:#fff;background:#ffffff1a;outline:none;transition:border-color .2s;box-sizing:border-box}.text-field:focus{border-color:#ffffff80}.text-field::placeholder{color:#ffffff80}.subject-field{min-height:74px;resize:vertical;font-family:inherit;line-height:1.4}.text-field.readonly{cursor:not-allowed;color:#ffffffbf;background:#ffffff0f;border-color:#ffffff29}.field-note{margin-top:6px;font-size:12px;color:#ffffff8c}.loading-row{display:flex;align-items:center;gap:8px;color:#fff9;font-size:13px;padding:8px 0}.members-list{border-radius:8px;overflow:hidden}.member-row{display:flex;align-items:center;padding:8px 12px;gap:10px;background:#ffffff12;border-bottom:1px solid rgba(255,255,255,.06)}.member-row:last-child{border-bottom:none}.member-avatar{width:30px;height:30px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.member-avatar mat-icon{color:#fff;font-size:18px}.member-info{display:flex;flex-direction:column;flex:1;min-width:0}.member-name{font-size:13px;font-weight:500;color:#fff}.admin-badge{display:inline-flex;align-items:center;margin-left:6px;padding:1px 6px;border-radius:999px;color:#bfdbfe;background:#2563eb38;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.member-sub{font-size:11px;color:#ffffff80}.remove-member-btn{color:#fff9!important}.admin-member-btn{color:#93c5fdf2!important}.remove-member-btn:hover{color:#f87171!important;background:#f871711a!important}.empty-members{font-size:13px;color:#ffffff80;padding:8px 0}.search-bar{display:flex;align-items:center;padding:8px 12px;background:#ffffff1a;border-radius:10px}.search-icon{color:#fff9;font-size:20px;width:20px;height:20px;margin-right:8px}.search-input{flex:1;border:none;outline:none;background:transparent;font-size:14px;color:#fff}.search-input::placeholder{color:#ffffff80}.selected-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.chip{display:flex;align-items:center;background:#fff3;color:#fff;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;font-weight:500}.chip-remove{width:20px!important;height:20px!important;line-height:20px!important}.chip-remove mat-icon{font-size:14px;width:14px;height:14px;color:#fffc}.contacts-list{padding-top:4px}.contact-item{display:flex;align-items:center;padding:10px 16px;cursor:pointer;transition:background .15s;gap:12px}.contact-item:hover{background:#ffffff14}.contact-item.selected{background:#ffffff26}.contact-avatar{width:36px;height:36px;border-radius:50%;background:#fff3;display:flex;align-items:center;justify-content:center;flex-shrink:0}.contact-avatar mat-icon{color:#fff;font-size:20px}.contact-info{flex:1;display:flex;flex-direction:column}.contact-name{font-weight:500;font-size:14px;color:#fff}.contact-company{font-size:12px;color:#fff9}.check-icon{color:#22c55e;font-size:22px}.action-bar{padding:12px 16px;border-top:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:8px;flex-shrink:0}.create-btn{width:100%;background:#fff3!important;color:#fff!important;border-radius:10px;font-weight:600}.create-btn:disabled{opacity:.5}.create-btn mat-icon{margin-right:8px}.delete-btn{width:100%;color:#f87171!important;border-color:#f8717166!important;border-radius:10px;font-weight:600}.delete-btn mat-icon{margin-right:8px}.confirm-overlay{position:absolute;inset:0;z-index:10;display:flex;align-items:flex-end;padding:16px;background:#0413229e;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);box-sizing:border-box}.confirm-card{width:100%;padding:16px;border-radius:14px;background:#0c1f35;border:1px solid rgba(255,255,255,.14);box-shadow:0 16px 40px #00000073;color:#fff}.confirm-icon{width:36px;height:36px;border-radius:50%;background:#f8717124;display:flex;align-items:center;justify-content:center;margin-bottom:10px}.confirm-icon mat-icon{color:#f87171}.confirm-copy h4{margin:0 0 6px;font-size:16px;font-weight:700}.confirm-copy p{margin:0;color:#ffffffb3;font-size:13px;line-height:1.4}.confirm-actions{display:flex;gap:8px;margin-top:16px}.confirm-cancel,.confirm-delete{flex:1;border-radius:10px;font-weight:600}.confirm-cancel{color:#fff!important;border-color:#ffffff40!important}.confirm-delete{background:#dc2626e6!important;color:#fff!important}.confirm-delete mat-icon{margin-right:6px;font-size:18px;width:18px;height:18px}\n"] }]
         }], ctorParameters: () => [{ type: MessagingStoreService }, { type: MessagingApiService }, { type: AuthService }] });
 
 class ChatPanelComponent {

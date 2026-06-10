@@ -14,7 +14,9 @@ import {
   ChatWindow,
   WebSocketMessage,
   SidebarSide,
+  isProjectContainer,
   isProjectConversation,
+  isProjectSubgroup,
   getContactDisplayName,
   getMessageSenderName,
 } from '../models/messaging.models';
@@ -91,8 +93,12 @@ export class MessagingStoreService implements OnDestroy {
     conversationId: string;
     name: string;
     isProject?: boolean;
+    isProjectSubgroup?: boolean;
+    isProjectSubgroupCreate?: boolean;
     dbGid?: string;
     projectGid?: string;
+    parentConversationId?: string;
+    subject?: string;
   } | null>(null);
   private deletingConversationIds = new Set<string>();
   private removalToastShown = new Set<string>();
@@ -340,6 +346,7 @@ export class MessagingStoreService implements OnDestroy {
         const mapped = items.map(item => {
           const isGroup = item.is_group === true || (item.is_group as any) === 'True';
           const isProject = this.projectGroupsEnabled && isProjectConversation(item);
+          const isSubgroup = this.projectGroupsEnabled && isProjectSubgroup(item);
           const conversationId = String(item.conversation_id);
           const preview = this.replyBodyText(item.last_message_preview || '');
           const hasMention =
@@ -347,9 +354,9 @@ export class MessagingStoreService implements OnDestroy {
             (Number(item.unread_count || 0) > 0 && this.messageTextMentionsCurrentUser(preview));
           
           if (!isGroup && !item.name && item.other_participant_name) {
-            return { ...item, name: item.other_participant_name, last_message_preview: preview, is_group: false, is_project: isProject, has_mention: hasMention };
+            return { ...item, name: item.other_participant_name, last_message_preview: preview, is_group: false, is_project: isProject, is_project_subgroup: isSubgroup, has_mention: hasMention };
           }
-          return { ...item, last_message_preview: preview, is_group: isGroup, is_project: isProject, has_mention: hasMention };
+          return { ...item, last_message_preview: preview, is_group: isGroup, is_project: isProject, is_project_subgroup: isSubgroup, has_mention: hasMention };
         }).filter(item =>
           (!isProjectConversation(item) || this.projectGroupsEnabled) &&
           !this.deletingConversationIds.has(String(item.conversation_id)) &&
@@ -398,8 +405,11 @@ export class MessagingStoreService implements OnDestroy {
     name: string,
     isGroup = false,
     isProject = false,
+    isProjectSubgroup = false,
     dbGid?: string,
     projectGid?: string,
+    parentConversationId?: string,
+    subgroupSubject?: string,
   ): void {
     if (!conversationId || conversationId === 'undefined') {
       return;
@@ -412,7 +422,19 @@ export class MessagingStoreService implements OnDestroy {
     if (!chats.find((c) => c.conversationId === conversationId)) {
       this.openChats$.next([
         ...chats,
-        { conversationId, name, isGroup, isProject, dbGid, projectGid, isMinimized: false, unreadCount: 0 },
+        {
+          conversationId,
+          name,
+          isGroup,
+          isProject,
+          isProjectSubgroup,
+          dbGid,
+          projectGid,
+          parentConversationId,
+          subgroupSubject,
+          isMinimized: false,
+          unreadCount: 0,
+        },
       ]);
     }
 
@@ -674,11 +696,39 @@ export class MessagingStoreService implements OnDestroy {
     conversationId: string,
     name: string,
     isProject = false,
+    isProjectSubgroup = false,
     dbGid?: string,
     projectGid?: string,
+    parentConversationId?: string,
+    subject?: string,
   ): void {
-    this.groupSettings$.next({ conversationId, name, isProject, dbGid, projectGid });
+    this.groupSettings$.next({
+      conversationId,
+      name,
+      isProject,
+      isProjectSubgroup,
+      dbGid,
+      projectGid,
+      parentConversationId,
+      subject,
+    });
     this.setView('group-manager');
+  }
+
+  openProjectSubgroupCreator(parent: InboxItem): void {
+    if (!this.projectGroupsEnabled || !isProjectContainer(parent)) return;
+    this.groupSettings$.next({
+      conversationId: String(parent.conversation_id),
+      name: '',
+      isProject: true,
+      isProjectSubgroup: true,
+      isProjectSubgroupCreate: true,
+      dbGid: parent.db_gid,
+      projectGid: parent.project_gid,
+      parentConversationId: String(parent.conversation_id),
+    });
+    this.setView('group-manager');
+    this.openPanel();
   }
 
   clearGroupSettings(): void {
@@ -781,6 +831,63 @@ export class MessagingStoreService implements OnDestroy {
 
     this.api.setGroupAdmin(conversationId, targetContactId, isAdmin).subscribe({
       next: () => {
+        this.loadInbox();
+        this.notifyGroupMembershipChanged();
+        callbacks?.success?.();
+      },
+      error: () => callbacks?.error?.(),
+    });
+  }
+
+  createProjectSubgroup(
+    parentConversationId: string,
+    name: string,
+    subject: string | null | undefined,
+    participantIds: string[],
+    callbacks?: { success?: () => void; error?: () => void }
+  ): void {
+    this.api.createProjectSubgroup(parentConversationId, {
+      name,
+      subject: subject || null,
+      participant_ids: participantIds,
+    }).subscribe({
+      next: (subgroup) => {
+        const convId = String(subgroup?.conversation_id || subgroup?.id || '');
+        this.loadInbox();
+        this.clearGroupSettings();
+        if (convId) {
+          this.openConversation(
+            convId,
+            subgroup?.name || name,
+            true,
+            true,
+            true,
+            subgroup?.db_gid,
+            subgroup?.project_gid,
+            subgroup?.parent_conversation_id || parentConversationId,
+            subgroup?.subject || subject || undefined,
+          );
+        }
+        callbacks?.success?.();
+      },
+      error: () => callbacks?.error?.(),
+    });
+  }
+
+  updateProjectSubgroup(
+    conversationId: string,
+    name: string,
+    subject: string | null | undefined,
+    callbacks?: { success?: () => void; error?: () => void }
+  ): void {
+    this.api.updateProjectSubgroup(conversationId, { name, subject: subject || null }).subscribe({
+      next: (subgroup) => {
+        const updatedName = subgroup?.name || name;
+        this.openChats$.next(this.openChats$.value.map((chat) =>
+          String(chat.conversationId) === String(conversationId)
+            ? { ...chat, name: updatedName, subgroupSubject: subgroup?.subject || subject || undefined }
+            : chat
+        ));
         this.loadInbox();
         this.notifyGroupMembershipChanged();
         callbacks?.success?.();

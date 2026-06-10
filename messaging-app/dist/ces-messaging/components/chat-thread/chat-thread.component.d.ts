@@ -24,8 +24,11 @@ export declare class ChatThreadComponent implements OnInit, OnDestroy, AfterView
     conversationName: string;
     isGroup: boolean;
     isProject: boolean;
+    isProjectSubgroup: boolean;
     projectDbGid: string | undefined;
     projectGid: string | undefined;
+    parentConversationId: string | undefined;
+    subgroupSubject: string | undefined;
     isRemovedFromGroup: boolean;
     messageTextScale: number;
     codeTextScale: number;

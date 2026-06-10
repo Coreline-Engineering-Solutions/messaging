@@ -37,6 +37,9 @@ export interface InboxItem {
   is_project?: boolean;
   db_gid?: string;
   project_gid?: string;
+  parent_conversation_id?: string;
+  is_project_subgroup?: boolean;
+  subgroup_subject?: string;
   project_status?: 'active' | 'pending_delete' | 'archived' | 'deleted';
   project_purge_after?: string;
   conversation_type?: string;
@@ -48,7 +51,20 @@ export interface InboxItem {
 }
 
 export function isProjectConversation(item: InboxItem): boolean {
-  return item.is_project === true || item.conversation_type?.toLowerCase() === 'project' || !!item.project_gid;
+  const isProject = item.is_project === true || (item.is_project as any) === 'true' || (item.is_project as any) === 'True';
+  const type = item.conversation_type?.toLowerCase();
+  return isProject || type === 'project' || type === 'project_container' || type === 'project_subgroup' || !!item.project_gid;
+}
+
+export function isProjectSubgroup(item: InboxItem): boolean {
+  return item.is_project_subgroup === true ||
+    (item.is_project_subgroup as any) === 'true' ||
+    (item.is_project_subgroup as any) === 'True' ||
+    item.conversation_type?.toLowerCase() === 'project_subgroup';
+}
+
+export function isProjectContainer(item: InboxItem): boolean {
+  return isProjectConversation(item) && !isProjectSubgroup(item);
 }
 
 export interface MessageReplyPreview {
@@ -138,8 +154,11 @@ export interface ChatWindow {
   name: string;
   isGroup: boolean;
   isProject?: boolean;
+  isProjectSubgroup?: boolean;
   dbGid?: string;
   projectGid?: string;
+  parentConversationId?: string;
+  subgroupSubject?: string;
   isMinimized: boolean;
   unreadCount: number;
 }

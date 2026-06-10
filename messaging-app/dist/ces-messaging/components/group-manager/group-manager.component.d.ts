@@ -16,8 +16,13 @@ export declare class GroupManagerComponent implements OnInit, OnDestroy {
     searchQuery: string;
     isEditMode: boolean;
     isProjectGroup: boolean;
+    isProjectSubgroup: boolean;
+    isProjectSubgroupCreate: boolean;
     projectDbGid: string | undefined;
     projectGid: string | undefined;
+    parentConversationId: string | undefined;
+    subgroupSubject: string;
+    originalSubgroupSubject: string;
     editingConversationId: string | null;
     creatorContactId: string | null;
     loadingMembers: boolean;
@@ -36,6 +41,9 @@ export declare class GroupManagerComponent implements OnInit, OnDestroy {
     isAdminMember(member: ConversationParticipant): boolean;
     get currentUserIsAdmin(): boolean;
     get canManageMembers(): boolean;
+    get isProjectNameLocked(): boolean;
+    get pageTitle(): string;
+    get createButtonLabel(): string;
     get canRenameGroup(): boolean;
     canRemoveMember(member: ConversationParticipant): boolean;
     get canSubmit(): boolean;

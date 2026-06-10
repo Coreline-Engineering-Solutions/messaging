@@ -50,8 +50,8 @@ export interface MessagingConfig {
    */
   contactIdHint?: 'email' | 'id' | 'userId' | 'customId' | string;
   /**
-   * Enables GIS project-group UI, including the Projects tab and project-scoped
-   * group member management. Keep disabled for non-GIS host apps.
+   * Enables GIS project-group UI, including the Projects tab, project subgroups,
+   * and project-scoped group member management. Keep disabled for non-GIS host apps.
    */
   enableProjectGroups?: boolean;
 }

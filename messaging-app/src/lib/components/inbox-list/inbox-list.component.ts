@@ -7,7 +7,7 @@ import { MatRippleModule } from '@angular/material/core';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { Subscription } from 'rxjs';
 import { MessagingStoreService } from '../../services/messaging-store.service';
-import { InboxItem, isProjectConversation } from '../../models/messaging.models';
+import { InboxItem, isProjectContainer, isProjectConversation, isProjectSubgroup } from '../../models/messaging.models';
 
 @Component({
   selector: 'app-inbox-list',
@@ -26,42 +26,102 @@ import { InboxItem, isProjectConversation } from '../../models/messaging.models'
       </div>
 
       <div class="conversation-list">
-        <div
-          *ngFor="let item of filteredInbox"
-          class="conversation-item"
-          matRipple
-          [class.has-unread]="item.unread_count > 0"
-          (click)="openConversation(item)"
-          (contextmenu)="onContextMenu($event, item)"
-        >
-          <div
-            class="avatar"
-            [class.group-avatar]="item.is_group && !isProject(item)"
-            [class.project-avatar]="isProject(item)"
-          >
-            <mat-icon>{{ isProject(item) ? 'workspaces' : item.is_group ? 'group' : 'person' }}</mat-icon>
-          </div>
-          <div class="conversation-info">
-            <div class="info-top">
-              <span class="conv-name">{{ item.name || 'Direct Message' }}</span>
-              <span class="conv-time">{{ formatTime(item.last_message_at) }}</span>
+        <ng-container *ngIf="activeTab === 'projects' && projectGroupsEnabled; else standardConversationList">
+          <div *ngFor="let project of projectContainers" class="project-container">
+            <div class="project-header" (click)="toggleProject(project)">
+              <div class="avatar project-avatar">
+                <mat-icon>workspaces</mat-icon>
+              </div>
+              <div class="conversation-info">
+                <div class="info-top">
+                  <span class="conv-name">{{ project.name || 'Project Group' }}</span>
+                  <button
+                    type="button"
+                    class="subgroup-create"
+                    (click)="createSubgroup(project, $event)"
+                    matTooltip="Create subgroup"
+                    matTooltipPosition="above"
+                  >
+                    <mat-icon>add</mat-icon>
+                  </button>
+                </div>
+                <div class="info-bottom">
+                  <span class="conv-preview">{{ projectSubgroups(project).length }} subgroup{{ projectSubgroups(project).length === 1 ? '' : 's' }}</span>
+                  <mat-icon class="expand-icon">{{ isProjectExpanded(project) ? 'expand_less' : 'expand_more' }}</mat-icon>
+                </div>
+              </div>
             </div>
-            <div class="info-bottom">
-              <span class="conv-preview">{{ item.last_message_preview || 'No messages yet' }}</span>
-              <span
-                *ngIf="item.has_mention"
-                class="mention-badge"
-                matTooltip="You were mentioned"
-                matTooltipPosition="above"
-              >&#64;</span>
-              <span *ngIf="item.unread_count > 0" class="unread-badge">
-                {{ item.unread_count > 99 ? '99+' : item.unread_count }}
-              </span>
-            </div>
-          </div>
-        </div>
 
-        <div *ngIf="filteredInbox.length === 0 && activeTab !== 'settings'" class="empty-state">
+            <div *ngIf="isProjectExpanded(project)" class="subgroup-list">
+              <div
+                *ngFor="let item of projectSubgroups(project)"
+                class="conversation-item subgroup-item"
+                matRipple
+                [class.has-unread]="item.unread_count > 0"
+                (click)="openConversation(item)"
+                (contextmenu)="onContextMenu($event, item)"
+              >
+                <div class="avatar subgroup-avatar">
+                  <mat-icon>forum</mat-icon>
+                </div>
+                <div class="conversation-info">
+                  <div class="info-top">
+                    <span class="conv-name">{{ item.name || 'Subgroup' }}</span>
+                    <span class="conv-time">{{ formatTime(item.last_message_at) }}</span>
+                  </div>
+                  <div class="info-bottom">
+                    <span class="conv-preview">{{ item.subgroup_subject || item.last_message_preview || 'No messages yet' }}</span>
+                    <span *ngIf="item.unread_count > 0" class="unread-badge">
+                      {{ item.unread_count > 99 ? '99+' : item.unread_count }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div *ngIf="projectSubgroups(project).length === 0" class="empty-subgroups">
+                No subgroups yet
+              </div>
+            </div>
+          </div>
+        </ng-container>
+
+        <ng-template #standardConversationList>
+          <div
+            *ngFor="let item of filteredInbox"
+            class="conversation-item"
+            matRipple
+            [class.has-unread]="item.unread_count > 0"
+            (click)="openConversation(item)"
+            (contextmenu)="onContextMenu($event, item)"
+          >
+            <div
+              class="avatar"
+              [class.group-avatar]="item.is_group && !isProject(item)"
+              [class.project-avatar]="isProject(item)"
+            >
+              <mat-icon>{{ isProject(item) ? 'forum' : item.is_group ? 'group' : 'person' }}</mat-icon>
+            </div>
+            <div class="conversation-info">
+              <div class="info-top">
+                <span class="conv-name">{{ item.name || 'Direct Message' }}</span>
+                <span class="conv-time">{{ formatTime(item.last_message_at) }}</span>
+              </div>
+              <div class="info-bottom">
+                <span class="conv-preview">{{ item.subgroup_subject || item.last_message_preview || 'No messages yet' }}</span>
+                <span
+                  *ngIf="item.has_mention"
+                  class="mention-badge"
+                  matTooltip="You were mentioned"
+                  matTooltipPosition="above"
+                >&#64;</span>
+                <span *ngIf="item.unread_count > 0" class="unread-badge">
+                  {{ item.unread_count > 99 ? '99+' : item.unread_count }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </ng-template>
+
+        <div *ngIf="showEmptyState" class="empty-state">
           <mat-icon>{{ activeTab === 'projects' ? 'workspaces' : activeTab === 'groups' ? 'group' : 'forum' }}</mat-icon>
           <p>{{ emptyStateText }}</p>
           <button *ngIf="!searchQuery && activeTab !== 'groups' && activeTab !== 'projects'" mat-stroked-button color="primary" (click)="onNewConversation()">
@@ -399,6 +459,77 @@ WHERE status = 'Open';</code></pre>
       color: #bfdbfe;
     }
 
+    .project-container {
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .project-header {
+      display: flex;
+      align-items: center;
+      padding: 12px 16px;
+      cursor: pointer;
+      gap: 12px;
+      transition: background 0.15s;
+    }
+
+    .project-header:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .subgroup-create {
+      width: 28px;
+      height: 28px;
+      border: 1px solid rgba(191, 219, 254, 0.35);
+      border-radius: 999px;
+      background: rgba(37, 99, 235, 0.18);
+      color: #bfdbfe;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .subgroup-create mat-icon {
+      font-size: 18px;
+      width: 18px;
+      height: 18px;
+    }
+
+    .expand-icon {
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 20px;
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+
+    .subgroup-list {
+      padding-bottom: 6px;
+    }
+
+    .subgroup-item {
+      padding-left: 32px;
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .subgroup-avatar {
+      width: 38px;
+      height: 38px;
+      background: rgba(59, 130, 246, 0.14);
+    }
+
+    .subgroup-avatar mat-icon {
+      color: #dbeafe;
+      font-size: 21px;
+    }
+
+    .empty-subgroups {
+      padding: 8px 16px 12px 92px;
+      color: rgba(255, 255, 255, 0.55);
+      font-size: 12px;
+    }
+
     .conversation-info {
       flex: 1;
       min-width: 0;
@@ -678,6 +809,7 @@ export class InboxListComponent implements OnInit, OnDestroy {
   messageTextScale = 1;
   codeTextScale = 1;
   contextMenu: { x: number; y: number; item: InboxItem } | null = null;
+  expandedProjectIds = new Set<string>();
   private readonly tabStorageKey = 'messaging_inbox_active_tab';
   private sub!: Subscription;
 
@@ -707,8 +839,8 @@ export class InboxListComponent implements OnInit, OnDestroy {
       const project = this.isProject(item);
       if (this.activeTab === 'direct') return !item.is_group;
       if (this.activeTab === 'groups') return item.is_group && !project;
-      if (this.activeTab === 'projects') return this.projectGroupsEnabled && project;
-      return true;
+      if (this.activeTab === 'projects') return [];
+      return !isProjectContainer(item);
     });
     if (!this.searchQuery.trim()) return tabbed;
     const q = this.searchQuery.toLowerCase();
@@ -717,6 +849,28 @@ export class InboxListComponent implements OnInit, OnDestroy {
         (item.name || '').toLowerCase().includes(q) ||
         (item.last_message_preview || '').toLowerCase().includes(q)
     );
+  }
+
+  get projectContainers(): InboxItem[] {
+    const containers = this.inbox.filter((item) => isProjectContainer(item));
+    if (!this.searchQuery.trim()) return containers;
+    const q = this.searchQuery.toLowerCase();
+    return containers.filter((project) => {
+      const projectMatch = (project.name || '').toLowerCase().includes(q);
+      const subgroupMatch = this.projectSubgroups(project, false).some(
+        (item) =>
+          (item.name || '').toLowerCase().includes(q) ||
+          (item.subgroup_subject || '').toLowerCase().includes(q) ||
+          (item.last_message_preview || '').toLowerCase().includes(q)
+      );
+      return projectMatch || subgroupMatch;
+    });
+  }
+
+  get showEmptyState(): boolean {
+    if (this.activeTab === 'settings') return false;
+    if (this.activeTab === 'projects') return this.projectContainers.length === 0;
+    return this.filteredInbox.length === 0;
   }
 
   get emptyStateText(): string {
@@ -729,6 +883,44 @@ export class InboxListComponent implements OnInit, OnDestroy {
 
   isProject(item: InboxItem): boolean {
     return isProjectConversation(item);
+  }
+
+  projectSubgroups(project: InboxItem, applySearch = true): InboxItem[] {
+    const parentId = String(project.conversation_id);
+    let subgroups = this.inbox.filter(
+      (item) => isProjectSubgroup(item) && String(item.parent_conversation_id || '') === parentId
+    );
+    if (applySearch && this.searchQuery.trim()) {
+      const q = this.searchQuery.toLowerCase();
+      subgroups = subgroups.filter(
+        (item) =>
+          (item.name || '').toLowerCase().includes(q) ||
+          (item.subgroup_subject || '').toLowerCase().includes(q) ||
+          (item.last_message_preview || '').toLowerCase().includes(q)
+      );
+    }
+    return subgroups;
+  }
+
+  isProjectExpanded(project: InboxItem): boolean {
+    return this.expandedProjectIds.has(String(project.conversation_id));
+  }
+
+  toggleProject(project: InboxItem): void {
+    const id = String(project.conversation_id);
+    const next = new Set(this.expandedProjectIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    this.expandedProjectIds = next;
+  }
+
+  createSubgroup(project: InboxItem, event: Event): void {
+    event.stopPropagation();
+    this.expandedProjectIds.add(String(project.conversation_id));
+    this.store.openProjectSubgroupCreator(project);
   }
 
   setActiveTab(tab: 'all' | 'direct' | 'groups' | 'projects' | 'settings'): void {
@@ -773,13 +965,20 @@ export class InboxListComponent implements OnInit, OnDestroy {
   }
 
   openConversation(item: InboxItem): void {
+    if (isProjectContainer(item)) {
+      this.toggleProject(item);
+      return;
+    }
     this.store.openConversation(
       item.conversation_id,
       item.name || 'Chat',
       item.is_group,
       this.isProject(item),
+      isProjectSubgroup(item),
       item.db_gid,
       item.project_gid,
+      item.parent_conversation_id,
+      item.subgroup_subject,
     );
   }
 
