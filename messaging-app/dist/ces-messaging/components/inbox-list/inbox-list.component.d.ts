@@ -19,6 +19,7 @@ export declare class InboxListComponent implements OnInit, OnDestroy {
     private readonly tabStorageKey;
     private sub;
     constructor(store: MessagingStoreService);
+    get projectGroupsEnabled(): boolean;
     ngOnInit(): void;
     ngOnDestroy(): void;
     get filteredInbox(): InboxItem[];

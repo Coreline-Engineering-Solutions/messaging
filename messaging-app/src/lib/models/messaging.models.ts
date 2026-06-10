@@ -138,6 +138,8 @@ export interface ChatWindow {
   name: string;
   isGroup: boolean;
   isProject?: boolean;
+  dbGid?: string;
+  projectGid?: string;
   isMinimized: boolean;
   unreadCount: number;
 }

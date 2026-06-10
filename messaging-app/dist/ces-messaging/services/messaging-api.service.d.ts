@@ -4,6 +4,12 @@ import { MessagingConfig } from '../messaging.config';
 import { AuthService } from './auth.service';
 import { InboxItem, Message, Contact, Conversation, ConversationParticipant } from '../models/messaging.models';
 import * as i0 from "@angular/core";
+export interface EligibleProjectUsersResponse {
+    db_gid: string;
+    project_gid: string;
+    project_name?: string;
+    users: Contact[];
+}
 export declare class MessagingApiService {
     private http;
     private auth;
@@ -23,6 +29,7 @@ export declare class MessagingApiService {
     getDirectConversation(contactA: string, contactB: string): Observable<any>;
     getConversationParticipants(conversationId: string): Observable<ConversationParticipant[]>;
     getVisibleContacts(contactId: string): Observable<Contact[]>;
+    getEligibleProjectUsers(dbGid: string, projectGid: string): Observable<EligibleProjectUsersResponse>;
     checkContactProfile(contactId: string, updates?: any): Observable<any>;
     manageGroup(contactId: string, action: 'create' | 'add' | 'remove' | 'rename', conversationId?: string, groupName?: string, participantContactIds?: string[]): Observable<any>;
     deleteConversation(conversationId: string, contactId: string): Observable<any>;

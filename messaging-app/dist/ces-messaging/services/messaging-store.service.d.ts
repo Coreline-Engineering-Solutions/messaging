@@ -4,11 +4,13 @@ import { AuthService } from './auth.service';
 import { MessagingApiService } from './messaging-api.service';
 import { MessagingWebSocketService } from './messaging-websocket.service';
 import { InboxItem, Message, MessageReplyPreview, Contact, ChatWindow, SidebarSide } from '../models/messaging.models';
+import { MessagingConfig } from '../messaging.config';
 import * as i0 from "@angular/core";
 export declare class MessagingStoreService implements OnDestroy {
     private auth;
     private api;
     private wsService;
+    private config;
     private inbox$;
     private messagesMap$;
     private openChats$;
@@ -77,8 +79,11 @@ export declare class MessagingStoreService implements OnDestroy {
         conversationId: string;
         name: string;
         isProject?: boolean;
+        dbGid?: string;
+        projectGid?: string;
     }>;
-    constructor(auth: AuthService, api: MessagingApiService, wsService: MessagingWebSocketService);
+    constructor(auth: AuthService, api: MessagingApiService, wsService: MessagingWebSocketService, config: MessagingConfig);
+    get projectGroupsEnabled(): boolean;
     initialize(): void;
     private initializeWithVerifiedSession;
     teardown(): void;
@@ -110,7 +115,7 @@ export declare class MessagingStoreService implements OnDestroy {
     setActiveDbGid(dbGid: string | null | undefined): void;
     loadInbox(): void;
     loadVisibleContacts(): void;
-    openConversation(conversationId: string, name: string, isGroup?: boolean, isProject?: boolean): void;
+    openConversation(conversationId: string, name: string, isGroup?: boolean, isProject?: boolean, dbGid?: string, projectGid?: string): void;
     closeChat(conversationId: string): void;
     markGroupRemoved(conversationId: string): void;
     exitRemovedGroup(conversationId: string): void;
@@ -126,7 +131,7 @@ export declare class MessagingStoreService implements OnDestroy {
         success?: () => void;
         error?: () => void;
     }): void;
-    openGroupSettings(conversationId: string, name: string, isProject?: boolean): void;
+    openGroupSettings(conversationId: string, name: string, isProject?: boolean, dbGid?: string, projectGid?: string): void;
     clearGroupSettings(): void;
     markAsRead(conversationId: string): void;
     manageGroup(action: 'create' | 'add' | 'remove' | 'rename', conversationId?: string, groupName?: string, participantContactIds?: string[], callbacks?: {

@@ -1,4 +1,4 @@
-import { Injectable, OnDestroy } from '@angular/core';
+import { Inject, Injectable, OnDestroy } from '@angular/core';
 import { BehaviorSubject, Observable, Subject, Subscription, forkJoin, of } from 'rxjs';
 import { catchError, map } from 'rxjs/operators';
 import { AuthService } from './auth.service';
@@ -18,6 +18,7 @@ import {
   getContactDisplayName,
   getMessageSenderName,
 } from '../models/messaging.models';
+import { MESSAGING_CONFIG, MessagingConfig } from '../messaging.config';
 
 @Injectable({ providedIn: 'root' })
 export class MessagingStoreService implements OnDestroy {
@@ -86,7 +87,13 @@ export class MessagingStoreService implements OnDestroy {
   private wsSub: Subscription | null = null;
   private destroy$ = new Subject<void>();
   private pollTimer: any = null;
-  private groupSettings$ = new BehaviorSubject<{ conversationId: string; name: string; isProject?: boolean } | null>(null);
+  private groupSettings$ = new BehaviorSubject<{
+    conversationId: string;
+    name: string;
+    isProject?: boolean;
+    dbGid?: string;
+    projectGid?: string;
+  } | null>(null);
   private deletingConversationIds = new Set<string>();
   private removalToastShown = new Set<string>();
   private toastTimer: any = null;
@@ -96,9 +103,14 @@ export class MessagingStoreService implements OnDestroy {
   constructor(
     private auth: AuthService,
     private api: MessagingApiService,
-    private wsService: MessagingWebSocketService
+    private wsService: MessagingWebSocketService,
+    @Inject(MESSAGING_CONFIG) private config: MessagingConfig
   ) {
     (this as any).wsStatus = this.wsService.status$;
+  }
+
+  get projectGroupsEnabled(): boolean {
+    return this.config.enableProjectGroups === true;
   }
 
   // ── Initialization ──
@@ -327,7 +339,7 @@ export class MessagingStoreService implements OnDestroy {
       next: (items) => {
         const mapped = items.map(item => {
           const isGroup = item.is_group === true || (item.is_group as any) === 'True';
-          const isProject = isProjectConversation(item);
+          const isProject = this.projectGroupsEnabled && isProjectConversation(item);
           const conversationId = String(item.conversation_id);
           const preview = this.replyBodyText(item.last_message_preview || '');
           const hasMention =
@@ -339,6 +351,7 @@ export class MessagingStoreService implements OnDestroy {
           }
           return { ...item, last_message_preview: preview, is_group: isGroup, is_project: isProject, has_mention: hasMention };
         }).filter(item =>
+          (!isProjectConversation(item) || this.projectGroupsEnabled) &&
           !this.deletingConversationIds.has(String(item.conversation_id)) &&
           !this.removedGroupIds$.value.has(String(item.conversation_id))
         );
@@ -380,7 +393,14 @@ export class MessagingStoreService implements OnDestroy {
   }
 
   // ── Conversations ──
-  openConversation(conversationId: string, name: string, isGroup = false, isProject = false): void {
+  openConversation(
+    conversationId: string,
+    name: string,
+    isGroup = false,
+    isProject = false,
+    dbGid?: string,
+    projectGid?: string,
+  ): void {
     if (!conversationId || conversationId === 'undefined') {
       return;
     }
@@ -392,7 +412,7 @@ export class MessagingStoreService implements OnDestroy {
     if (!chats.find((c) => c.conversationId === conversationId)) {
       this.openChats$.next([
         ...chats,
-        { conversationId, name, isGroup, isProject, isMinimized: false, unreadCount: 0 },
+        { conversationId, name, isGroup, isProject, dbGid, projectGid, isMinimized: false, unreadCount: 0 },
       ]);
     }
 
@@ -650,8 +670,14 @@ export class MessagingStoreService implements OnDestroy {
     });
   }
 
-  openGroupSettings(conversationId: string, name: string, isProject = false): void {
-    this.groupSettings$.next({ conversationId, name, isProject });
+  openGroupSettings(
+    conversationId: string,
+    name: string,
+    isProject = false,
+    dbGid?: string,
+    projectGid?: string,
+  ): void {
+    this.groupSettings$.next({ conversationId, name, isProject, dbGid, projectGid });
     this.setView('group-manager');
   }
 

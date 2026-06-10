@@ -15,7 +15,7 @@ export declare class MessagingWebSocketService implements OnDestroy {
     private messages$;
     private connectionStatus$;
     readonly onMessage$: import("rxjs").Observable<WebSocketMessage>;
-    readonly status$: import("rxjs").Observable<"disconnected" | "authenticated" | "connecting" | "connected">;
+    readonly status$: import("rxjs").Observable<"disconnected" | "connecting" | "connected" | "authenticated">;
     constructor(config: MessagingConfig);
     get isConnected(): boolean;
     connect(contactId: string, sessionGid: string): void;

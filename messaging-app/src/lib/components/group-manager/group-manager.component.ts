@@ -571,6 +571,8 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
   searchQuery = '';
   isEditMode = false;
   isProjectGroup = false;
+  projectDbGid: string | undefined;
+  projectGid: string | undefined;
   editingConversationId: string | null = null;
   creatorContactId: string | null = null;
   loadingMembers = false;
@@ -590,7 +592,9 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
     this.store.loadVisibleContacts();
 
     this.subs.push(
-      this.store.visibleContacts.subscribe((c) => (this.contacts = c))
+      this.store.visibleContacts.subscribe((c) => {
+        if (!this.isProjectGroup) this.contacts = c;
+      })
     );
 
     this.subs.push(
@@ -601,12 +605,17 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
           this.groupName = settings.name;
           this.originalGroupName = settings.name;
           this.isProjectGroup = !!settings.isProject;
+          this.projectDbGid = settings.dbGid;
+          this.projectGid = settings.projectGid;
           this.selectedContacts = [];
           this.showDeleteConfirm = false;
           this.loadCurrentMembers(settings.conversationId);
+          this.loadProjectEligibleContacts();
         } else {
           this.isEditMode = false;
           this.isProjectGroup = false;
+          this.projectDbGid = undefined;
+          this.projectGid = undefined;
           this.editingConversationId = null;
           this.groupName = '';
           this.originalGroupName = '';
@@ -634,6 +643,21 @@ export class GroupManagerComponent implements OnInit, OnDestroy {
       },
       error: () => {
         this.loadingMembers = false;
+      },
+    });
+  }
+
+  private loadProjectEligibleContacts(): void {
+    if (!this.isProjectGroup) return;
+    this.contacts = [];
+    if (!this.projectDbGid || !this.projectGid) return;
+
+    this.api.getEligibleProjectUsers(this.projectDbGid, this.projectGid).subscribe({
+      next: (response) => {
+        this.contacts = response.users || [];
+      },
+      error: () => {
+        this.contacts = [];
       },
     });
   }

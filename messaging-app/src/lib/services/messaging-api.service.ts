@@ -12,6 +12,13 @@ import {
   ConversationParticipant,
 } from '../models/messaging.models';
 
+export interface EligibleProjectUsersResponse {
+  db_gid: string;
+  project_gid: string;
+  project_name?: string;
+  users: Contact[];
+}
+
 @Injectable({ providedIn: 'root' })
 export class MessagingApiService {
   private base: string;
@@ -134,6 +141,13 @@ export class MessagingApiService {
     warnEmailLikeContactId(contactId);
     return this.http.get<Contact[]>(
       `${this.base}/my-visible-contacts`,
+      this.authOptions()
+    );
+  }
+
+  getEligibleProjectUsers(dbGid: string, projectGid: string): Observable<EligibleProjectUsersResponse> {
+    return this.http.get<EligibleProjectUsersResponse>(
+      `${this.base}/project-groups/${encodeURIComponent(dbGid)}/${encodeURIComponent(projectGid)}/eligible-users`,
       this.authOptions()
     );
   }

@@ -49,6 +49,11 @@ export interface MessagingConfig {
    * it resolves the canonical numeric contact id from `/messaging/auth/me`.
    */
   contactIdHint?: 'email' | 'id' | 'userId' | 'customId' | string;
+  /**
+   * Enables GIS project-group UI, including the Projects tab and project-scoped
+   * group member management. Keep disabled for non-GIS host apps.
+   */
+  enableProjectGroups?: boolean;
 }
 
 export const MESSAGING_CONFIG = new InjectionToken<MessagingConfig>('MESSAGING_CONFIG');

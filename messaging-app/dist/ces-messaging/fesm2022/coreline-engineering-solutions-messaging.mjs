@@ -322,6 +322,9 @@ class MessagingApiService {
         warnEmailLikeContactId(contactId);
         return this.http.get(`${this.base}/my-visible-contacts`, this.authOptions());
     }
+    getEligibleProjectUsers(dbGid, projectGid) {
+        return this.http.get(`${this.base}/project-groups/${encodeURIComponent(dbGid)}/${encodeURIComponent(projectGid)}/eligible-users`, this.authOptions());
+    }
     checkContactProfile(contactId, updates) {
         return this.http.post(`${this.base}/contacts/check`, this.sessionBody(), this.authOptions());
     }
@@ -858,6 +861,7 @@ class MessagingStoreService {
     auth;
     api;
     wsService;
+    config;
     // ── State subjects ──
     inbox$ = new BehaviorSubject([]);
     messagesMap$ = new BehaviorSubject(new Map());
@@ -916,11 +920,15 @@ class MessagingStoreService {
     removalToastShown = new Set();
     toastTimer = null;
     groupSettings = this.groupSettings$.asObservable();
-    constructor(auth, api, wsService) {
+    constructor(auth, api, wsService, config) {
         this.auth = auth;
         this.api = api;
         this.wsService = wsService;
+        this.config = config;
         this.wsStatus = this.wsService.status$;
+    }
+    get projectGroupsEnabled() {
+        return this.config.enableProjectGroups === true;
     }
     // ── Initialization ──
     initialize() {
@@ -1120,7 +1128,7 @@ class MessagingStoreService {
             next: (items) => {
                 const mapped = items.map(item => {
                     const isGroup = item.is_group === true || item.is_group === 'True';
-                    const isProject = isProjectConversation(item);
+                    const isProject = this.projectGroupsEnabled && isProjectConversation(item);
                     const conversationId = String(item.conversation_id);
                     const preview = this.replyBodyText(item.last_message_preview || '');
                     const hasMention = this.mentionConversationIds$.value.has(conversationId) ||
@@ -1129,7 +1137,8 @@ class MessagingStoreService {
                         return { ...item, name: item.other_participant_name, last_message_preview: preview, is_group: false, is_project: isProject, has_mention: hasMention };
                     }
                     return { ...item, last_message_preview: preview, is_group: isGroup, is_project: isProject, has_mention: hasMention };
-                }).filter(item => !this.deletingConversationIds.has(String(item.conversation_id)) &&
+                }).filter(item => (!isProjectConversation(item) || this.projectGroupsEnabled) &&
+                    !this.deletingConversationIds.has(String(item.conversation_id)) &&
                     !this.removedGroupIds$.value.has(String(item.conversation_id)));
                 this.inbox$.next(mapped);
                 this.recalcUnread(mapped);
@@ -1162,7 +1171,7 @@ class MessagingStoreService {
         });
     }
     // ── Conversations ──
-    openConversation(conversationId, name, isGroup = false, isProject = false) {
+    openConversation(conversationId, name, isGroup = false, isProject = false, dbGid, projectGid) {
         if (!conversationId || conversationId === 'undefined') {
             return;
         }
@@ -1173,7 +1182,7 @@ class MessagingStoreService {
         if (!chats.find((c) => c.conversationId === conversationId)) {
             this.openChats$.next([
                 ...chats,
-                { conversationId, name, isGroup, isProject, isMinimized: false, unreadCount: 0 },
+                { conversationId, name, isGroup, isProject, dbGid, projectGid, isMinimized: false, unreadCount: 0 },
             ]);
         }
         const existing = this.messagesMap$.value.get(conversationId);
@@ -1389,8 +1398,8 @@ class MessagingStoreService {
             },
         });
     }
-    openGroupSettings(conversationId, name, isProject = false) {
-        this.groupSettings$.next({ conversationId, name, isProject });
+    openGroupSettings(conversationId, name, isProject = false, dbGid, projectGid) {
+        this.groupSettings$.next({ conversationId, name, isProject, dbGid, projectGid });
         this.setView('group-manager');
     }
     clearGroupSettings() {
@@ -2512,13 +2521,16 @@ class MessagingStoreService {
             this.messagesMap$.next(map);
         }
     }
-    static ɵfac = i0.ɵɵngDeclareFactory({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: MessagingStoreService, deps: [{ token: AuthService }, { token: MessagingApiService }, { token: MessagingWebSocketService }], target: i0.ɵɵFactoryTarget.Injectable });
+    static ɵfac = i0.ɵɵngDeclareFactory({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: MessagingStoreService, deps: [{ token: AuthService }, { token: MessagingApiService }, { token: MessagingWebSocketService }, { token: MESSAGING_CONFIG }], target: i0.ɵɵFactoryTarget.Injectable });
     static ɵprov = i0.ɵɵngDeclareInjectable({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: MessagingStoreService, providedIn: 'root' });
 }
 i0.ɵɵngDeclareClassMetadata({ minVersion: "12.0.0", version: "17.3.12", ngImport: i0, type: MessagingStoreService, decorators: [{
             type: Injectable,
             args: [{ providedIn: 'root' }]
-        }], ctorParameters: () => [{ type: AuthService }, { type: MessagingApiService }, { type: MessagingWebSocketService }] });
+        }], ctorParameters: () => [{ type: AuthService }, { type: MessagingApiService }, { type: MessagingWebSocketService }, { type: undefined, decorators: [{
+                    type: Inject,
+                    args: [MESSAGING_CONFIG]
+                }] }] });
 
 class FloatingButtonComponent {
     store;
@@ -2612,6 +2624,9 @@ class InboxListComponent {
     constructor(store) {
         this.store = store;
     }
+    get projectGroupsEnabled() {
+        return this.store.projectGroupsEnabled;
+    }
     ngOnInit() {
         this.activeTab = this.getSavedTab();
         this.sub = new Subscription();
@@ -2634,7 +2649,7 @@ class InboxListComponent {
             if (this.activeTab === 'groups')
                 return item.is_group && !project;
             if (this.activeTab === 'projects')
-                return project;
+                return this.projectGroupsEnabled && project;
             return true;
         });
         if (!this.searchQuery.trim())
@@ -2658,12 +2673,16 @@ class InboxListComponent {
         return isProjectConversation(item);
     }
     setActiveTab(tab) {
+        if (tab === 'projects' && !this.projectGroupsEnabled)
+            tab = 'all';
         this.activeTab = tab;
         localStorage.setItem(this.tabStorageKey, tab);
         this.contextMenu = null;
     }
     getSavedTab() {
         const saved = localStorage.getItem(this.tabStorageKey);
+        if (saved === 'projects' && !this.projectGroupsEnabled)
+            return 'all';
         return saved === 'direct' || saved === 'groups' || saved === 'projects' || saved === 'settings' || saved === 'all'
             ? saved
             : 'all';
@@ -2690,7 +2709,7 @@ class InboxListComponent {
         this.store.setCodeTextScale(Number(value));
     }
     openConversation(item) {
-        this.store.openConversation(item.conversation_id, item.name || 'Chat', item.is_group, this.isProject(item));
+        this.store.openConversation(item.conversation_id, item.name || 'Chat', item.is_group, this.isProject(item), item.db_gid, item.project_gid);
     }
     onNewConversation() {
         this.store.setView('new-conversation');
@@ -2925,6 +2944,7 @@ WHERE status = 'Open';</code></pre>
           <mat-icon>groups</mat-icon>
         </button>
         <button
+          *ngIf="projectGroupsEnabled"
           type="button"
           class="inbox-tab"
           [class.active]="activeTab === 'projects'"
@@ -3148,6 +3168,7 @@ WHERE status = 'Open';</code></pre>
           <mat-icon>groups</mat-icon>
         </button>
         <button
+          *ngIf="projectGroupsEnabled"
           type="button"
           class="inbox-tab"
           [class.active]="activeTab === 'projects'"
@@ -3795,6 +3816,8 @@ class ChatThreadComponent {
     conversationName = '';
     isGroup = false;
     isProject = false;
+    projectDbGid;
+    projectGid;
     isRemovedFromGroup = false;
     messageTextScale = 1;
     codeTextScale = 1;
@@ -3869,6 +3892,8 @@ class ChatThreadComponent {
                 this.conversationName = chat?.name || 'Chat';
                 this.isGroup = chat?.isGroup || false;
                 this.isProject = chat?.isProject || false;
+                this.projectDbGid = chat?.dbGid;
+                this.projectGid = chat?.projectGid;
                 this.refreshMentionOptions(true);
             }
             if (this.conversationId) {
@@ -3911,7 +3936,7 @@ class ChatThreadComponent {
         if (this.isRemovedFromGroup)
             return;
         if (this.conversationId) {
-            this.store.openGroupSettings(this.conversationId, this.conversationName, this.isProject);
+            this.store.openGroupSettings(this.conversationId, this.conversationName, this.isProject, this.projectDbGid, this.projectGid);
         }
     }
     startReply(message, event) {
@@ -5994,6 +6019,8 @@ class GroupManagerComponent {
     searchQuery = '';
     isEditMode = false;
     isProjectGroup = false;
+    projectDbGid;
+    projectGid;
     editingConversationId = null;
     creatorContactId = null;
     loadingMembers = false;
@@ -6009,7 +6036,10 @@ class GroupManagerComponent {
     ngOnInit() {
         this.creatorContactId = this.auth.contactId;
         this.store.loadVisibleContacts();
-        this.subs.push(this.store.visibleContacts.subscribe((c) => (this.contacts = c)));
+        this.subs.push(this.store.visibleContacts.subscribe((c) => {
+            if (!this.isProjectGroup)
+                this.contacts = c;
+        }));
         this.subs.push(this.store.groupSettings.subscribe((settings) => {
             if (settings) {
                 this.isEditMode = true;
@@ -6017,13 +6047,18 @@ class GroupManagerComponent {
                 this.groupName = settings.name;
                 this.originalGroupName = settings.name;
                 this.isProjectGroup = !!settings.isProject;
+                this.projectDbGid = settings.dbGid;
+                this.projectGid = settings.projectGid;
                 this.selectedContacts = [];
                 this.showDeleteConfirm = false;
                 this.loadCurrentMembers(settings.conversationId);
+                this.loadProjectEligibleContacts();
             }
             else {
                 this.isEditMode = false;
                 this.isProjectGroup = false;
+                this.projectDbGid = undefined;
+                this.projectGid = undefined;
                 this.editingConversationId = null;
                 this.groupName = '';
                 this.originalGroupName = '';
@@ -6048,6 +6083,21 @@ class GroupManagerComponent {
             },
             error: () => {
                 this.loadingMembers = false;
+            },
+        });
+    }
+    loadProjectEligibleContacts() {
+        if (!this.isProjectGroup)
+            return;
+        this.contacts = [];
+        if (!this.projectDbGid || !this.projectGid)
+            return;
+        this.api.getEligibleProjectUsers(this.projectDbGid, this.projectGid).subscribe({
+            next: (response) => {
+                this.contacts = response.users || [];
+            },
+            error: () => {
+                this.contacts = [];
             },
         });
     }

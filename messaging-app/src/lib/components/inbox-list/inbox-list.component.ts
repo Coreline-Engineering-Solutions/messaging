@@ -193,6 +193,7 @@ WHERE status = 'Open';</code></pre>
           <mat-icon>groups</mat-icon>
         </button>
         <button
+          *ngIf="projectGroupsEnabled"
           type="button"
           class="inbox-tab"
           [class.active]="activeTab === 'projects'"
@@ -682,6 +683,10 @@ export class InboxListComponent implements OnInit, OnDestroy {
 
   constructor(private store: MessagingStoreService) {}
 
+  get projectGroupsEnabled(): boolean {
+    return this.store.projectGroupsEnabled;
+  }
+
   ngOnInit(): void {
     this.activeTab = this.getSavedTab();
     this.sub = new Subscription();
@@ -702,7 +707,7 @@ export class InboxListComponent implements OnInit, OnDestroy {
       const project = this.isProject(item);
       if (this.activeTab === 'direct') return !item.is_group;
       if (this.activeTab === 'groups') return item.is_group && !project;
-      if (this.activeTab === 'projects') return project;
+      if (this.activeTab === 'projects') return this.projectGroupsEnabled && project;
       return true;
     });
     if (!this.searchQuery.trim()) return tabbed;
@@ -727,6 +732,7 @@ export class InboxListComponent implements OnInit, OnDestroy {
   }
 
   setActiveTab(tab: 'all' | 'direct' | 'groups' | 'projects' | 'settings'): void {
+    if (tab === 'projects' && !this.projectGroupsEnabled) tab = 'all';
     this.activeTab = tab;
     localStorage.setItem(this.tabStorageKey, tab);
     this.contextMenu = null;
@@ -734,6 +740,7 @@ export class InboxListComponent implements OnInit, OnDestroy {
 
   private getSavedTab(): 'all' | 'direct' | 'groups' | 'projects' | 'settings' {
     const saved = localStorage.getItem(this.tabStorageKey);
+    if (saved === 'projects' && !this.projectGroupsEnabled) return 'all';
     return saved === 'direct' || saved === 'groups' || saved === 'projects' || saved === 'settings' || saved === 'all'
       ? saved
       : 'all';
@@ -766,7 +773,14 @@ export class InboxListComponent implements OnInit, OnDestroy {
   }
 
   openConversation(item: InboxItem): void {
-    this.store.openConversation(item.conversation_id, item.name || 'Chat', item.is_group, this.isProject(item));
+    this.store.openConversation(
+      item.conversation_id,
+      item.name || 'Chat',
+      item.is_group,
+      this.isProject(item),
+      item.db_gid,
+      item.project_gid,
+    );
   }
 
   onNewConversation(): void {

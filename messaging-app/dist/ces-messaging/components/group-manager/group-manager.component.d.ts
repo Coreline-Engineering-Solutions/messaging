@@ -16,6 +16,8 @@ export declare class GroupManagerComponent implements OnInit, OnDestroy {
     searchQuery: string;
     isEditMode: boolean;
     isProjectGroup: boolean;
+    projectDbGid: string | undefined;
+    projectGid: string | undefined;
     editingConversationId: string | null;
     creatorContactId: string | null;
     loadingMembers: boolean;
@@ -27,6 +29,7 @@ export declare class GroupManagerComponent implements OnInit, OnDestroy {
     ngOnInit(): void;
     ngOnDestroy(): void;
     private loadCurrentMembers;
+    private loadProjectEligibleContacts;
     get filteredContacts(): Contact[];
     getDisplayName(contact: Contact): string;
     getMemberName(member: ConversationParticipant): string;
