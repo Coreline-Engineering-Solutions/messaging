@@ -16,6 +16,9 @@ export declare class MessagingWebSocketClient {
     onStatus(listener: StatusListener): () => void;
     onMessage(listener: MessageListener): () => void;
     connect(contactId: string, sessionGid: string): void;
+    /** Reset backoff and reconnect (e.g. after network or app foreground recovery). */
+    reconnect(): void;
+    getStatus(): WsStatus;
     disconnect(): void;
     subscribe(conversationId: string): void;
     subscribeAll(ids: string[]): void;

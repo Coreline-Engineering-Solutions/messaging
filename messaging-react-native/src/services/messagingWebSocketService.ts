@@ -36,6 +36,24 @@ export class MessagingWebSocketClient {
     this.doConnect();
   }
 
+  /** Reset backoff and reconnect (e.g. after network or app foreground recovery). */
+  reconnect(): void {
+    if (!this.contactId || !this.sessionGid) return;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectAttempts = 0;
+    if (this.ws?.readyState === WebSocket.OPEN && this.status === 'authenticated') {
+      return;
+    }
+    this.doConnect();
+  }
+
+  getStatus(): WsStatus {
+    return this.status;
+  }
+
   disconnect(): void {
     this.stopPing();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);

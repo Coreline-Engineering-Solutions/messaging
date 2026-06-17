@@ -73,18 +73,8 @@ function contactIdsToDisplayNames(value, contacts) {
         .filter((c) => !!c)
         .map((c) => getContactDisplayName(c));
 }
-/** Project channels from API flags or group naming patterns. */
 function isProjectConversation(item) {
-    if (item.is_project === true)
-        return true;
-    if (item.project_id)
-        return true;
-    if (item.conversation_type?.toLowerCase() === 'project')
-        return true;
-    const name = (item.name || '').trim();
-    if (!name)
-        return false;
-    if (/^project[\s:#-]/i.test(name))
-        return true;
-    return /\bproject\b/i.test(name) && !!item.is_group;
+    return (item.is_project === true ||
+        !!item.project_gid ||
+        item.conversation_type?.toLowerCase() === 'project');
 }
