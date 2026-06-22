@@ -52,15 +52,13 @@ export function MessagingInboxList() {
   const [refreshing, setRefreshing] = useState(false);
 
   const filtered = useMemo(() => {
-    let list = inbox;
-    if (inboxFilter === 'groups') list = list.filter((i) => i.is_group);
-    if (inboxFilter === 'dms') list = list.filter((i) => !i.is_group);
-    if (inboxFilter === 'favorites') {
-      list = list.filter((i) => isFavoriteConversation(i.conversation_id));
-    }
-    if (inboxFilter === 'projects') {
-      list = list.filter((i) => isProjectConversation(i));
-    }
+    const list = inbox.filter((item) => {
+      if (inboxFilter === 'projects') return isProjectConversation(item);
+      if (inboxFilter === 'groups') return !!item.is_group && !isProjectConversation(item);
+      if (inboxFilter === 'dms') return !item.is_group;
+      if (inboxFilter === 'favorites') return isFavoriteConversation(item.conversation_id);
+      return true;
+    });
 
     const q = search.trim().toLowerCase();
     if (!q) return list;
@@ -91,7 +89,6 @@ export function MessagingInboxList() {
 
   const renderItem = ({ item }: { item: InboxItem }) => {
     const favorited = isFavoriteConversation(item.conversation_id);
-    const project = isProjectConversation(item);
 
     return (
       <View style={messagingStyles.convItem}>
@@ -102,7 +99,7 @@ export function MessagingInboxList() {
         >
           <View style={messagingStyles.avatar}>
             <MaterialIcons
-              name={project ? 'work' : item.is_group ? 'group' : 'person'}
+              name={item.is_group ? 'group' : 'person'}
               size={22}
               color={colors.text.primary}
             />
@@ -253,8 +250,8 @@ export function MessagingInboxList() {
               name={
                 inboxFilter === 'favorites'
                   ? 'star-outline'
-                  : inboxFilter === 'projects'
-                    ? 'work-outline'
+                  : inboxFilter === 'projects' || inboxFilter === 'groups'
+                    ? 'group'
                     : 'forum'
               }
               size={48}

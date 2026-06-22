@@ -33,17 +33,17 @@ function MessagingInboxList() {
     const [inboxFilter, setInboxFilter] = (0, react_1.useState)('all');
     const [refreshing, setRefreshing] = (0, react_1.useState)(false);
     const filtered = (0, react_1.useMemo)(() => {
-        let list = inbox;
-        if (inboxFilter === 'groups')
-            list = list.filter((i) => i.is_group);
-        if (inboxFilter === 'dms')
-            list = list.filter((i) => !i.is_group);
-        if (inboxFilter === 'favorites') {
-            list = list.filter((i) => isFavoriteConversation(i.conversation_id));
-        }
-        if (inboxFilter === 'projects') {
-            list = list.filter((i) => (0, messaging_1.isProjectConversation)(i));
-        }
+        const list = inbox.filter((item) => {
+            if (inboxFilter === 'projects')
+                return (0, messaging_1.isProjectConversation)(item);
+            if (inboxFilter === 'groups')
+                return !!item.is_group && !(0, messaging_1.isProjectConversation)(item);
+            if (inboxFilter === 'dms')
+                return !item.is_group;
+            if (inboxFilter === 'favorites')
+                return isFavoriteConversation(item.conversation_id);
+            return true;
+        });
         const q = search.trim().toLowerCase();
         if (!q)
             return list;
@@ -58,8 +58,7 @@ function MessagingInboxList() {
     }
     const renderItem = ({ item }) => {
         const favorited = isFavoriteConversation(item.conversation_id);
-        const project = (0, messaging_1.isProjectConversation)(item);
-        return ((0, jsx_runtime_1.jsxs)(react_native_1.View, { style: messagingStyles_1.messagingStyles.convItem, children: [(0, jsx_runtime_1.jsxs)(react_native_1.TouchableOpacity, { style: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: theme_1.spacing.sm }, onPress: () => openConversation(item), activeOpacity: 0.7, children: [(0, jsx_runtime_1.jsx)(react_native_1.View, { style: messagingStyles_1.messagingStyles.avatar, children: (0, jsx_runtime_1.jsx)(MaterialIcons_1.default, { name: project ? 'work' : item.is_group ? 'group' : 'person', size: 22, color: theme_1.colors.text.primary }) }), (0, jsx_runtime_1.jsxs)(react_native_1.View, { style: { flex: 1 }, children: [(0, jsx_runtime_1.jsxs)(react_native_1.View, { style: { flexDirection: 'row', alignItems: 'center', gap: 8 }, children: [(0, jsx_runtime_1.jsx)(react_native_1.Text, { style: messagingStyles_1.messagingStyles.convName, numberOfLines: 1, children: (0, messaging_1.getInboxDisplayName)(item, visibleContacts) }), (0, jsx_runtime_1.jsx)(react_native_1.Text, { style: messagingStyles_1.messagingStyles.convTime, children: formatTime(item.last_message_at) })] }), (0, jsx_runtime_1.jsxs)(react_native_1.View, { style: { flexDirection: 'row', alignItems: 'center', marginTop: 4 }, children: [(0, jsx_runtime_1.jsx)(react_native_1.Text, { style: messagingStyles_1.messagingStyles.convPreview, numberOfLines: 1, children: item.last_message_preview || 'No messages yet' }), item.unread_count > 0 && ((0, jsx_runtime_1.jsx)(react_native_1.View, { style: messagingStyles_1.messagingStyles.unreadBadge, children: (0, jsx_runtime_1.jsx)(react_native_1.Text, { style: messagingStyles_1.messagingStyles.unreadText, children: item.unread_count > 99 ? '99+' : item.unread_count }) }))] })] })] }), (0, jsx_runtime_1.jsx)(react_native_1.TouchableOpacity, { style: messagingStyles_1.messagingStyles.convFavoriteButton, onPress: () => void toggleFavoriteConversation(item.conversation_id), hitSlop: { top: 8, bottom: 8, left: 8, right: 8 }, accessibilityLabel: favorited ? 'Remove from favorites' : 'Add to favorites', accessibilityRole: "button", children: (0, jsx_runtime_1.jsx)(MaterialIcons_1.default, { name: favorited ? 'star' : 'star-outline', size: 22, color: favorited ? theme_1.colors.warning : theme_1.colors.text.tertiary }) })] }));
+        return ((0, jsx_runtime_1.jsxs)(react_native_1.View, { style: messagingStyles_1.messagingStyles.convItem, children: [(0, jsx_runtime_1.jsxs)(react_native_1.TouchableOpacity, { style: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: theme_1.spacing.sm }, onPress: () => openConversation(item), activeOpacity: 0.7, children: [(0, jsx_runtime_1.jsx)(react_native_1.View, { style: messagingStyles_1.messagingStyles.avatar, children: (0, jsx_runtime_1.jsx)(MaterialIcons_1.default, { name: item.is_group ? 'group' : 'person', size: 22, color: theme_1.colors.text.primary }) }), (0, jsx_runtime_1.jsxs)(react_native_1.View, { style: { flex: 1 }, children: [(0, jsx_runtime_1.jsxs)(react_native_1.View, { style: { flexDirection: 'row', alignItems: 'center', gap: 8 }, children: [(0, jsx_runtime_1.jsx)(react_native_1.Text, { style: messagingStyles_1.messagingStyles.convName, numberOfLines: 1, children: (0, messaging_1.getInboxDisplayName)(item, visibleContacts) }), (0, jsx_runtime_1.jsx)(react_native_1.Text, { style: messagingStyles_1.messagingStyles.convTime, children: formatTime(item.last_message_at) })] }), (0, jsx_runtime_1.jsxs)(react_native_1.View, { style: { flexDirection: 'row', alignItems: 'center', marginTop: 4 }, children: [(0, jsx_runtime_1.jsx)(react_native_1.Text, { style: messagingStyles_1.messagingStyles.convPreview, numberOfLines: 1, children: item.last_message_preview || 'No messages yet' }), item.unread_count > 0 && ((0, jsx_runtime_1.jsx)(react_native_1.View, { style: messagingStyles_1.messagingStyles.unreadBadge, children: (0, jsx_runtime_1.jsx)(react_native_1.Text, { style: messagingStyles_1.messagingStyles.unreadText, children: item.unread_count > 99 ? '99+' : item.unread_count }) }))] })] })] }), (0, jsx_runtime_1.jsx)(react_native_1.TouchableOpacity, { style: messagingStyles_1.messagingStyles.convFavoriteButton, onPress: () => void toggleFavoriteConversation(item.conversation_id), hitSlop: { top: 8, bottom: 8, left: 8, right: 8 }, accessibilityLabel: favorited ? 'Remove from favorites' : 'Add to favorites', accessibilityRole: "button", children: (0, jsx_runtime_1.jsx)(MaterialIcons_1.default, { name: favorited ? 'star' : 'star-outline', size: 22, color: favorited ? theme_1.colors.warning : theme_1.colors.text.tertiary }) })] }));
     };
     const FilterChip = ({ id, label, }) => {
         const active = inboxFilter === id;
@@ -77,7 +76,7 @@ function MessagingInboxList() {
                     setRefreshing(false);
                 }, ListEmptyComponent: (0, jsx_runtime_1.jsxs)(react_native_1.View, { style: messagingStyles_1.messagingStyles.emptyState, children: [(0, jsx_runtime_1.jsx)(MaterialIcons_1.default, { name: inboxFilter === 'favorites'
                                 ? 'star-outline'
-                                : inboxFilter === 'projects'
-                                    ? 'work-outline'
+                                : inboxFilter === 'projects' || inboxFilter === 'groups'
+                                    ? 'group'
                                     : 'forum', size: 48, color: theme_1.colors.text.tertiary }), (0, jsx_runtime_1.jsx)(react_native_1.Text, { style: messagingStyles_1.messagingStyles.emptyText, children: emptyLabel }), !search && inboxFilter === 'favorites' && ((0, jsx_runtime_1.jsx)(react_native_1.Text, { style: [messagingStyles_1.messagingStyles.emptyText, { fontSize: 13, marginTop: 4 }], children: "Tap the star on a conversation to add it here." })), !search && (inboxFilter === 'all' || inboxFilter === 'dms') && ((0, jsx_runtime_1.jsx)(react_native_1.TouchableOpacity, { onPress: () => setView('new-conversation'), children: (0, jsx_runtime_1.jsx)(react_native_1.Text, { style: messagingStyles_1.messagingStyles.linkText, children: "Start a conversation" }) }))] }) })] }));
 }

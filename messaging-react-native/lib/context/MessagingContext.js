@@ -18,6 +18,7 @@ const messagingFileService_1 = require("../services/messagingFileService");
 const messagingNotificationSound_1 = require("../services/messagingNotificationSound");
 const messagingRuntime_1 = require("../services/messagingRuntime");
 const messagingWebSocketService_1 = require("../services/messagingWebSocketService");
+const messagingNetworkRecovery_1 = require("../services/messagingNetworkRecovery");
 const messaging_1 = require("../types/messaging");
 const messagingHelpers_1 = require("../utils/messagingHelpers");
 const MessagingContext = (0, react_1.createContext)(null);
@@ -43,6 +44,7 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
     const [threadMessages, setThreadMessages] = (0, react_1.useState)([]);
     const [favoriteConversationIds, setFavoriteConversationIds] = (0, react_1.useState)(new Set());
     const pollRef = (0, react_1.useRef)(null);
+    const wsStatusRef = (0, react_1.useRef)('disconnected');
     const activeConversationIdRef = (0, react_1.useRef)(null);
     const panelOpenRef = (0, react_1.useRef)(false);
     const sessionGidRef = (0, react_1.useRef)(sessionGid);
@@ -51,6 +53,9 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
         (0, messagingRuntime_1.setMessagingSessionGid)(sessionGid);
         return () => (0, messagingRuntime_1.setMessagingSessionGid)(null);
     }, [sessionGid]);
+    (0, react_1.useEffect)(() => {
+        wsStatusRef.current = wsStatus;
+    }, [wsStatus]);
     (0, react_1.useEffect)(() => {
         activeConversationIdRef.current = activeConversationId;
     }, [activeConversationId]);
@@ -295,6 +300,38 @@ function MessagingProvider({ children, sessionGid, userEmail, presentation = 'ov
                 clearInterval(pollRef.current);
         };
     }, [sessionGid, userEmail, initialize]);
+    const recoverFromOffline = (0, react_1.useCallback)(async () => {
+        if (!contact || !sessionGidRef.current)
+            return;
+        if (wsStatusRef.current !== 'authenticated') {
+            messagingWebSocketService_1.messagingWebSocket.reconnect();
+        }
+        try {
+            await loadInbox();
+            const activeId = activeConversationIdRef.current;
+            if (activeId)
+                await loadMessagesFor(activeId);
+            void (0, messagingApiService_1.updatePresence)(contact.contact_id, 'online').catch(() => { });
+        }
+        catch {
+            /* best-effort; WebSocket reconnect handles realtime delivery */
+        }
+    }, [contact, loadInbox, loadMessagesFor]);
+    (0, react_1.useEffect)(() => {
+        if (!contact || !sessionGid)
+            return;
+        return (0, messagingNetworkRecovery_1.subscribeMessagingNetworkRecovery)(() => {
+            void recoverFromOffline();
+        });
+    }, [contact, sessionGid, recoverFromOffline]);
+    (0, react_1.useEffect)(() => {
+        if (!contact || !sessionGid || wsStatus !== 'disconnected')
+            return;
+        const timer = setInterval(() => {
+            messagingWebSocketService_1.messagingWebSocket.reconnect();
+        }, 60000);
+        return () => clearInterval(timer);
+    }, [contact, sessionGid, wsStatus]);
     (0, react_1.useEffect)(() => {
         const unsubStatus = messagingWebSocketService_1.messagingWebSocket.onStatus(setWsStatus);
         const unsubMsg = messagingWebSocketService_1.messagingWebSocket.onMessage(handleWsMessage);

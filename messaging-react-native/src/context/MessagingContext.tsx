@@ -47,6 +47,7 @@ import {
 import { playMessagingNotificationSound } from '../services/messagingNotificationSound';
 import { setMessagingSessionGid } from '../services/messagingRuntime';
 import { messagingWebSocket } from '../services/messagingWebSocketService';
+import { subscribeMessagingNetworkRecovery } from '../services/messagingNetworkRecovery';
 import type {
     Contact,
     GroupEditState,
@@ -165,6 +166,7 @@ export function MessagingProvider({
   const [threadMessages, setThreadMessages] = useState<Message[]>([]);
   const [favoriteConversationIds, setFavoriteConversationIds] = useState<Set<string>>(new Set());
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const wsStatusRef = useRef<WsStatus>('disconnected');
   const activeConversationIdRef = useRef<string | null>(null);
   const panelOpenRef = useRef(false);
   const sessionGidRef = useRef(sessionGid);
@@ -174,6 +176,10 @@ export function MessagingProvider({
     setMessagingSessionGid(sessionGid);
     return () => setMessagingSessionGid(null);
   }, [sessionGid]);
+
+  useEffect(() => {
+    wsStatusRef.current = wsStatus;
+  }, [wsStatus]);
 
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
@@ -450,6 +456,38 @@ export function MessagingProvider({
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [sessionGid, userEmail, initialize]);
+
+  const recoverFromOffline = useCallback(async () => {
+    if (!contact || !sessionGidRef.current) return;
+
+    if (wsStatusRef.current !== 'authenticated') {
+      messagingWebSocket.reconnect();
+    }
+
+    try {
+      await loadInbox();
+      const activeId = activeConversationIdRef.current;
+      if (activeId) await loadMessagesFor(activeId);
+      void updatePresence(contact.contact_id, 'online').catch(() => {});
+    } catch {
+      /* best-effort; WebSocket reconnect handles realtime delivery */
+    }
+  }, [contact, loadInbox, loadMessagesFor]);
+
+  useEffect(() => {
+    if (!contact || !sessionGid) return;
+    return subscribeMessagingNetworkRecovery(() => {
+      void recoverFromOffline();
+    });
+  }, [contact, sessionGid, recoverFromOffline]);
+
+  useEffect(() => {
+    if (!contact || !sessionGid || wsStatus !== 'disconnected') return;
+    const timer = setInterval(() => {
+      messagingWebSocket.reconnect();
+    }, 60000);
+    return () => clearInterval(timer);
+  }, [contact, sessionGid, wsStatus]);
 
   useEffect(() => {
     const unsubStatus = messagingWebSocket.onStatus(setWsStatus);

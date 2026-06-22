@@ -21,7 +21,9 @@ export interface InboxItem {
     other_participant_name?: string;
     /** Set when API marks a conversation as project-scoped. */
     is_project?: boolean;
-    project_id?: string;
+    project_gid?: string;
+    project_status?: 'active' | 'pending_delete' | 'archived' | 'deleted';
+    project_purge_after?: string;
     conversation_type?: string;
 }
 export interface MessageReaction {
@@ -92,6 +94,5 @@ export declare function getMessageSenderName(msg: Message): string;
 export declare function resolveMessageSenderDisplayName(msg: Message, contacts: Contact[], myContactId?: string | null): string;
 /** Group inbox titles: resolve id lists to usernames when API name is contact ids. */
 export declare function getInboxDisplayName(item: InboxItem, contacts: Contact[]): string;
-/** Project channels from API flags or group naming patterns. */
 export declare function isProjectConversation(item: InboxItem): boolean;
 //# sourceMappingURL=messaging.d.ts.map
