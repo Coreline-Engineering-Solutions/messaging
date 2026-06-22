@@ -1,7 +1,8 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Subscription, combineLatest } from 'rxjs';
+import { Subscription, combineLatest, of } from 'rxjs';
 import { MessagingStoreService } from '../../services/messaging-store.service';
+import { TicketNotificationService } from '../../services/ticket-notification.service';
 import { SidebarSide } from '../../models/messaging.models';
 
 @Component({
@@ -112,16 +113,20 @@ export class FloatingButtonComponent implements OnInit, OnDestroy {
 
   private sub!: Subscription;
 
-  constructor(private store: MessagingStoreService) {}
+  constructor(
+    private store: MessagingStoreService,
+    private ticketNotifications: TicketNotificationService
+  ) {}
 
   ngOnInit(): void {
     this.sub = combineLatest([
       this.store.totalUnread,
+      this.ticketNotifications.enabled ? this.ticketNotifications.unseenCount : of(0),
       this.store.sidebarSide,
       this.store.panelOpen,
       this.store.panelFloating,
-    ]).subscribe(([count, side, open, floating]) => {
-      this.unreadCount = count;
+    ]).subscribe(([messageCount, ticketCount, side, open, floating]) => {
+      this.unreadCount = messageCount + ticketCount;
       this.side = side;
       this.isOpen = open;
       this.isFloating = floating;

@@ -54,6 +54,15 @@ export interface MessagingConfig {
    * and project-scoped group member management. Keep disabled for non-GIS host apps.
    */
   enableProjectGroups?: boolean;
+  /**
+   * Enables assigned-ticket notifications in the messaging inbox (Tickets tab + FAB badge).
+   * Requires `ticketApiUrl` and `ticketDashboardUrl`.
+   */
+  enableTicketNotifications?: boolean;
+  /** Ticketing REST API base URL, e.g. `https://host/api`. */
+  ticketApiUrl?: string;
+  /** URL opened by "Take me there" — e.g. `https://host/dashboard` or `/dashboard`. */
+  ticketDashboardUrl?: string;
 }
 
 export const MESSAGING_CONFIG = new InjectionToken<MessagingConfig>('MESSAGING_CONFIG');

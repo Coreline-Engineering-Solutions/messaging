@@ -1,12 +1,18 @@
 import { OnInit, OnDestroy } from '@angular/core';
 import { MessagingStoreService } from '../../services/messaging-store.service';
+import { TicketNotificationService } from '../../services/ticket-notification.service';
 import { InboxItem } from '../../models/messaging.models';
+import { TicketNotificationItem } from '../../models/ticket-notification.model';
 import * as i0 from "@angular/core";
+type InboxTab = 'all' | 'direct' | 'groups' | 'projects' | 'tickets' | 'settings';
 export declare class InboxListComponent implements OnInit, OnDestroy {
     private store;
+    private ticketNotifications;
     inbox: InboxItem[];
+    myTickets: TicketNotificationItem[];
+    ticketUnseenCount: number;
     searchQuery: string;
-    activeTab: 'all' | 'direct' | 'groups' | 'projects' | 'settings';
+    activeTab: InboxTab;
     notificationVolume: number;
     notificationsMuted: boolean;
     messageTextScale: number;
@@ -19,21 +25,27 @@ export declare class InboxListComponent implements OnInit, OnDestroy {
     expandedProjectIds: Set<string>;
     private readonly tabStorageKey;
     private sub;
-    constructor(store: MessagingStoreService);
+    constructor(store: MessagingStoreService, ticketNotifications: TicketNotificationService);
     get projectGroupsEnabled(): boolean;
+    get ticketsTabVisible(): boolean;
+    get visibleTabCount(): number;
     ngOnInit(): void;
     ngOnDestroy(): void;
     get filteredInbox(): InboxItem[];
     get projectContainers(): InboxItem[];
     get showEmptyState(): boolean;
+    get emptyStateIcon(): string;
     get emptyStateText(): string;
     isProject(item: InboxItem): boolean;
     projectSubgroups(project: InboxItem, applySearch?: boolean): InboxItem[];
     isProjectExpanded(project: InboxItem): boolean;
     toggleProject(project: InboxItem): void;
     createSubgroup(project: InboxItem, event: Event): void;
-    setActiveTab(tab: 'all' | 'direct' | 'groups' | 'projects' | 'settings'): void;
+    setActiveTab(tab: InboxTab): void;
     private getSavedTab;
+    markTicketRead(ticket: TicketNotificationItem): void;
+    goToTicketingDashboard(): void;
+    formatTicketDate(value: string): string;
     toggleNotificationsMuted(): void;
     onNotificationVolumeChange(value: number | string): void;
     previewNotificationSound(): void;
@@ -50,3 +62,4 @@ export declare class InboxListComponent implements OnInit, OnDestroy {
     static ɵfac: i0.ɵɵFactoryDeclaration<InboxListComponent, never>;
     static ɵcmp: i0.ɵɵComponentDeclaration<InboxListComponent, "app-inbox-list", never, {}, {}, never, never, true, never>;
 }
+export {};

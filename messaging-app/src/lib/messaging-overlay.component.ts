@@ -4,6 +4,7 @@ import { FloatingButtonComponent } from './components/floating-button/floating-b
 import { ChatPanelComponent } from './components/chat-panel/chat-panel.component';
 import { MessagingStoreService } from './services/messaging-store.service';
 import { AuthService } from './services/auth.service';
+import { TicketNotificationService } from './services/ticket-notification.service';
 import { Contact } from './models/messaging.models';
 
 @Component({
@@ -37,17 +38,26 @@ export class MessagingOverlayComponent implements OnInit {
 
   constructor(
     private store: MessagingStoreService,
-    private auth: AuthService
+    private auth: AuthService,
+    private ticketNotifications: TicketNotificationService
   ) {}
 
   ngOnInit(): void {
-    // Auto-init messaging session from localStorage
     this.initializeMessagingAuth();
-    
-    this.auth.session$.subscribe((session) => {
+
+    if (this.auth.isAuthenticated()) {
+      this.isAuthenticated = true;
+      this.store.initialize();
+      this.ticketNotifications.startListening();
+    }
+
+    this.auth.session$.subscribe(() => {
       this.isAuthenticated = this.auth.isAuthenticated();
       if (this.isAuthenticated) {
         this.store.initialize();
+        this.ticketNotifications.startListening();
+      } else {
+        this.ticketNotifications.stopListening();
       }
     });
   }

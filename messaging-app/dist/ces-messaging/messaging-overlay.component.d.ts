@@ -1,12 +1,14 @@
 import { OnInit } from '@angular/core';
 import { MessagingStoreService } from './services/messaging-store.service';
 import { AuthService } from './services/auth.service';
+import { TicketNotificationService } from './services/ticket-notification.service';
 import * as i0 from "@angular/core";
 export declare class MessagingOverlayComponent implements OnInit {
     private store;
     private auth;
+    private ticketNotifications;
     isAuthenticated: boolean;
-    constructor(store: MessagingStoreService, auth: AuthService);
+    constructor(store: MessagingStoreService, auth: AuthService, ticketNotifications: TicketNotificationService);
     ngOnInit(): void;
     private initializeMessagingAuth;
     static ɵfac: i0.ɵɵFactoryDeclaration<MessagingOverlayComponent, never>;

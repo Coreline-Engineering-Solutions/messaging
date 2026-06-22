@@ -7,7 +7,11 @@ import { MatRippleModule } from '@angular/material/core';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { Subscription } from 'rxjs';
 import { MessagingStoreService } from '../../services/messaging-store.service';
+import { TicketNotificationService } from '../../services/ticket-notification.service';
 import { InboxItem, isProjectContainer, isProjectConversation, isProjectSubgroup } from '../../models/messaging.models';
+import { TicketNotificationItem } from '../../models/ticket-notification.model';
+
+type InboxTab = 'all' | 'direct' | 'groups' | 'projects' | 'tickets' | 'settings';
 
 @Component({
   selector: 'app-inbox-list',
@@ -15,7 +19,7 @@ import { InboxItem, isProjectContainer, isProjectConversation, isProjectSubgroup
   imports: [CommonModule, FormsModule, MatIconModule, MatButtonModule, MatRippleModule, MatTooltipModule],
   template: `
     <div class="inbox-container">
-      <div *ngIf="activeTab !== 'settings'" class="search-bar">
+      <div *ngIf="activeTab !== 'settings' && activeTab !== 'tickets'" class="search-bar">
         <mat-icon class="search-icon">search</mat-icon>
         <input
           type="text"
@@ -26,7 +30,41 @@ import { InboxItem, isProjectContainer, isProjectConversation, isProjectSubgroup
       </div>
 
       <div class="conversation-list">
-        <ng-container *ngIf="activeTab === 'projects' && projectGroupsEnabled; else standardConversationList">
+        <ng-container *ngIf="activeTab === 'tickets'">
+          <div
+            *ngFor="let ticket of myTickets"
+            class="ticket-item"
+            [class.unseen]="!ticket.is_seen"
+          >
+            <div class="ticket-item-header">
+              <span class="ticket-ref">{{ ticket.ticket_ref }}</span>
+              <span class="ticket-status" [attr.data-status]="ticket.ticket_status">{{ ticket.ticket_status }}</span>
+            </div>
+            <div class="ticket-item-body">
+              <p class="ticket-type">{{ ticket.type }}<ng-container *ngIf="ticket.type_detail"> — {{ ticket.type_detail }}</ng-container></p>
+              <p class="ticket-meta" *ngIf="ticket.user_requested">Requested by {{ ticket.user_requested }}</p>
+              <p class="ticket-meta" *ngIf="ticket.created_at">{{ formatTicketDate(ticket.created_at) }}</p>
+            </div>
+            <div class="ticket-item-actions">
+              <button type="button" class="ticket-action-btn ticket-action-btn--primary" (click)="goToTicketingDashboard()">
+                <mat-icon>open_in_new</mat-icon>
+                Take me there
+              </button>
+              <button
+                type="button"
+                class="ticket-action-btn"
+                *ngIf="!ticket.is_seen"
+                (click)="markTicketRead(ticket)"
+              >
+                <mat-icon>done</mat-icon>
+                Mark as read
+              </button>
+            </div>
+            <span class="ticket-unseen-dot" *ngIf="!ticket.is_seen"></span>
+          </div>
+        </ng-container>
+
+        <ng-container *ngIf="activeTab === 'projects' && projectGroupsEnabled">
           <div *ngFor="let project of projectContainers" class="project-container">
             <div class="project-header" (click)="toggleProject(project)">
               <div class="avatar project-avatar">
@@ -84,7 +122,7 @@ import { InboxItem, isProjectContainer, isProjectConversation, isProjectSubgroup
           </div>
         </ng-container>
 
-        <ng-template #standardConversationList>
+        <ng-container *ngIf="activeTab !== 'tickets' && activeTab !== 'settings' && !(activeTab === 'projects' && projectGroupsEnabled)">
           <div
             *ngFor="let item of filteredInbox"
             class="conversation-item"
@@ -119,12 +157,12 @@ import { InboxItem, isProjectContainer, isProjectConversation, isProjectSubgroup
               </div>
             </div>
           </div>
-        </ng-template>
+        </ng-container>
 
         <div *ngIf="showEmptyState" class="empty-state">
-          <mat-icon>{{ activeTab === 'projects' ? 'workspaces' : activeTab === 'groups' ? 'group' : 'forum' }}</mat-icon>
+          <mat-icon>{{ emptyStateIcon }}</mat-icon>
           <p>{{ emptyStateText }}</p>
-          <button *ngIf="!searchQuery && activeTab !== 'groups' && activeTab !== 'projects'" mat-stroked-button color="primary" (click)="onNewConversation()">
+          <button *ngIf="!searchQuery && activeTab !== 'groups' && activeTab !== 'projects' && activeTab !== 'tickets'" mat-stroked-button color="primary" (click)="onNewConversation()">
             Start a conversation
           </button>
           <button *ngIf="!searchQuery && activeTab === 'groups'" mat-stroked-button color="primary" (click)="onCreateGroup()">
@@ -221,7 +259,7 @@ WHERE status = 'Open';</code></pre>
         </div>
       </div>
 
-      <div class="inbox-tabs" role="tablist" aria-label="Conversation filters">
+      <div class="inbox-tabs" role="tablist" aria-label="Conversation filters" [style.--tab-count]="visibleTabCount">
         <button
           type="button"
           class="inbox-tab"
@@ -262,6 +300,18 @@ WHERE status = 'Open';</code></pre>
           matTooltipPosition="above"
         >
           <mat-icon>workspaces</mat-icon>
+        </button>
+        <button
+          *ngIf="ticketsTabVisible"
+          type="button"
+          class="inbox-tab inbox-tab--tickets"
+          [class.active]="activeTab === 'tickets'"
+          (click)="setActiveTab('tickets')"
+          matTooltip="Tickets"
+          matTooltipPosition="above"
+        >
+          <mat-icon>confirmation_number</mat-icon>
+          <span *ngIf="ticketUnseenCount > 0" class="tab-badge">{{ ticketUnseenCount > 9 ? '9+' : ticketUnseenCount }}</span>
         </button>
         <button
           type="button"
@@ -335,11 +385,133 @@ WHERE status = 'Open';</code></pre>
 
     .inbox-tabs {
       display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-columns: repeat(var(--tab-count, 5), minmax(0, 1fr));
       gap: 5px;
       padding: 10px 16px 12px;
       border-top: 1px solid rgba(255, 255, 255, 0.1);
       flex-shrink: 0;
+    }
+
+    .inbox-tab--tickets {
+      position: relative;
+    }
+
+    .tab-badge {
+      position: absolute;
+      top: 0;
+      right: 2px;
+      min-width: 14px;
+      height: 14px;
+      padding: 0 3px;
+      border-radius: 7px;
+      background: #ef4444;
+      color: #fff;
+      font-size: 9px;
+      font-weight: 700;
+      line-height: 14px;
+      text-align: center;
+    }
+
+    .ticket-item {
+      position: relative;
+      margin: 8px 12px;
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .ticket-item.unseen {
+      border-color: rgba(127, 180, 255, 0.45);
+      background: rgba(26, 95, 168, 0.18);
+    }
+
+    .ticket-item-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .ticket-ref {
+      font-weight: 700;
+      font-size: 13px;
+      color: #fff;
+    }
+
+    .ticket-status {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.12);
+      color: rgba(255, 255, 255, 0.85);
+      white-space: nowrap;
+    }
+
+    .ticket-item-body {
+      margin-bottom: 10px;
+    }
+
+    .ticket-type {
+      margin: 0 0 4px;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .ticket-meta {
+      margin: 0;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.65);
+    }
+
+    .ticket-item-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .ticket-action-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.9);
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .ticket-action-btn mat-icon {
+      font-size: 14px;
+      width: 14px;
+      height: 14px;
+    }
+
+    .ticket-action-btn--primary {
+      border-color: rgba(127, 180, 255, 0.5);
+      background: rgba(26, 95, 168, 0.35);
+      color: #fff;
+    }
+
+    .ticket-action-btn:hover {
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    .ticket-unseen-dot {
+      position: absolute;
+      top: 10px;
+      left: 6px;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #60a5fa;
     }
 
     .inbox-tab {
@@ -802,8 +974,10 @@ WHERE status = 'Open';</code></pre>
 })
 export class InboxListComponent implements OnInit, OnDestroy {
   inbox: InboxItem[] = [];
+  myTickets: TicketNotificationItem[] = [];
+  ticketUnseenCount = 0;
   searchQuery = '';
-  activeTab: 'all' | 'direct' | 'groups' | 'projects' | 'settings' = 'all';
+  activeTab: InboxTab = 'all';
   notificationVolume = 0.35;
   notificationsMuted = false;
   messageTextScale = 1;
@@ -813,20 +987,50 @@ export class InboxListComponent implements OnInit, OnDestroy {
   private readonly tabStorageKey = 'messaging_inbox_active_tab';
   private sub!: Subscription;
 
-  constructor(private store: MessagingStoreService) {}
+  constructor(
+    private store: MessagingStoreService,
+    private ticketNotifications: TicketNotificationService
+  ) {}
 
   get projectGroupsEnabled(): boolean {
     return this.store.projectGroupsEnabled;
   }
 
+  get ticketsTabVisible(): boolean {
+    return this.ticketNotifications.enabled && this.myTickets.length > 0;
+  }
+
+  get visibleTabCount(): number {
+    let count = 4;
+    if (this.projectGroupsEnabled) count++;
+    if (this.ticketsTabVisible) count++;
+    return count;
+  }
+
   ngOnInit(): void {
-    this.activeTab = this.getSavedTab();
+    const savedTab = this.getSavedTab();
+    this.activeTab = savedTab === 'tickets' ? 'all' : savedTab;
+    const restoreTicketsTab = savedTab === 'tickets';
     this.sub = new Subscription();
     this.sub.add(this.store.inbox.subscribe((items) => (this.inbox = items)));
     this.sub.add(this.store.notificationVolume.subscribe((volume) => (this.notificationVolume = volume)));
     this.sub.add(this.store.notificationsMuted.subscribe((muted) => (this.notificationsMuted = muted)));
     this.sub.add(this.store.messageTextScale.subscribe((scale) => (this.messageTextScale = scale)));
     this.sub.add(this.store.codeTextScale.subscribe((scale) => (this.codeTextScale = scale)));
+    if (this.ticketNotifications.enabled) {
+      let restoredTicketsTab = false;
+      this.sub.add(this.ticketNotifications.tickets.subscribe((tickets) => {
+        this.myTickets = tickets;
+        if (!restoredTicketsTab && restoreTicketsTab && tickets.length > 0) {
+          restoredTicketsTab = true;
+          this.setActiveTab('tickets');
+        } else if (this.activeTab === 'tickets' && tickets.length === 0) {
+          this.setActiveTab('all');
+        }
+      }));
+      this.sub.add(this.ticketNotifications.unseenCount.subscribe((count) => (this.ticketUnseenCount = count)));
+      this.ticketNotifications.loadTickets();
+    }
   }
 
   ngOnDestroy(): void {
@@ -869,8 +1073,16 @@ export class InboxListComponent implements OnInit, OnDestroy {
 
   get showEmptyState(): boolean {
     if (this.activeTab === 'settings') return false;
+    if (this.activeTab === 'tickets') return this.myTickets.length === 0;
     if (this.activeTab === 'projects') return this.projectContainers.length === 0;
     return this.filteredInbox.length === 0;
+  }
+
+  get emptyStateIcon(): string {
+    if (this.activeTab === 'tickets') return 'confirmation_number';
+    if (this.activeTab === 'projects') return 'workspaces';
+    if (this.activeTab === 'groups') return 'group';
+    return 'forum';
   }
 
   get emptyStateText(): string {
@@ -878,6 +1090,7 @@ export class InboxListComponent implements OnInit, OnDestroy {
     if (this.activeTab === 'direct') return 'No chats yet';
     if (this.activeTab === 'groups') return 'No groups yet';
     if (this.activeTab === 'projects') return 'No project chats yet';
+    if (this.activeTab === 'tickets') return 'No tickets assigned to you';
     return 'No conversations yet';
   }
 
@@ -923,19 +1136,38 @@ export class InboxListComponent implements OnInit, OnDestroy {
     this.store.openProjectSubgroupCreator(project);
   }
 
-  setActiveTab(tab: 'all' | 'direct' | 'groups' | 'projects' | 'settings'): void {
+  setActiveTab(tab: InboxTab): void {
     if (tab === 'projects' && !this.projectGroupsEnabled) tab = 'all';
+    if (tab === 'tickets' && !this.ticketsTabVisible) tab = 'all';
     this.activeTab = tab;
     localStorage.setItem(this.tabStorageKey, tab);
     this.contextMenu = null;
+    if (tab === 'tickets') {
+      this.ticketNotifications.loadTickets();
+    }
   }
 
-  private getSavedTab(): 'all' | 'direct' | 'groups' | 'projects' | 'settings' {
+  private getSavedTab(): InboxTab {
     const saved = localStorage.getItem(this.tabStorageKey);
     if (saved === 'projects' && !this.projectGroupsEnabled) return 'all';
+    if (saved === 'tickets') return 'tickets';
     return saved === 'direct' || saved === 'groups' || saved === 'projects' || saved === 'settings' || saved === 'all'
       ? saved
       : 'all';
+  }
+
+  markTicketRead(ticket: TicketNotificationItem): void {
+    this.ticketNotifications.markSeen(ticket);
+  }
+
+  goToTicketingDashboard(): void {
+    this.ticketNotifications.navigateToDashboard();
+  }
+
+  formatTicketDate(value: string): string {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
   }
 
   toggleNotificationsMuted(): void {

@@ -109,7 +109,7 @@ export interface ConversationParticipant {
     left_at?: string;
 }
 export interface WebSocketMessage {
-    type: 'new_message' | 'conversation_updated' | 'group_updated' | 'pong' | 'auth_success' | 'error';
+    type: 'new_message' | 'conversation_updated' | 'group_updated' | 'ticket_assigned' | 'ticket_closed' | 'pong' | 'auth_success' | 'error';
     timestamp?: string;
     data?: any;
     message?: string;

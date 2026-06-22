@@ -29,6 +29,7 @@ export {
   getMessageSenderName,
   createContactFromUser,
 } from './models/messaging.models';
+export { TicketNotificationItem } from './models/ticket-notification.model';
 
 // ── Services ──
 export { AuthService } from './services/auth.service';
@@ -37,6 +38,7 @@ export { MessagingWebSocketService } from './services/messaging-websocket.servic
 export { MessagingFileService } from './services/messaging-file.service';
 export { MessagingAuthBridgeService } from './services/messaging-auth-bridge.service';
 export { MessagingStoreService } from './services/messaging-store.service';
+export { TicketNotificationService } from './services/ticket-notification.service';
 
 // ── Components ──
 export { MessagingOverlayComponent } from './messaging-overlay.component';

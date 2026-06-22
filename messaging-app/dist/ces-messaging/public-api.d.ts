@@ -1,11 +1,13 @@
 export { MessagingConfig, MESSAGING_CONFIG } from './messaging.config';
 export { AuthSession, Contact, InboxItem, Message, Conversation, ConversationParticipant, WebSocketMessage, ChatWindow, Attachment, SidebarSide, MessageReaction, PresenceStatus, TypingIndicator, Thread, Mention, PinnedMessage, ReadReceipt, NotificationSettings, ChannelPermissions, ParticipantRole, SearchFilter, isProjectConversation, getContactDisplayName, getMessageSenderName, createContactFromUser, } from './models/messaging.models';
+export { TicketNotificationItem } from './models/ticket-notification.model';
 export { AuthService } from './services/auth.service';
 export { MessagingApiService } from './services/messaging-api.service';
 export { MessagingWebSocketService } from './services/messaging-websocket.service';
 export { MessagingFileService } from './services/messaging-file.service';
 export { MessagingAuthBridgeService } from './services/messaging-auth-bridge.service';
 export { MessagingStoreService } from './services/messaging-store.service';
+export { TicketNotificationService } from './services/ticket-notification.service';
 export { MessagingOverlayComponent } from './messaging-overlay.component';
 export { FloatingButtonComponent } from './components/floating-button/floating-button.component';
 export { ChatPanelComponent } from './components/chat-panel/chat-panel.component';
