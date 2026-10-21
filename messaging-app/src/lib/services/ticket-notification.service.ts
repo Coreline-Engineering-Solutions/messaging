@@ -93,6 +93,7 @@ export class TicketNotificationService implements OnDestroy {
     this.http
       .post(`${base}/notifications/mark-seen/${encodeURIComponent(ticket.ticket_ref)}`, null, {
         params: { user_email: email },
+        headers: this.sessionHeaders(),
       })
       .pipe(catchError(() => of(null)))
       .subscribe(() => {
@@ -135,9 +136,17 @@ export class TicketNotificationService implements OnDestroy {
     return (this.config.ticketApiUrl || '').replace(/\/$/, '');
   }
 
+  /** The ticketing API rejects notification calls (400) that do not name the session. */
+  private sessionHeaders(): Record<string, string> {
+    const sessionGid = this.auth.sessionGid;
+    return sessionGid ? { 'X-Session-GID': sessionGid } : {};
+  }
+
   private fetchTickets(email: string): Observable<TicketNotificationItem[]> {
     return this.http
-      .get<TicketNotificationItem[]>(`${this.apiBase()}/notifications/my-tickets/${encodeURIComponent(email)}`)
+      .get<TicketNotificationItem[]>(`${this.apiBase()}/notifications/my-tickets/${encodeURIComponent(email)}`, {
+        headers: this.sessionHeaders(),
+      })
       .pipe(
         tap((tickets) => this.tickets$.next(tickets || [])),
         catchError(() => {
@@ -149,7 +158,9 @@ export class TicketNotificationService implements OnDestroy {
 
   private fetchUnseenCount(email: string): Observable<{ count: number }> {
     return this.http
-      .get<{ count: number }>(`${this.apiBase()}/notifications/unseen-count/${encodeURIComponent(email)}`)
+      .get<{ count: number }>(`${this.apiBase()}/notifications/unseen-count/${encodeURIComponent(email)}`, {
+        headers: this.sessionHeaders(),
+      })
       .pipe(
         tap((res) => {
           this.unseenCount$.next(res?.count ?? 0);

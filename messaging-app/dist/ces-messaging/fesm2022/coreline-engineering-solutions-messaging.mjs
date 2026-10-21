@@ -2696,6 +2696,7 @@ class TicketNotificationService {
         this.http
             .post(`${base}/notifications/mark-seen/${encodeURIComponent(ticket.ticket_ref)}`, null, {
             params: { user_email: email },
+            headers: this.sessionHeaders(),
         })
             .pipe(catchError(() => of(null)))
             .subscribe(() => {
@@ -2734,9 +2735,16 @@ class TicketNotificationService {
     apiBase() {
         return (this.config.ticketApiUrl || '').replace(/\/$/, '');
     }
+    /** The ticketing API rejects notification calls (400) that do not name the session. */
+    sessionHeaders() {
+        const sessionGid = this.auth.sessionGid;
+        return sessionGid ? { 'X-Session-GID': sessionGid } : {};
+    }
     fetchTickets(email) {
         return this.http
-            .get(`${this.apiBase()}/notifications/my-tickets/${encodeURIComponent(email)}`)
+            .get(`${this.apiBase()}/notifications/my-tickets/${encodeURIComponent(email)}`, {
+            headers: this.sessionHeaders(),
+        })
             .pipe(tap((tickets) => this.tickets$.next(tickets || [])), catchError(() => {
             this.tickets$.next([]);
             return of([]);
@@ -2744,7 +2752,9 @@ class TicketNotificationService {
     }
     fetchUnseenCount(email) {
         return this.http
-            .get(`${this.apiBase()}/notifications/unseen-count/${encodeURIComponent(email)}`)
+            .get(`${this.apiBase()}/notifications/unseen-count/${encodeURIComponent(email)}`, {
+            headers: this.sessionHeaders(),
+        })
             .pipe(tap((res) => {
             this.unseenCount$.next(res?.count ?? 0);
             if ((res?.count ?? 0) > 0 && this.tickets$.value.length === 0) {

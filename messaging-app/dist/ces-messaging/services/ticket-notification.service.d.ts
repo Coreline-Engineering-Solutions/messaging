@@ -34,6 +34,8 @@ export declare class TicketNotificationService implements OnDestroy {
     navigateToDashboard(): void;
     private handleTicketEvent;
     private apiBase;
+    /** The ticketing API rejects notification calls (400) that do not name the session. */
+    private sessionHeaders;
     private fetchTickets;
     private fetchUnseenCount;
     private getUserEmail;
